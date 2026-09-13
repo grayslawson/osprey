@@ -1,0 +1,79 @@
+mqtt:
+  enabled: false
+
+auth:
+  enabled: false
+
+detectors:
+  lab_cpu:
+    type: cpu
+
+logger:
+  default: info
+  logs:
+    frigate.ptz.onvif: debug
+    frigate.ptz.autotrack: debug
+
+record:
+  enabled: false
+
+snapshots:
+  enabled: true
+
+cameras:
+  g5_ptz:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://cuckoo:8554/video2
+          input_args: preset-rtsp-generic
+          roles:
+            - detect
+    detect:
+      enabled: true
+      width: 1280
+      height: 720
+      fps: 5
+    objects:
+      track:
+        - person
+        - car
+      filters:
+        person:
+          min_score: 0.4
+          threshold: 0.5
+        car:
+          min_score: 0.4
+          threshold: 0.5
+    zones:
+      tracking_zone:
+        # Provisional inset. Replace with the driveway/road approach after the
+        # first physical snapshot; Frigate discourages a full-frame zone.
+        coordinates: 0.05,0.05,0.95,0.05,0.95,0.95,0.05,0.95
+        objects:
+          - person
+          - car
+    onvif:
+      host: cuckoo
+      port: 8000
+      user: ""
+      password: ""
+      profile: video2
+      autotracking:
+        enabled: true
+        # One-time physical calibration. Set false immediately after Frigate
+        # writes movement_weights, or every restart will overwrite refinement.
+        calibrate_on_startup: true
+        zooming: relative
+        # Start conservatively on unknown physical optics; raise only after the
+        # calibrated camera keeps both cars and people in frame reliably.
+        zoom_factor: 0.3
+        track:
+          - person
+          - car
+        required_zones:
+          - tracking_zone
+        return_preset: home
+        timeout: 10
+
+version: 0.18-0
