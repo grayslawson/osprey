@@ -1,0 +1,13 @@
+# Private, user-supplied camera fixtures. Keep them local to this lab.
+fixtures/*.local.h265
+fixtures/*.local.mp4
+.env
+.env.local
+.env.physical
+.ptz-reconnect-marker
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+

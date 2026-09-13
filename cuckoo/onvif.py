@@ -1,0 +1,1517 @@
+"""ONVIF front end — SOAP over HTTP.
+
+Clients ask here for what the camera is, which streams exist, where to fetch them,
+and how to move the head. Everything is answered out of the device model, so this
+module knows nothing about the camera's own protocol; the callables in `Backend`
+are the only way it reaches the controller.
+
+Scope is Profile S plus PTZ, Imaging and pull-point Events: enough for Home
+Assistant, ONVIF Device Manager, Synology and friends. Not a general ONVIF
+implementation — every verb here is one a real client actually sends.
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import logging
+import subprocess
+import threading
+import time
+from urllib.parse import unquote, urlsplit
+from collections import deque
+from dataclasses import dataclass, field
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Callable, Final
+from xml.etree import ElementTree
+
+from media import BANDWIDTH_WINDOW
+from model import PAN, TILT, ZOOM, Camera, Position
+
+ONVIF_PORT: Final = 8000
+DEVICE_PATH: Final = "/onvif/device_service"
+MEDIA_PATH: Final = "/onvif/media_service"
+PTZ_PATH: Final = "/onvif/ptz_service"
+IMAGING_PATH: Final = "/onvif/imaging_service"
+EVENTS_PATH: Final = "/onvif/events_service"
+SNAPSHOT_PATH: Final = "/snapshot/"
+PREVIEW_PATH: Final = "/preview/"
+CONTROL_STEP_PATH: Final = "/control/step"
+CONTROL_HOME_PATH: Final = "/control/home"
+CONTROL_PRESET_PATH: Final = "/control/preset"
+CONTROL_ZOOM_PATH: Final = "/control/zoom"
+MANUAL_STEP_FRACTION: Final = 0.04
+
+SOAP: Final = "http://www.w3.org/2003/05/soap-envelope"
+NAMESPACES: Final = {
+    "s": SOAP,
+    "tds": "http://www.onvif.org/ver10/device/wsdl",
+    "trt": "http://www.onvif.org/ver10/media/wsdl",
+    "tptz": "http://www.onvif.org/ver20/ptz/wsdl",
+    "timg": "http://www.onvif.org/ver20/imaging/wsdl",
+    "tev": "http://www.onvif.org/ver10/events/wsdl",
+    "tt": "http://www.onvif.org/ver10/schema",
+    "wsa": "http://www.w3.org/2005/08/addressing",
+    "wsnt": "http://docs.oasis-open.org/wsn/b-2",
+    "tns1": "http://www.onvif.org/ver10/topics",
+}
+
+MANUFACTURER: Final = "cuckoo"
+PTZ_NODE: Final = "PTZNode"
+PTZ_CONFIG: Final = "PTZConfig"
+FOV_TRANSLATION_SPACE: Final = (
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov"
+)
+
+# The base generic PTZ spaces used by the node's SupportedPTZSpaces and by
+# GetConfigurationOptions. _ptz_spaces inserts calibrated model alternatives in
+# schema order. Home Assistant reads move-mode support from the
+# *ConfigurationOptions* Spaces, not from the node — omit a space there and HA
+# refuses that move mode ("RelativeMove not supported on device …") and the PTZ
+# service silently no-ops. Absolute, Relative and Continuous are all advertised so
+# every mode a client might send (arrow taps, hold-to-pan, presets) resolves; the
+# camera itself has only preset-based motion, so each resolves to one relative step.
+PTZ_SPACES: Final = (
+    "<tt:AbsolutePanTiltPositionSpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:URI>"
+    "<tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "<tt:YRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:YRange>"
+    "</tt:AbsolutePanTiltPositionSpace>"
+    "<tt:AbsoluteZoomPositionSpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:URI>"
+    "<tt:XRange><tt:Min>0.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "</tt:AbsoluteZoomPositionSpace>"
+    "<tt:RelativePanTiltTranslationSpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace</tt:URI>"
+    "<tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "<tt:YRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:YRange>"
+    "</tt:RelativePanTiltTranslationSpace>"
+    "<tt:RelativeZoomTranslationSpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/TranslationGenericSpace</tt:URI>"
+    "<tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "</tt:RelativeZoomTranslationSpace>"
+    "<tt:ContinuousPanTiltVelocitySpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:URI>"
+    "<tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "<tt:YRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:YRange>"
+    "</tt:ContinuousPanTiltVelocitySpace>"
+    "<tt:ContinuousZoomVelocitySpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace</tt:URI>"
+    "<tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "</tt:ContinuousZoomVelocitySpace>"
+    "<tt:PanTiltSpeedSpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/GenericSpeedSpace</tt:URI>"
+    "<tt:XRange><tt:Min>0.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "</tt:PanTiltSpeedSpace>"
+    "<tt:ZoomSpeedSpace>"
+    "<tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/ZoomGenericSpeedSpace</tt:URI>"
+    "<tt:XRange><tt:Min>0.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "</tt:ZoomSpeedSpace>"
+)
+
+FOV_RELATIVE_PAN_TILT_SPACE: Final = (
+    "<tt:RelativePanTiltTranslationSpace>"
+    f"<tt:URI>{FOV_TRANSLATION_SPACE}</tt:URI>"
+    "<tt:XRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>"
+    "<tt:YRange><tt:Min>-1.0</tt:Min><tt:Max>1.0</tt:Max></tt:YRange>"
+    "</tt:RelativePanTiltTranslationSpace>"
+)
+
+
+def _ptz_spaces(camera: Camera | None) -> str:
+    """Insert model-specific alternatives in the ONVIF schema's required sequence."""
+    if camera is None or camera.field_of_view is None:
+        return PTZ_SPACES
+    end = "</tt:RelativePanTiltTranslationSpace>"
+    return PTZ_SPACES.replace(end, end + FOV_RELATIVE_PAN_TILT_SPACE, 1)
+
+# The Default*Space elements inside a PTZConfiguration. Home Assistant reads
+# move-mode support ENTIRELY from these, off GetProfiles: relative from
+# DefaultRelativePanTiltTranslationSpace, continuous from
+# DefaultContinuousPanTiltVelocitySpace, absolute from
+# DefaultAbsolutePantTiltPositionSpace. Emit only the absolute pair (as cuckoo
+# first did) and HA marks the camera PTZ-capable but logs "RelativeMove not
+# supported" and no-ops every relative/continuous move. Order matters — zeep
+# validates the schema sequence and silently drops anything out of order. The
+# "Pant" in DefaultAbsolutePantTiltPositionSpace is the ONVIF spec's own typo,
+# which HA matches verbatim; keep it.
+PTZ_DEFAULT_SPACES: Final = (
+    "<tt:DefaultAbsolutePantTiltPositionSpace>"
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"
+    "</tt:DefaultAbsolutePantTiltPositionSpace>"
+    "<tt:DefaultAbsoluteZoomPositionSpace>"
+    "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
+    "</tt:DefaultAbsoluteZoomPositionSpace>"
+    "<tt:DefaultRelativePanTiltTranslationSpace>"
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace"
+    "</tt:DefaultRelativePanTiltTranslationSpace>"
+    "<tt:DefaultRelativeZoomTranslationSpace>"
+    "http://www.onvif.org/ver10/tptz/ZoomSpaces/TranslationGenericSpace"
+    "</tt:DefaultRelativeZoomTranslationSpace>"
+    "<tt:DefaultContinuousPanTiltVelocitySpace>"
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"
+    "</tt:DefaultContinuousPanTiltVelocitySpace>"
+    "<tt:DefaultContinuousZoomVelocitySpace>"
+    "http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace"
+    "</tt:DefaultContinuousZoomVelocitySpace>"
+    "<tt:DefaultPTZTimeout>PT60S</tt:DefaultPTZTimeout>"
+)
+MOTION_TOPIC: Final = "tns1:RuleEngine/CellMotionDetector/Motion"
+OBJECT_TOPIC: Final = "tns1:RuleEngine/MyRuleDetector"
+AUDIO_TOPIC: Final = "tns1:AudioAnalytics/Audio/DetectedSound"
+
+# The camera's object names, mapped onto the topics clients already listen for.
+DETECTION_TOPICS: Final[dict[str, tuple[str, str]]] = {
+    "person": (f"{OBJECT_TOPIC}/PeopleDetect", "IsPeople"),
+    "vehicle": (f"{OBJECT_TOPIC}/VehicleDetect", "IsVehicle"),
+    "animal": (f"{OBJECT_TOPIC}/DogCatDetect", "IsDogCat"),
+    "package": (f"{OBJECT_TOPIC}/PackageDetect", "IsPackage"),
+    "face": (f"{OBJECT_TOPIC}/FaceDetect", "IsFace"),
+    "licensePlate": (f"{OBJECT_TOPIC}/LicensePlateDetect", "IsLicensePlate"),
+}
+
+log = logging.getLogger("cuckoo.onvif")
+
+# ONVIF encoding names -> the codec strings the controller arms with.
+ENCODING_TO_CODEC: dict[str, str] = {
+    "H264": "h264", "H265": "h265", "HEVC": "h265", "JPEG": "mjpg", "MJPEG": "mjpg"
+}
+
+
+@dataclass
+class Backend:
+    """Everything the front end is allowed to ask of the controller."""
+
+    camera: Callable[[], Camera | None]
+    stream_uri: Callable[[str], str]
+    snapshot_uri: Callable[[str], str]
+    snapshot: Callable[[], bytes | None] = lambda: None
+    move_absolute: Callable[[Position], bool] = lambda _p: False
+    move_relative: Callable[[Position], bool] = lambda _p: False
+    goto_preset: Callable[[int, int], bool] = lambda _i, _s: False
+    set_preset: Callable[[str, int | None], int | None] = lambda _n, _i: None
+    remove_preset: Callable[[int], bool] = lambda _i: False
+    refresh_position: Callable[[], bool] = lambda: False
+    # Why a move cannot be dispatched right now, in the camera's own terms:
+    # "PTZ channel unavailable" / "the camera is already moving" / generic.
+    move_refusal: Callable[[], str] = lambda: "the camera is not accepting movement"
+    # Re-arm a channel's codec live: (profile/config token, codec "h264"/"h265").
+    set_encoder: Callable[[str, str], bool] = lambda _t, _c: False
+    # Per-track runtime telemetry keyed by track name (see media.Hub.stats): the
+    # windowed byte-rate + series, lifetime bytes, frames, subscribers, playable.
+    telemetry: Callable[[], dict[str, dict[str, object]]] = dict
+
+
+# ------------------------------------------------------------------------ events
+
+
+@dataclass
+class Event:
+    """One thing worth telling a subscriber about."""
+
+    topic: str
+    source: str
+    name: str
+    value: str
+    at: float = field(default_factory=time.time)
+
+    def as_xml(self) -> str:
+        stamp = utc(self.at)
+        return (
+            "<wsnt:NotificationMessage>"
+            f"<wsnt:Topic Dialect=\"http://docs.oasis-open.org/wsn/t-1/TopicExpression/Simple\">"
+            f"{self.topic}</wsnt:Topic>"
+            "<wsnt:Message>"
+            f'<tt:Message UtcTime="{stamp}" PropertyOperation="Changed">'
+            f'<tt:Source><tt:SimpleItem Name="Source" Value="{self.source}"/></tt:Source>'
+            f'<tt:Data><tt:SimpleItem Name="{self.name}" Value="{self.value}"/></tt:Data>'
+            "</tt:Message></wsnt:Message></wsnt:NotificationMessage>"
+        )
+
+
+class Subscriptions:
+    """Pull-point subscriptions, each with its own backlog."""
+
+    DEPTH: Final = 100
+
+    def __init__(self) -> None:
+        self._queues: dict[str, deque[Event]] = {}
+        self._lock = threading.Lock()
+        self._counter = 0
+
+    def create(self) -> str:
+        with self._lock:
+            self._counter += 1
+            identifier = f"sub{self._counter}"
+            self._queues[identifier] = deque(maxlen=self.DEPTH)
+        return identifier
+
+    def drop(self, identifier: str) -> None:
+        with self._lock:
+            self._queues.pop(identifier, None)
+
+    def publish(self, event: Event) -> None:
+        with self._lock:
+            for queue in self._queues.values():
+                queue.append(event)
+
+    def pull(self, identifier: str, limit: int = 10) -> list[Event]:
+        with self._lock:
+            queue = self._queues.get(identifier)
+            if queue is None:
+                return []
+            return [queue.popleft() for _ in range(min(limit, len(queue)))]
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return len(self._queues)
+
+
+def motion_event(camera: Camera, active: bool) -> Event:
+    return Event(
+        topic=MOTION_TOPIC,
+        source=f"VideoSource_{camera.mac}",
+        name="IsMotion",
+        value="true" if active else "false",
+    )
+
+
+def detection_event(camera: Camera, kind: str, active: bool) -> Event:
+    """Map one camera detection onto the topic a client is watching.
+
+    Plain motion has a standard topic. Object detections do not, so they use the
+    rule-detector topics clients already recognise, and anything unrecognised gets
+    its own rule name rather than being dropped or mislabelled as motion.
+    """
+    if kind == "motion":
+        return motion_event(camera, active)
+    if kind.startswith("alrm") or kind == "audio":
+        return Event(
+            topic=AUDIO_TOPIC,
+            source=f"AudioSource_{camera.mac}",
+            name=kind if kind != "audio" else "IsSoundDetected",
+            value="true" if active else "false",
+        )
+    topic, name = DETECTION_TOPICS.get(
+        kind, (f"{OBJECT_TOPIC}/{kind[:1].upper()}{kind[1:]}Detect", f"Is{kind[:1].upper()}{kind[1:]}")
+    )
+    return Event(
+        topic=topic,
+        source=f"VideoSource_{camera.mac}",
+        name=name,
+        value="true" if active else "false",
+    )
+
+
+# -------------------------------------------------------------------------- SOAP
+
+
+def utc(at: float | None = None) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at if at is not None else time.time()))
+
+
+def envelope(body: str) -> str:
+    declarations = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in NAMESPACES.items())
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<s:Envelope {declarations}><s:Body>{body}</s:Body></s:Envelope>"
+    )
+
+
+def fault(reason: str) -> str:
+    return envelope(
+        "<s:Fault><s:Code><s:Value>s:Receiver</s:Value></s:Code>"
+        f"<s:Reason><s:Text xml:lang=\"en\">{reason}</s:Text></s:Reason></s:Fault>"
+    )
+
+
+def local_name(tag: str) -> str:
+    return tag.rpartition("}")[2]
+
+
+@dataclass
+class Call:
+    """A parsed SOAP request: which verb, and the body element to read from."""
+
+    action: str
+    body: ElementTree.Element
+    namespace: str = ""
+
+    def find(self, name: str) -> ElementTree.Element | None:
+        for element in self.body.iter():
+            if local_name(element.tag) == name:
+                return element
+        return None
+
+    def text(self, name: str, default: str = "") -> str:
+        element = self.find(name)
+        if element is None or element.text is None:
+            return default
+        return element.text.strip()
+
+    def attribute(self, element_name: str, attribute: str, default: str = "") -> str:
+        element = self.find(element_name)
+        if element is None:
+            return default
+        return element.attrib.get(attribute, default)
+
+    def vector(self, element_name: str) -> tuple[float, float] | None:
+        """PanTilt and Zoom arrive as x/y attributes on their own element."""
+        element = self.find(element_name)
+        if element is None:
+            return None
+        try:
+            return float(element.attrib.get("x", "0")), float(element.attrib.get("y", "0"))
+        except ValueError:
+            return None
+
+
+def parse_call(payload: bytes) -> Call | None:
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError:
+        return None
+    body = root.find(f"{{{SOAP}}}Body")
+    if body is None or len(body) == 0:
+        return None
+    first = body[0]
+    namespace = first.tag[1:].partition("}")[0] if first.tag.startswith("{") else ""
+    return Call(action=local_name(first.tag), body=first, namespace=namespace)
+
+
+# ---------------------------------------------------------------------- services
+
+
+class Services:
+    """Turns parsed calls into SOAP responses, using only the device model."""
+
+    def __init__(self, backend: Backend, host: str, port: int = ONVIF_PORT) -> None:
+        self.backend = backend
+        self.host = host
+        self.port = port
+        self.subscriptions = Subscriptions()
+        self.started_at = time.time()
+
+    # ------------------------------------------------------------- addressing
+
+    def address(self, path: str) -> str:
+        return f"http://{self.host}:{self.port}{path}"
+
+    # ------------------------------------------------------------ local control
+    def control_step(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        """Apply one deliberately small, validated PTZ step from the local UI."""
+        if not isinstance(data, dict) or set(data) - {"axis", "direction", "step"} or not {"axis", "direction"} <= set(data):
+            return HTTPStatus.BAD_REQUEST, {"error": "expected axis and direction"}
+        axis, direction = data["axis"], data["direction"]
+        step = data.get("step", round(MANUAL_STEP_FRACTION * 100))
+        if not isinstance(axis, str) or not isinstance(direction, int) or isinstance(direction, bool) or axis not in (PAN, TILT, ZOOM) or direction not in (-1, 1) or not isinstance(step, int) or isinstance(step, bool) or not 1 <= step <= 20:
+            return HTTPStatus.BAD_REQUEST, {"error": "axis or direction is invalid"}
+        camera = self.backend.camera()
+        if camera is None or not camera.is_ptz:
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no PTZ camera"}
+        current = camera.motion.position
+        ranges = {PAN: camera.pan_range, TILT: camera.tilt_range, ZOOM: camera.zoom_range}
+        values = current.as_dict()
+        span = ranges[axis].maximum - ranges[axis].minimum
+        # G5 raw tilt coordinates increase as the head tilts down.  The local
+        # UI speaks physical directions, so a positive direction must be up.
+        sign = -1 if axis == TILT else 1
+        values[axis] = ranges[axis].clamp(values[axis] + round(span * (step / 100) * direction * sign))
+        if not self.backend.move_relative(Position(**values)):
+            return HTTPStatus.CONFLICT, {"error": self.backend.move_refusal()}
+        return HTTPStatus.OK, {"ok": True, "axis": axis, "direction": direction}
+
+    def control_zoom(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        if not isinstance(data, dict) or set(data) != {"percent"} or not isinstance(data["percent"], int) or isinstance(data["percent"], bool) or not 0 <= data["percent"] <= 100:
+            return HTTPStatus.BAD_REQUEST, {"error": "percent must be an integer from 0 to 100"}
+        camera = self.backend.camera()
+        if camera is None or not camera.is_ptz:
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no PTZ camera"}
+        percent = data["percent"]
+        target = camera.zoom_range.from_normalised(percent / 50.0 - 1.0)
+        values = camera.motion.position.as_dict()
+        values[ZOOM] = target
+        if not self.backend.move_absolute(Position(**values)):
+            return HTTPStatus.CONFLICT, {"error": self.backend.move_refusal()}
+        return HTTPStatus.OK, {"ok": True, "percent": percent}
+
+    def control_home(self) -> tuple[HTTPStatus, dict[str, object]]:
+        camera = self.backend.camera()
+        if camera is None or not camera.is_ptz:
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no PTZ camera"}
+        if camera.motion.status != "IDLE":
+            return HTTPStatus.CONFLICT, {"error": "wait for movement to finish before saving home"}
+        home = next((p for p in camera.presets.values() if p.name.strip().lower() == "home"), None)
+        updated = home is not None
+        existing_home_token = home.index if home is not None else None
+        assigned = self.backend.set_preset("home", existing_home_token)
+        if assigned is None:
+            return HTTPStatus.CONFLICT, {"error": "the camera is not accepting presets"}
+        return HTTPStatus.OK, {
+            "ok": True,
+            "token": assigned,
+            "updated": updated,
+            "message": "Home position updated" if updated else "Home position saved",
+        }
+
+    def control_preset(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        if not isinstance(data, dict) or set(data) != {"action", "name"}:
+            return HTTPStatus.BAD_REQUEST, {"error": "expected action and name"}
+        action, name = data["action"], data["name"]
+        if action not in ("save", "goto") or not isinstance(name, str) or not 1 <= len(name) <= 64 or not name.strip():
+            return HTTPStatus.BAD_REQUEST, {"error": "action or name is invalid"}
+        camera = self.backend.camera()
+        if camera is None or not camera.is_ptz:
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no PTZ camera"}
+        existing = next((p for p in camera.presets.values() if p.name.casefold() == name.casefold()), None)
+        if action == "save":
+            if camera.motion.status != "IDLE":
+                return HTTPStatus.CONFLICT, {"error": "wait for movement to finish before saving a preset"}
+            # A case-insensitive match is the same user-facing position. Keep
+            # its established spelling while replacing the camera token so
+            # callers do not accidentally manufacture ``Gate``/``gate`` twins.
+            canonical_name = existing.name if existing is not None else name
+            token = self.backend.set_preset(
+                canonical_name, existing.index if existing else None
+            )
+            if token is None:
+                return HTTPStatus.CONFLICT, {"error": "the camera is not accepting presets"}
+            return HTTPStatus.OK, {
+                "ok": True,
+                "action": action,
+                "name": canonical_name,
+                "token": token,
+            }
+        if existing is None:
+            return HTTPStatus.NOT_FOUND, {"error": "no such named preset"}
+        if not self.backend.goto_preset(existing.index, 1000):
+            return HTTPStatus.CONFLICT, {"error": self.backend.move_refusal()}
+        return HTTPStatus.OK, {"ok": True, "action": action, "name": existing.name, "token": existing.index}
+
+    def control_codec(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        if not isinstance(data, dict) or set(data) != {"track", "codec"}:
+            return HTTPStatus.BAD_REQUEST, {"error": "expected track and codec"}
+        track_name, codec = data["track"], data["codec"]
+        camera = self.backend.camera()
+        if not isinstance(track_name, str) or not isinstance(codec, str) or codec.lower() not in ("h264", "h265", "mjpg"):
+            return HTTPStatus.BAD_REQUEST, {"error": "track or codec is invalid"}
+        if camera is None or camera.track(track_name) is None:
+            return HTTPStatus.NOT_FOUND, {"error": "no such track"}
+        if not self.backend.set_encoder(track_name, codec.lower()):
+            return HTTPStatus.CONFLICT, {"error": "codec change was refused"}
+        return HTTPStatus.OK, {"ok": True, "track": track_name, "codec": codec.lower()}
+
+    # ------------------------------------------------------------- telemetry
+
+    def status_page(self) -> str:
+        """A human-facing telemetry page served at GET / on the ONVIF port.
+
+        Live controller state: the adopted camera and PTZ position, per-track
+        ingest bandwidth (rate, rolling-window sparkline, lifetime bytes, frames,
+        RTSP subscribers), presets, and the endpoints a client points at.
+        """
+        camera = self.backend.camera()
+        tele = self.backend.telemetry()
+
+        def esc(value: object) -> str:
+            return html.escape(str(value))
+
+        def rows(*pairs: tuple[str, str]) -> str:
+            return "".join(f"<tr><th>{esc(k)}</th><td>{v}</td></tr>" for k, v in pairs)
+
+        def num(stat: dict[str, object], key: str) -> float:
+            value = stat.get(key, 0)
+            return float(value) if isinstance(value, (int, float)) else 0.0
+
+        def series_of(stat: dict[str, object]) -> list[float]:
+            value = stat.get("series")
+            return [float(v) for v in value] if isinstance(value, list) else []
+
+        up = int(time.time() - self.started_at)
+        days, rem = divmod(up, 86400)
+        hours, rem = divmod(rem, 3600)
+        mins, secs = divmod(rem, 60)
+        uptime = (f"{days}d " if days else "") + f"{hours:02d}:{mins:02d}:{secs:02d}"
+
+        if camera is None:
+            body = "<section><h2>Camera</h2><p class='muted'>No camera adopted yet.</p></section>"
+        else:
+            pos = camera.motion.position
+            pan = camera.pan_range.to_normalised(pos.pan)
+            tilt = -camera.tilt_range.to_normalised(pos.tilt)  # ONVIF +Y = up
+            zoom = (camera.zoom_range.to_normalised(pos.zoom) + 1.0) / 2.0
+            zoom_percent = round(zoom * 100)
+            cam = rows(
+                ("MAC", esc(camera.mac)),
+                ("Model", esc(camera.model or "—")),
+                ("Firmware", esc(camera.firmware or "—")),
+                ("PTZ", "yes" if camera.is_ptz else "no"),
+                ("Motion", "moving" if not camera.motion.settled else "idle"),
+                ("Audio", esc(", ".join(c.value for c in camera.audio_codecs) or "—")),
+            )
+            if camera.is_ptz:
+                cam += rows(
+                    ("Position (ONVIF)", f"pan {pan:+.3f} · tilt {tilt:+.3f} · zoom {zoom:.3f}"),
+                    ("Position (motor)", f"pan {pos.pan} · tilt {pos.tilt} · zoom {pos.zoom}"),
+                    ("Pan / tilt range",
+                     f"{camera.pan_range.minimum}‥{camera.pan_range.maximum} · "
+                     f"{camera.tilt_range.minimum}‥{camera.tilt_range.maximum}"),
+                )
+            camera_section = f"<section><h2>Camera</h2><table class='kv'>{cam}</table></section>"
+
+            # Keep the overview useful even when Frigate is not reachable: every
+            # value here is sourced from the local media/controller state.
+            playable_count = sum(1 for stat in tele.values() if bool(stat.get("playable")))
+            total_rate = sum(num(stat, "rate_bps") for stat in tele.values())
+            total_frames = sum(num(stat, "frames") for stat in tele.values())
+            metric_cards = (
+                f"<div class='metric-grid'>"
+                f"<div class='metric'><span>PTZ state</span><strong>{'MOVING' if not camera.motion.settled else 'IDLE'}</strong><small>{esc(camera.motion.status)}</small></div>"
+                f"<div class='metric'><span>Position</span><strong>{pan:+.2f} / {tilt:+.2f}</strong><small>pan / tilt · ONVIF units</small></div>"
+                f"<div class='metric'><span>Zoom</span><strong>{zoom_percent}%</strong><small>absolute target</small></div>"
+                f"<div class='metric'><span>Streams online</span><strong>{playable_count} / {len(camera.tracks)}</strong><small>{_fmt_rate(total_rate)} in · {int(total_frames)} frames</small></div>"
+                f"</div>"
+            )
+            metrics = f"<section class='span'><div class='section-head'><div><h2>Mission overview</h2><p class='muted'>Live controller and ingest telemetry · refresh the page for a new snapshot</p></div><span class='live-dot'>● LIVE</span></div>{metric_cards}</section>"
+
+            image = self.backend.snapshot()
+            # A configured-but-idle encoder has no frames for ffmpeg to decode.
+            # Prefer the stream Hub has actually marked playable, rather than
+            # blindly choosing the first advertised profile.
+            preview_track = next(
+                (
+                    track
+                    for track in camera.tracks
+                    if bool(tele.get(track.name, {}).get("playable"))
+                ),
+                None,
+            )
+            if preview_track is not None:
+                live_section = (
+                    f"<section><div class='section-head'><h2>Live video</h2><span id='preview-state' class='muted'>Connecting…</span></div><img src='{PREVIEW_PATH}{esc(preview_track.name)}' alt='live video preview' onload=\"document.getElementById('preview-state').textContent='Stream online'\" onerror=\"document.getElementById('preview-state').textContent='Stream unavailable';this.hidden=true;document.getElementById('snapshot-fallback-label')?.removeAttribute('hidden');document.getElementById('snapshot-fallback')?.removeAttribute('hidden')\">"
+                    + (f"<p id='snapshot-fallback-label' class='muted' hidden>Snapshot fallback</p><img id='snapshot-fallback' hidden src='{SNAPSHOT_PATH}?t={up}' alt='snapshot'>" if image else "")
+                    + "</section>"
+                )
+            elif image:
+                live_section = f"<section><div class='section-head'><h2>Live snapshot</h2><span class='muted'>Fallback feed</span></div><img id='snapshot-fallback' src='{SNAPSHOT_PATH}?t={up}' alt='snapshot' onerror=\"this.alt='Snapshot unavailable';this.classList.add('media-error')\"></section>"
+            else:
+                live_section = "<section><h2>Live video</h2><p class='muted'>Waiting for a playable camera stream.</p></section>"
+
+            track_rows = ""
+            for track in camera.tracks:
+                stat = tele.get(track.name, {})
+                playable = bool(stat.get("playable"))
+                dot = "ok" if playable else "warn"
+                track_rows += (
+                    "<tr>"
+                    f"<td><span class='dot {dot}'></span>{esc(track.name)}</td>"
+                    f"<td>{track.width}×{track.height}</td>"
+                    f"<td>{esc(track.codec.value)}</td>"
+                    f"<td class='num'>{esc(_fmt_rate(num(stat, 'rate_bps')))}</td>"
+                    f"<td class='spark-cell'>{_sparkline(series_of(stat))}</td>"
+                    f"<td class='num'>{esc(_fmt_bytes(num(stat, 'bytes_in')))}</td>"
+                    f"<td class='num'>{int(num(stat, 'frames'))} "
+                    f"<span class='muted'>/ {int(num(stat, 'keyframes'))} kf</span></td>"
+                    f"<td class='num'>{int(num(stat, 'subscribers'))}</td>"
+                    "</tr>"
+                )
+            bandwidth = (
+                "<section class='span'><h2>Streams &amp; bandwidth</h2><div class='scroll'>"
+                "<table class='wide'><tr><th>Track</th><th>Resolution</th><th>Codec</th>"
+                f"<th class='num'>Rate</th><th>Last {int(BANDWIDTH_WINDOW)}s</th>"
+                "<th class='num'>Total</th><th class='num'>Frames</th>"
+                f"<th class='num'>Subs</th></tr>{track_rows}</table></div></section>"
+            )
+
+            if camera.presets:
+                preset_rows = "".join(
+                    f"<tr><th>{i}</th><td>{esc(p.name)}</td><td><button type='button' data-goto-preset='{esc(p.name)}'>Go to</button></td></tr>"
+                    for i, p in sorted(camera.presets.items())
+                )
+                presets = (f"<section><h2>Named positions</h2><table class='kv'>{preset_rows}</table>"
+                           "<p class='muted'>Use named positions for operators. <code>home</code> remains the current Frigate return target.</p>"
+                           "<label>Save current view as <input id='preset-name' maxlength='64' required></label> "
+                           "<button type='button' id='save-preset'>Save named position</button></section>")
+            else:
+                presets = ("<section><h2>Named positions</h2><p class='muted'>None set. "
+                           "<code>home</code> remains the current Frigate return target.</p>"
+                           "<label>Save current view as <input id='preset-name' maxlength='64' required></label> "
+                           "<button type='button' id='save-preset'>Save named position</button></section>")
+
+            endpoint_rows = rows(
+                ("ONVIF", f"<span class='mono'>{esc(self.address(DEVICE_PATH))}</span>"),
+                ("Snapshot", f"<span class='mono'>{esc(self.address(SNAPSHOT_PATH))}</span>"),
+            ) + "".join(
+                f"<tr><th>RTSP {esc(t.name)}</th>"
+                f"<td><span class='mono'>{esc(self.backend.stream_uri(t.name))}</span></td></tr>"
+                for t in camera.tracks
+            )
+            endpoints = (f"<section class='span'><h2>Endpoints</h2><table class='kv'>{endpoint_rows}</table>"
+                         "<p class='muted'>RTSP video/audio links are for players and NVRs; browsers generally cannot play RTSP directly. Use the snapshot above for browser viewing.</p></section>")
+
+            controls = ""
+            if camera.is_ptz:
+                controls = ("<section><h2>PTZ controls</h2><div class='controls'>"
+                    "<button type='button' data-axis='pan' data-direction='-1'>← Pan</button>"
+                    "<button type='button' data-axis='tilt' data-direction='1'>↑ Tilt</button>"
+                    "<button type='button' data-axis='tilt' data-direction='-1'>↓ Tilt</button>"
+                    "<button type='button' data-axis='pan' data-direction='1'>Pan →</button>"
+                    "<label>Step <input id='step-size' type='range' min='1' max='20' value='4' aria-label='PTZ step size'> <output id='step-value'>4%</output></label>"
+                    f"<label>Zoom <input id='zoom-level' type='range' min='0' max='100' value='{zoom_percent}' aria-label='Absolute zoom percentage'> <output id='zoom-value'>{zoom_percent}%</output></label>"
+                    "<button type='button' id='save-home'>Save current view as home</button></div>"
+                    "<p id='feedback' role='status' aria-live='polite'></p>"
+                    "<p class='muted'>Steps are 4% of the configured range. Saving creates or replaces Home.</p></section>")
+            codec_controls = "".join(
+                f"<label>{esc(t.name)} codec <select data-track='{esc(t.name)}' aria-label='{esc(t.name)} codec'>"
+                + "".join(f"<option value='{c}' {'selected' if c == t.codec.value else ''}>{c}</option>" for c in ('h264', 'h265', 'mjpg'))
+                + "</select></label>"
+                for t in camera.tracks
+            )
+            settings = (f"<section><h2>Supported settings</h2><div class='controls'>{codec_controls}</div>"
+                        "<p class='muted'>Codec changes are applied by the active encoder backend.</p></section>" if codec_controls else "")
+            # Framing is a single operator task: put the browser preview and
+            # PTZ buttons in the first two grid cells, side by side on desktop.
+            body = metrics + live_section + controls + camera_section + settings + bandwidth + presets + endpoints
+
+        state = "adopted" if camera else "waiting"
+        badge = "ok" if camera else "warn"
+        return (
+            "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<title>Osprey · operator console</title>"
+            "<style>"
+            ":root{--bg:#0b1118;--panel:#121c26;--panel-hi:#172634;--fg:#e9f0f4;--muted:#8ea3b2;--line:#263845;"
+            "--head:#b4c6d0;--accent:#53d3c1;--accent2:#ff9c68;--ok:#69d391;--warn:#f5c46b;--danger:#f27c86}"
+            "*{box-sizing:border-box}"
+            "body{margin:0;background:radial-gradient(circle at 85% -20%,#193443 0,transparent 40%),var(--bg);color:var(--fg);font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}"
+            ".wrap{max-width:1240px;margin:0 auto;padding:28px 22px 40px}"
+            "header{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:.2rem}"
+            "h1{margin:0;font-size:1.7rem;letter-spacing:-.04em}"
+            "h2{margin:0 0 .6rem;font-size:.72rem;text-transform:uppercase;"
+            "letter-spacing:.07em;color:var(--head)}"
+            ".meta{color:var(--muted);font-size:.85rem;margin:.1rem 0 1.2rem}"
+            ".badge{font-size:.68rem;padding:.15rem .55rem;border-radius:999px;"
+            "text-transform:uppercase;color:#fff;background:var(--warn)}"
+            ".badge.ok{background:var(--ok)}"
+            ".grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}"
+            "section{grid-column:span 6;background:linear-gradient(145deg,var(--panel-hi),var(--panel));border:1px solid var(--line);border-radius:14px;padding:18px;min-width:0;box-shadow:0 12px 30px #02070b33}"
+            "section.span{grid-column:1/-1}"
+            ".scroll{overflow-x:auto}"
+            "table{border-collapse:collapse;width:100%;font-size:.85rem}"
+            "table.kv th{text-align:left;color:var(--muted);font-weight:400;"
+            "padding:.22rem 1rem .22rem 0;white-space:nowrap;vertical-align:top}"
+            "table.kv td{padding:.22rem 0;word-break:break-word}"
+            "table.wide th{text-align:left;color:var(--head);font-weight:600;font-size:.72rem;"
+            "text-transform:uppercase;border-bottom:1px solid var(--line);padding:.3rem .8rem .4rem 0;"
+            "white-space:nowrap}"
+            "table.wide td{padding:.4rem .8rem;border-bottom:1px solid var(--line);white-space:nowrap}"
+            "table.wide tr:last-child td{border-bottom:none}"
+            ".num{text-align:right;font-variant-numeric:tabular-nums}"
+            ".muted{color:var(--muted)}.section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}.section-head p{margin:.2rem 0 0}.live-dot{color:var(--accent);font:600 .7rem ui-monospace,monospace;white-space:nowrap}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{padding:13px;border:1px solid var(--line);border-radius:10px;background:#0b151d}.metric span,.metric small{display:block;color:var(--muted);font-size:.72rem}.metric strong{display:block;margin:.2rem 0;font:600 1.25rem ui-monospace,monospace;color:var(--accent)}"
+            ".mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+            "font-size:.82rem;color:var(--accent);word-break:break-all}"
+            ".spark-cell{color:var(--accent);line-height:0;min-width:120px}"
+            ".spark{display:block;width:100%;max-width:220px}"
+            ".dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;"
+            "margin-right:.45rem;background:var(--warn);vertical-align:middle}"
+            ".dot.ok{background:var(--ok)}"
+            "img{max-width:100%;border-radius:6px;display:block}"
+            "button,select,input{font:inherit;padding:.48rem .7rem;border:1px solid var(--line);border-radius:7px;background:#0b151d;color:var(--fg)}"
+            "button{cursor:pointer;transition:.15s ease}button:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.controls{display:flex;flex-wrap:wrap;gap:.55rem;align-items:center}.controls label{display:flex;align-items:center;gap:.45rem}.controls input[type=range]{accent-color:var(--accent);padding:0}.primary{background:var(--accent);border-color:var(--accent);color:#071217;font-weight:700}.danger{border-color:var(--danger);color:var(--danger)}"
+            "@media (prefers-color-scheme: dark){:root{color-scheme:dark}}"
+            "@media(max-width:760px){section{grid-column:1/-1}.metric-grid{grid-template-columns:repeat(2,1fr)}.wrap{padding:20px 12px 32px}}@media(max-width:420px){.metric-grid{grid-template-columns:1fr 1fr}.metric strong{font-size:1rem}}"
+            "footer{color:var(--muted);opacity:.7;font-size:.72rem;margin-top:1.2rem}"
+            "</style></head><body><div class='wrap'>"
+            f"<header><div><h1>Osprey <span class='muted'>operator console</span></h1><p class='meta'>Built on Cuckoo · originally published by rjmotion and contributors</p></div><span class='badge {badge}'>{state}</span></header>"
+            f"<p class='meta'>{esc(self.host)}:{self.port} · uptime {uptime} · "
+            f"{self.subscriptions.count} event subscriber(s) · window {int(BANDWIDTH_WINDOW)}s</p>"
+            f"<div class='grid'>{body}</div>"
+            "<footer>Snapshot fallback refreshes every 5s · operator actions are sent to the local controller</footer>"
+            "<script>async function post(path,data){const e=document.getElementById('feedback');try{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(e)e.textContent=r.ok?(j.message||'Command completed'):(j.error||'Command failed');return{r:r,j:j}}catch(err){if(e)e.textContent='Controller unavailable — check the camera connection';return null}}const step=document.getElementById('step-size'),stepOut=document.getElementById('step-value');if(step)step.oninput=()=>stepOut.textContent=step.value+'%';document.querySelectorAll('[data-axis]').forEach(b=>b.onclick=()=>post('/control/step',{axis:b.dataset.axis,direction:Number(b.dataset.direction),step:Number(step?.value||4)}));const zoom=document.getElementById('zoom-level'),zoomOut=document.getElementById('zoom-value');if(zoom){let timer;zoom.oninput=()=>{zoomOut.textContent=zoom.value+'%';clearTimeout(timer);timer=setTimeout(()=>post('/control/zoom',{percent:Number(zoom.value)}),350)}}const home=document.getElementById('save-home');if(home)home.onclick=async()=>{home.disabled=true;home.textContent='Saving…';await post('/control/home',{});home.disabled=false;home.textContent='Save current view as Home'};const preset=document.getElementById('save-preset');if(preset)preset.onclick=()=>{const n=document.getElementById('preset-name');if(n.value.trim())post('/control/preset',{action:'save',name:n.value.trim()})};document.querySelectorAll('[data-goto-preset]').forEach(b=>b.onclick=()=>post('/control/preset',{action:'goto',name:b.dataset.gotoPreset}));document.querySelectorAll('[data-track]').forEach(s=>s.onchange=()=>post('/control/codec',{track:s.dataset.track,codec:s.value}));const sf=document.getElementById('snapshot-fallback');if(sf)setInterval(()=>{sf.src='/snapshot/?t='+Date.now()},5000);</script>"
+            "</div></body></html>"
+        )
+
+    # ---------------------------------------------------------------- dispatch
+
+    def handle(self, call: Call) -> str:
+        if call.action == "GetServiceCapabilities" and call.namespace == NAMESPACES["tptz"]:
+            return self._get_ptz_service_capabilities(call)
+        handler = getattr(self, f"_{_snake(call.action)}", None)
+        if handler is None:
+            log.info("unhandled ONVIF action %s", call.action)
+            return fault(f"Action {call.action} is not implemented")
+        result = handler(call)
+        assert isinstance(result, str)
+        return result
+
+    # ------------------------------------------------------------------ device
+
+    def _get_system_date_and_time(self, call: Call) -> str:
+        now = time.gmtime()
+        return envelope(
+            "<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime>"
+            "<tt:DateTimeType>NTP</tt:DateTimeType>"
+            "<tt:DaylightSavings>false</tt:DaylightSavings>"
+            "<tt:TimeZone><tt:TZ>UTC0</tt:TZ></tt:TimeZone>"
+            "<tt:UTCDateTime>"
+            f"<tt:Time><tt:Hour>{now.tm_hour}</tt:Hour><tt:Minute>{now.tm_min}</tt:Minute>"
+            f"<tt:Second>{now.tm_sec}</tt:Second></tt:Time>"
+            f"<tt:Date><tt:Year>{now.tm_year}</tt:Year><tt:Month>{now.tm_mon}</tt:Month>"
+            f"<tt:Day>{now.tm_mday}</tt:Day></tt:Date>"
+            "</tt:UTCDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>"
+        )
+
+    def _get_device_information(self, call: Call) -> str:
+        camera = self.backend.camera()
+        return envelope(
+            "<tds:GetDeviceInformationResponse>"
+            f"<tds:Manufacturer>{MANUFACTURER}</tds:Manufacturer>"
+            f"<tds:Model>{camera.model if camera else 'unknown'}</tds:Model>"
+            f"<tds:FirmwareVersion>{camera.firmware if camera else '0'}</tds:FirmwareVersion>"
+            f"<tds:SerialNumber>{camera.mac if camera else '000000000000'}</tds:SerialNumber>"
+            f"<tds:HardwareId>{camera.model if camera else 'unknown'}</tds:HardwareId>"
+            "</tds:GetDeviceInformationResponse>"
+        )
+
+    def _get_capabilities(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetCapabilitiesResponse><tds:Capabilities>"
+            # ONVIF Capabilities is a strict sequence: Device, Events, Imaging,
+            # Media, PTZ. A real client (zeep, which Home Assistant uses) validates
+            # against the schema and silently drops any element out of order — so a
+            # mis-ordered Events block means HA never creates motion sensors.
+            f"<tt:Device><tt:XAddr>{self.address(DEVICE_PATH)}</tt:XAddr>"
+            "<tt:System><tt:DiscoveryResolve>false</tt:DiscoveryResolve>"
+            "<tt:DiscoveryBye>true</tt:DiscoveryBye></tt:System></tt:Device>"
+            f"<tt:Events><tt:XAddr>{self.address(EVENTS_PATH)}</tt:XAddr>"
+            "<tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport>"
+            "<tt:WSPullPointSupport>true</tt:WSPullPointSupport>"
+            "<tt:WSPausableSubscriptionManagerInterfaceSupport>false"
+            "</tt:WSPausableSubscriptionManagerInterfaceSupport></tt:Events>"
+            f"<tt:Imaging><tt:XAddr>{self.address(IMAGING_PATH)}</tt:XAddr></tt:Imaging>"
+            f"<tt:Media><tt:XAddr>{self.address(MEDIA_PATH)}</tt:XAddr>"
+            "<tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast>"
+            "<tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>"
+            "</tt:StreamingCapabilities></tt:Media>"
+            f"<tt:PTZ><tt:XAddr>{self.address(PTZ_PATH)}</tt:XAddr></tt:PTZ>"
+            "</tds:Capabilities></tds:GetCapabilitiesResponse>"
+        )
+
+    def _get_services(self, call: Call) -> str:
+        entries = [
+            ("http://www.onvif.org/ver10/device/wsdl", DEVICE_PATH),
+            ("http://www.onvif.org/ver10/media/wsdl", MEDIA_PATH),
+            ("http://www.onvif.org/ver20/ptz/wsdl", PTZ_PATH),
+            ("http://www.onvif.org/ver20/imaging/wsdl", IMAGING_PATH),
+            ("http://www.onvif.org/ver10/events/wsdl", EVENTS_PATH),
+        ]
+        body = "".join(
+            f"<tds:Service><tds:Namespace>{namespace}</tds:Namespace>"
+            f"<tds:XAddr>{self.address(path)}</tds:XAddr>"
+            "<tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>"
+            "</tds:Service>"
+            for namespace, path in entries
+        )
+        return envelope(f"<tds:GetServicesResponse>{body}</tds:GetServicesResponse>")
+
+    def _get_scopes(self, call: Call) -> str:
+        camera = self.backend.camera()
+        scopes = [
+            "onvif://www.onvif.org/type/video_encoder",
+            "onvif://www.onvif.org/Profile/Streaming",
+            f"onvif://www.onvif.org/name/{camera.name if camera else 'cuckoo'}",
+        ]
+        if camera is not None and camera.is_ptz:
+            scopes.append("onvif://www.onvif.org/type/ptz")
+        body = "".join(
+            "<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef>"
+            f"<tt:ScopeItem>{scope}</tt:ScopeItem></tds:Scopes>"
+            for scope in scopes
+        )
+        return envelope(f"<tds:GetScopesResponse>{body}</tds:GetScopesResponse>")
+
+    def _get_service_capabilities(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetServiceCapabilitiesResponse><tds:Capabilities>"
+            '<tds:Network IPFilter="false" ZeroConfiguration="false" IPVersion6="false"/>'
+            '<tds:System DiscoveryResolve="false" DiscoveryBye="true"/>'
+            "</tds:Capabilities></tds:GetServiceCapabilitiesResponse>"
+        )
+
+    def _get_ptz_service_capabilities(self, call: Call) -> str:
+        camera = self.backend.camera()
+        supported = camera is not None and camera.is_ptz
+        value = "true" if supported else "false"
+        return envelope(
+            "<tptz:GetServiceCapabilitiesResponse>"
+            f'<tptz:Capabilities EFlip="false" Reverse="false" '
+            f'GetCompatibleConfigurations="false" MoveStatus="{value}" '
+            f'StatusPosition="{value}"/>'
+            "</tptz:GetServiceCapabilitiesResponse>"
+        )
+
+    # ------------------------------------------------------------------- media
+
+    def _profile_xml(self, camera: Camera, name: str, prefix: str = "trt:Profiles") -> str:
+        track = camera.track(name)
+        if track is None:
+            return ""
+        ptz = ""
+        if camera.is_ptz:
+            ptz = (
+                f'<tt:PTZConfiguration token="{PTZ_CONFIG}">'
+                f"<tt:Name>{PTZ_CONFIG}</tt:Name><tt:UseCount>1</tt:UseCount>"
+                f"<tt:NodeToken>{PTZ_NODE}</tt:NodeToken>"
+                f"{PTZ_DEFAULT_SPACES}"
+                "</tt:PTZConfiguration>"
+            )
+        encoding = "H265" if track.codec.value == "h265" else track.codec.value.upper()
+        return (
+            f'<{prefix} token="{name}" fixed="true"><tt:Name>{name}</tt:Name>'
+            f'<tt:VideoSourceConfiguration token="VideoSource">'
+            "<tt:Name>VideoSource</tt:Name><tt:UseCount>1</tt:UseCount>"
+            "<tt:SourceToken>VideoSource</tt:SourceToken>"
+            f'<tt:Bounds x="0" y="0" width="{track.width}" height="{track.height}"/>'
+            "</tt:VideoSourceConfiguration>"
+            f'<tt:VideoEncoderConfiguration token="{name}">'
+            f"<tt:Name>{name}</tt:Name><tt:UseCount>1</tt:UseCount>"
+            f"<tt:Encoding>{encoding}</tt:Encoding>"
+            f"<tt:Resolution><tt:Width>{track.width}</tt:Width>"
+            f"<tt:Height>{track.height}</tt:Height></tt:Resolution>"
+            "<tt:Quality>5</tt:Quality>"
+            f"<tt:RateControl><tt:FrameRateLimit>{track.fps}</tt:FrameRateLimit>"
+            "<tt:EncodingInterval>1</tt:EncodingInterval>"
+            f"<tt:BitrateLimit>{track.bitrate // 1000}</tt:BitrateLimit></tt:RateControl>"
+            "<tt:SessionTimeout>PT60S</tt:SessionTimeout>"
+            "</tt:VideoEncoderConfiguration>"
+            f"{ptz}</{prefix}>"
+        )
+
+    def _get_profiles(self, call: Call) -> str:
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+        body = "".join(self._profile_xml(camera, track.name) for track in camera.tracks)
+        return envelope(f"<trt:GetProfilesResponse>{body}</trt:GetProfilesResponse>")
+
+    def _get_profile(self, call: Call) -> str:
+        camera = self.backend.camera()
+        token = call.text("ProfileToken")
+        if camera is None or camera.track(token) is None:
+            return fault("no such profile")
+        return envelope(
+            f"<trt:GetProfileResponse>{self._profile_xml(camera, token, 'trt:Profile')}"
+            "</trt:GetProfileResponse>"
+        )
+
+    def _get_video_sources(self, call: Call) -> str:
+        camera = self.backend.camera()
+        track = camera.tracks[0] if camera and camera.tracks else None
+        width = track.width if track else 1920
+        height = track.height if track else 1080
+        fps = track.fps if track else 15
+        return envelope(
+            '<trt:GetVideoSourcesResponse><trt:VideoSources token="VideoSource">'
+            f"<tt:Framerate>{fps}</tt:Framerate>"
+            f"<tt:Resolution><tt:Width>{width}</tt:Width><tt:Height>{height}</tt:Height>"
+            "</tt:Resolution></trt:VideoSources></trt:GetVideoSourcesResponse>"
+        )
+
+    def _get_video_encoder_configurations(self, call: Call) -> str:
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+        body = "".join(
+            f'<trt:Configurations token="{track.name}"><tt:Name>{track.name}</tt:Name>'
+            "<tt:UseCount>1</tt:UseCount>"
+            f"<tt:Encoding>{'H265' if track.codec.value == 'h265' else track.codec.value.upper()}"
+            "</tt:Encoding>"
+            f"<tt:Resolution><tt:Width>{track.width}</tt:Width>"
+            f"<tt:Height>{track.height}</tt:Height></tt:Resolution>"
+            "</trt:Configurations>"
+            for track in camera.tracks
+        )
+        return envelope(
+            f"<trt:GetVideoEncoderConfigurationsResponse>{body}"
+            "</trt:GetVideoEncoderConfigurationsResponse>"
+        )
+
+    def _set_video_encoder_configuration(self, call: Call) -> str:
+        """Re-arm a channel's codec on the fly (ONVIF SetVideoEncoderConfiguration).
+
+        Home Assistant never calls this — it consumes the profiles it is given — but
+        a fuller ONVIF client can flip a channel between H.264 and H.265 at runtime,
+        and it rides the same adoption-time settings path (a fresh ChangeVideoSettings
+        to the camera). The token is the channel (video1/…); Encoding is H264/H265.
+        """
+        camera = self.backend.camera()
+        token = call.attribute("Configuration", "token") or call.text("ConfigurationToken")
+        encoding = call.text("Encoding")
+        if camera is None or not token or camera.track(token) is None:
+            return fault("no such video encoder configuration")
+        codec = ENCODING_TO_CODEC.get(encoding.upper())
+        if codec is None:
+            return fault(f"unsupported encoding {encoding!r}")
+        if not self.backend.set_encoder(token, codec):
+            return fault("could not apply video encoder configuration")
+        return envelope("<trt:SetVideoEncoderConfigurationResponse/>")
+
+    def _get_stream_uri(self, call: Call) -> str:
+        token = call.text("ProfileToken") or "video1"
+        uri = self.backend.stream_uri(token)
+        return envelope(
+            "<trt:GetStreamUriResponse><trt:MediaUri>"
+            f"<tt:Uri>{uri}</tt:Uri>"
+            "<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
+            "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
+            "<tt:Timeout>PT60S</tt:Timeout>"
+            "</trt:MediaUri></trt:GetStreamUriResponse>"
+        )
+
+    def _get_snapshot_uri(self, call: Call) -> str:
+        token = call.text("ProfileToken") or "video1"
+        return envelope(
+            "<trt:GetSnapshotUriResponse><trt:MediaUri>"
+            f"<tt:Uri>{self.backend.snapshot_uri(token)}</tt:Uri>"
+            "<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
+            "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
+            "<tt:Timeout>PT60S</tt:Timeout>"
+            "</trt:MediaUri></trt:GetSnapshotUriResponse>"
+        )
+
+    # --------------------------------------------------------------------- PTZ
+
+    def _get_nodes(self, call: Call) -> str:
+        return envelope(f"<tptz:GetNodesResponse>{self._node_xml('tptz:PTZNode')}</tptz:GetNodesResponse>")
+
+    def _get_node(self, call: Call) -> str:
+        return envelope(f"<tptz:GetNodeResponse>{self._node_xml('tptz:PTZNode')}</tptz:GetNodeResponse>")
+
+    def _node_xml(self, element: str) -> str:
+        camera = self.backend.camera()
+        presets = len(camera.presets) if camera else 0
+        spaces = _ptz_spaces(camera)
+        return (
+            f'<{element} token="{PTZ_NODE}"><tt:Name>{PTZ_NODE}</tt:Name>'
+            f"<tt:SupportedPTZSpaces>{spaces}</tt:SupportedPTZSpaces>"
+            f"<tt:MaximumNumberOfPresets>{max(64, presets)}</tt:MaximumNumberOfPresets>"
+            "<tt:HomeSupported>false</tt:HomeSupported>"
+            f"</{element}>"
+        )
+
+    def _get_configurations(self, call: Call) -> str:
+        return envelope(
+            "<tptz:GetConfigurationsResponse>"
+            f'<tptz:PTZConfiguration token="{PTZ_CONFIG}">'
+            f"<tt:Name>{PTZ_CONFIG}</tt:Name><tt:UseCount>1</tt:UseCount>"
+            f"<tt:NodeToken>{PTZ_NODE}</tt:NodeToken>"
+            f"{PTZ_DEFAULT_SPACES}"
+            "</tptz:PTZConfiguration></tptz:GetConfigurationsResponse>"
+        )
+
+    def _get_configuration(self, call: Call) -> str:
+        return self._get_configurations(call)
+
+    def _get_configuration_options(self, call: Call) -> str:
+        # Other clients (ODM, some NVRs) read move-mode support from here; Home
+        # Assistant instead reads it from the PTZConfiguration's Default*Space
+        # elements in GetProfiles (see PTZ_DEFAULT_SPACES). Answered for both.
+        camera = self.backend.camera()
+        spaces = _ptz_spaces(camera)
+        return envelope(
+            "<tptz:GetConfigurationOptionsResponse><tptz:PTZConfigurationOptions>"
+            f"<tt:Spaces>{spaces}</tt:Spaces>"
+            "<tt:PTZTimeout><tt:Min>PT1S</tt:Min><tt:Max>PT60S</tt:Max></tt:PTZTimeout>"
+            "</tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>"
+        )
+
+    def _get_status(self, call: Call) -> str:
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+        self.backend.refresh_position()
+        position, pan_tilt_state, zoom_state, motion_error = camera.motion.snapshot()
+        pan = camera.pan_range.to_normalised(position.pan)
+        # Mirror the inverted tilt axis from _target_from so ONVIF +Y = up here too.
+        tilt = -camera.tilt_range.to_normalised(position.tilt)
+        zoom = (camera.zoom_range.to_normalised(position.zoom) + 1.0) / 2.0
+        error = f"<tt:Error>{html.escape(motion_error)}</tt:Error>" if motion_error else ""
+        return envelope(
+            "<tptz:GetStatusResponse><tptz:PTZStatus>"
+            f'<tt:Position><tt:PanTilt x="{pan:.4f}" y="{tilt:.4f}"/>'
+            f'<tt:Zoom x="{zoom:.4f}"/></tt:Position>'
+            f"<tt:MoveStatus><tt:PanTilt>{pan_tilt_state}</tt:PanTilt>"
+            f"<tt:Zoom>{zoom_state}</tt:Zoom></tt:MoveStatus>"
+            f"{error}"
+            f"<tt:UtcTime>{utc()}</tt:UtcTime>"
+            "</tptz:PTZStatus></tptz:GetStatusResponse>"
+        )
+
+    def _target_from(self, call: Call, camera: Camera, relative: bool) -> Position:
+        current = camera.motion.position
+        pan_tilt = call.vector("PanTilt")
+        zoom = call.vector("Zoom")
+        if pan_tilt is not None:
+            # ONVIF's tilt axis is +Y = up; this camera's tilt value grows as the
+            # head drops, so a raw mapping sends "up" down. Invert Y once here so
+            # every client (HA, ODM, …) gets the intuitive direction, and mirror it
+            # in GetStatus below so reported position stays consistent.
+            pan_tilt = (pan_tilt[0], -pan_tilt[1])
+        pan, tilt = current.pan, current.tilt
+        if pan_tilt is not None:
+            if relative:
+                span_pan = camera.pan_range.maximum - camera.pan_range.minimum
+                span_tilt = camera.tilt_range.maximum - camera.tilt_range.minimum
+                space = call.attribute("PanTilt", "space")
+                if space == FOV_TRANSLATION_SPACE:
+                    geometry = camera.field_of_view
+                    if geometry is None:
+                        raise ValueError("FOV-relative movement is not calibrated for this camera")
+                    zoom_factor = (
+                        camera.zoom_range.to_normalised(current.zoom) + 1.0
+                    ) / 2.0
+                    horizontal, vertical = geometry.at_zoom(zoom_factor)
+                    x = max(-1.0, min(1.0, pan_tilt[0]))
+                    y = max(-1.0, min(1.0, pan_tilt[1]))
+                    pan_delta = x * horizontal / 2.0 * span_pan / geometry.pan_degrees
+                    tilt_delta = y * vertical / 2.0 * span_tilt / geometry.tilt_degrees
+                    pan = camera.pan_range.clamp(round(pan + pan_delta))
+                    tilt = camera.tilt_range.clamp(round(tilt + tilt_delta))
+                else:
+                    pan = camera.pan_range.clamp(round(pan + pan_tilt[0] * span_pan / 2))
+                    tilt = camera.tilt_range.clamp(round(tilt + pan_tilt[1] * span_tilt / 2))
+            else:
+                pan = camera.pan_range.from_normalised(pan_tilt[0])
+                tilt = camera.tilt_range.from_normalised(pan_tilt[1])
+        zoom_value = current.zoom
+        if zoom is not None:
+            if relative:
+                span = camera.zoom_range.maximum - camera.zoom_range.minimum
+                zoom_value = camera.zoom_range.clamp(round(zoom_value + zoom[0] * span))
+            else:
+                # ONVIF zoom is 0..1 where pan and tilt are -1..1.
+                zoom_value = camera.zoom_range.from_normalised(zoom[0] * 2.0 - 1.0)
+        return Position(pan=pan, tilt=tilt, zoom=zoom_value, focus=current.focus)
+
+    def _absolute_move(self, call: Call) -> str:
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+        moved = self.backend.move_absolute(self._target_from(call, camera, relative=False))
+        if not moved:
+            return fault(self.backend.move_refusal())
+        return envelope("<tptz:AbsoluteMoveResponse/>")
+
+    def _relative_move(self, call: Call) -> str:
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+        try:
+            target = self._target_from(call, camera, relative=True)
+        except ValueError as exc:
+            return fault(str(exc))
+        moved = self.backend.move_absolute(target)
+        if not moved:
+            return fault(self.backend.move_refusal())
+        return envelope("<tptz:RelativeMoveResponse/>")
+
+    def _continuous_move(self, call: Call) -> str:
+        """The camera has no continuous verb, so velocity becomes one relative step.
+
+        A client holding an arrow key sends these repeatedly, which gives the same
+        felt behaviour without pretending to a mode the camera does not have.
+        """
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+        try:
+            target = self._target_from(call, camera, relative=True)
+        except ValueError as exc:
+            return fault(str(exc))
+        moved = self.backend.move_absolute(target)
+        if not moved:
+            return fault(self.backend.move_refusal())
+        return envelope("<tptz:ContinuousMoveResponse/>")
+
+    def _stop(self, call: Call) -> str:
+        # Each step completes on its own, so there is nothing to interrupt.
+        self.backend.refresh_position()
+        return envelope("<tptz:StopResponse/>")
+
+    def _get_presets(self, call: Call) -> str:
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+        body = ""
+        for index, preset in sorted(camera.presets.items()):
+            pan = camera.pan_range.to_normalised(preset.position.pan)
+            tilt = -camera.tilt_range.to_normalised(preset.position.tilt)  # +Y = up, as elsewhere
+            zoom = (camera.zoom_range.to_normalised(preset.position.zoom) + 1.0) / 2.0
+            body += (
+                f'<tptz:Preset token="{index}"><tt:Name>{preset.name}</tt:Name>'
+                f'<tt:PTZPosition><tt:PanTilt x="{pan:.4f}" y="{tilt:.4f}"/>'
+                f'<tt:Zoom x="{zoom:.4f}"/></tt:PTZPosition></tptz:Preset>'
+            )
+        return envelope(f"<tptz:GetPresetsResponse>{body}</tptz:GetPresetsResponse>")
+
+    def _goto_preset(self, call: Call) -> str:
+        token = call.text("PresetToken")
+        try:
+            index = int(token)
+        except ValueError:
+            return fault("preset tokens are numeric here")
+        if not self.backend.goto_preset(index, 1000):
+            return fault(self.backend.move_refusal())
+        return envelope("<tptz:GotoPresetResponse/>")
+
+    def _set_preset(self, call: Call) -> str:
+        name = call.text("PresetName") or "preset"
+        token = call.text("PresetToken")
+        index: int | None
+        try:
+            index = int(token) if token else None
+        except ValueError:
+            index = None
+        assigned = self.backend.set_preset(name, index)
+        if assigned is None:
+            return fault("the camera is not accepting presets")
+        return envelope(
+            f'<tptz:SetPresetResponse><tptz:PresetToken>{assigned}</tptz:PresetToken>'
+            "</tptz:SetPresetResponse>"
+        )
+
+    def _remove_preset(self, call: Call) -> str:
+        try:
+            index = int(call.text("PresetToken"))
+        except ValueError:
+            return fault("preset tokens are numeric here")
+        if not self.backend.remove_preset(index):
+            return fault("no such preset")
+        return envelope("<tptz:RemovePresetResponse/>")
+
+    # ----------------------------------------------------------------- imaging
+
+    def _get_imaging_settings(self, call: Call) -> str:
+        return envelope(
+            "<timg:GetImagingSettingsResponse><timg:ImagingSettings>"
+            "<tt:Brightness>50</tt:Brightness><tt:Contrast>50</tt:Contrast>"
+            "<tt:ColorSaturation>50</tt:ColorSaturation><tt:Sharpness>50</tt:Sharpness>"
+            "</timg:ImagingSettings></timg:GetImagingSettingsResponse>"
+        )
+
+    def _get_options(self, call: Call) -> str:
+        limits = "<tt:Min>0</tt:Min><tt:Max>100</tt:Max>"
+        return envelope(
+            "<timg:GetOptionsResponse><timg:ImagingOptions>"
+            f"<tt:Brightness>{limits}</tt:Brightness><tt:Contrast>{limits}</tt:Contrast>"
+            f"<tt:ColorSaturation>{limits}</tt:ColorSaturation><tt:Sharpness>{limits}</tt:Sharpness>"
+            "</timg:ImagingOptions></timg:GetOptionsResponse>"
+        )
+
+    # ------------------------------------------------------------------ events
+
+    def _create_pull_point_subscription(self, call: Call) -> str:
+        identifier = self.subscriptions.create()
+        address = f"{self.address(EVENTS_PATH)}?sub={identifier}"
+        return envelope(
+            "<tev:CreatePullPointSubscriptionResponse>"
+            "<tev:SubscriptionReference>"
+            f"<wsa:Address>{address}</wsa:Address>"
+            "</tev:SubscriptionReference>"
+            f"<wsnt:CurrentTime>{utc()}</wsnt:CurrentTime>"
+            f"<wsnt:TerminationTime>{utc(time.time() + 60)}</wsnt:TerminationTime>"
+            "</tev:CreatePullPointSubscriptionResponse>"
+        )
+
+    def pull_messages(self, identifier: str, limit: int = 10) -> str:
+        events = self.subscriptions.pull(identifier, limit)
+        body = "".join(event.as_xml() for event in events)
+        return envelope(
+            "<tev:PullMessagesResponse>"
+            f"<tev:CurrentTime>{utc()}</tev:CurrentTime>"
+            f"<tev:TerminationTime>{utc(time.time() + 60)}</tev:TerminationTime>"
+            f"{body}</tev:PullMessagesResponse>"
+        )
+
+    def _pull_messages(self, call: Call) -> str:
+        # Without a subscription id on the URL, serve whichever one exists.
+        return self.pull_messages(self._only_subscription())
+
+    def _renew(self, call: Call) -> str:
+        return envelope(
+            "<wsnt:RenewResponse>"
+            f"<wsnt:CurrentTime>{utc()}</wsnt:CurrentTime>"
+            f"<wsnt:TerminationTime>{utc(time.time() + 60)}</wsnt:TerminationTime>"
+            "</wsnt:RenewResponse>"
+        )
+
+    def _unsubscribe(self, call: Call) -> str:
+        self.subscriptions.drop(self._only_subscription())
+        return envelope("<wsnt:UnsubscribeResponse/>")
+
+    def _get_event_properties(self, call: Call) -> str:
+        return envelope(
+            "<tev:GetEventPropertiesResponse>"
+            "<tev:TopicNamespaceLocation>"
+            "http://www.onvif.org/onvif/ver10/topics/topicns.xml"
+            "</tev:TopicNamespaceLocation>"
+            "<wsnt:FixedTopicSet>true</wsnt:FixedTopicSet>"
+            f"<wstop:TopicSet xmlns:wstop=\"http://docs.oasis-open.org/wsn/t-1\">"
+            "<tns1:RuleEngine><CellMotionDetector><Motion wstop:topic=\"true\"/>"
+            "</CellMotionDetector><MyRuleDetector>"
+            "<PeopleDetect wstop:topic=\"true\"/><VehicleDetect wstop:topic=\"true\"/>"
+            "</MyRuleDetector></tns1:RuleEngine></wstop:TopicSet>"
+            "<wsnt:TopicExpressionDialect>"
+            "http://docs.oasis-open.org/wsn/t-1/TopicExpression/Concrete"
+            "</wsnt:TopicExpressionDialect>"
+            "</tev:GetEventPropertiesResponse>"
+        )
+
+    def _only_subscription(self) -> str:
+        with self.subscriptions._lock:  # noqa: SLF001 - same module
+            return next(iter(self.subscriptions._queues), "")
+
+
+def _fmt_rate(bytes_per_sec: float) -> str:
+    bits = float(bytes_per_sec) * 8.0
+    for unit in ("bps", "kbps", "Mbps", "Gbps"):
+        if bits < 1000 or unit == "Gbps":
+            return f"{bits:.1f} {unit}"
+        bits /= 1000.0
+    return f"{bits:.1f} Gbps"
+
+
+def _fmt_bytes(nbytes: float) -> str:
+    value = float(nbytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TB"
+
+
+def _sparkline(series: list[float], width: int = 200, height: int = 30) -> str:
+    """An inline SVG (area + line) of a byte-rate series, oldest→newest.
+
+    Self-contained, no JS or external assets, and uses currentColor so it inherits
+    the theme's accent in both light and dark mode. A flat/empty series is baseline.
+    """
+    if len(series) < 2:
+        return "<span class='muted'>—</span>"
+    peak = max(series) or 1.0
+    step = width / float(len(series) - 1)
+    points = [
+        (index * step, height - 2 - (value / peak) * (height - 4))
+        for index, value in enumerate(series)
+    ]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    area = f"0,{height} {line} {width},{height}"
+    return (
+        f"<svg class='spark' viewBox='0 0 {width} {height}' width='{width}' "
+        f"height='{height}' preserveAspectRatio='none' role='img'>"
+        f"<polygon points='{area}' fill='currentColor' fill-opacity='0.15'/>"
+        f"<polyline points='{line}' fill='none' stroke='currentColor' "
+        "stroke-width='1.5' stroke-linejoin='round'/></svg>"
+    )
+
+
+def _snake(action: str) -> str:
+    out: list[str] = []
+    for index, character in enumerate(action):
+        if character.isupper() and index:
+            out.append("_")
+        out.append(character.lower())
+    return "".join(out)
+
+
+# -------------------------------------------------------------------- transport
+
+
+class _Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    @property
+    def services(self) -> Services:
+        server = self.server
+        assert isinstance(server, OnvifServer)
+        return server.services
+
+    def log_message(self, format: str, *args: object) -> None:
+        log.debug("%s %s", self.address_string(), format % args)
+
+    def do_GET(self) -> None:  # noqa: N802 - name fixed by http.server
+        root, _, _ = self.path.partition("?")
+        if root in ("/", "/status", "/status/"):
+            self._send(HTTPStatus.OK, self.services.status_page().encode(), "text/html; charset=utf-8")
+            return
+        if self.path.startswith(SNAPSHOT_PATH):
+            image = self.services.backend.snapshot()
+            if image is None:
+                self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"", "text/plain")
+                return
+            self._send(HTTPStatus.OK, image, "image/jpeg")
+            return
+        if root.startswith(PREVIEW_PATH):
+            token = unquote(root[len(PREVIEW_PATH):]).strip("/")
+            self._serve_preview(token)
+            return
+        self._send(HTTPStatus.NOT_FOUND, b"", "text/plain")
+
+    def _serve_preview(self, token: str) -> None:
+        camera = self.services.backend.camera()
+        if camera is None or not camera.adopted or camera.track(token) is None:
+            self._send(HTTPStatus.NOT_FOUND, b"", "text/plain")
+            return
+        server = self.server
+        assert isinstance(server, OnvifServer)
+        if not server._preview_lock.acquire(blocking=False):
+            self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"preview busy", "text/plain")
+            return
+        uri = self.services.backend.stream_uri(token)
+        # The RTSP server is Cuckoo's own local process; loopback avoids routing
+        # the preview through the LAN and keeps this endpoint independent of the
+        # advertised client-facing hostname.
+        try:
+            parts = urlsplit(uri)
+            if parts.scheme == "rtsp" and parts.port is not None:
+                uri = parts._replace(netloc=f"127.0.0.1:{parts.port}").geturl()
+            process = subprocess.Popen(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp",
+                 "-i", uri, "-an", "-vf", "fps=5,scale=640:-2", "-f", "mpjpeg", "-q:v", "6", "pipe:1"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, ValueError):
+            server._preview_lock.release()
+            self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"preview unavailable", "text/plain")
+            return
+        server._preview_processes.add(process)
+        try:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=ffmpeg")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            assert process.stdout is not None
+            while True:
+                chunk = process.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            server._preview_processes.discard(process)
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            server._preview_lock.release()
+
+    def do_POST(self) -> None:  # noqa: N802 - name fixed by http.server
+        root, _, _ = self.path.partition("?")
+        if root in (CONTROL_STEP_PATH, CONTROL_HOME_PATH, CONTROL_PRESET_PATH, CONTROL_ZOOM_PATH, "/control/codec"):
+            self._control_json(root)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        payload = self.rfile.read(length) if length else b""
+        call = parse_call(payload)
+        if call is None:
+            self._send(HTTPStatus.BAD_REQUEST, fault("unparseable request").encode(), "text/xml")
+            return
+        subscription = self._subscription_from_path()
+        if call.action == "PullMessages" and subscription:
+            body = self.services.pull_messages(subscription)
+        elif call.action == "Unsubscribe" and subscription:
+            self.services.subscriptions.drop(subscription)
+            body = envelope("<wsnt:UnsubscribeResponse/>")
+        else:
+            body = self.services.handle(call)
+        status = HTTPStatus.INTERNAL_SERVER_ERROR if "s:Fault" in body else HTTPStatus.OK
+        self._send(status, body.encode(), "application/soap+xml; charset=utf-8")
+
+    def _control_json(self, root: str) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > 4096:
+                raise ValueError
+            raw = self.rfile.read(length) if length else b""
+        except ValueError:
+            self._send(HTTPStatus.BAD_REQUEST, json.dumps({"error": "invalid request size"}).encode(), "application/json")
+            return
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+            self._send(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, json.dumps({"error": "Content-Type must be application/json"}).encode(), "application/json")
+            return
+        try:
+            value = json.loads(raw.decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self._send(HTTPStatus.BAD_REQUEST, json.dumps({"error": "invalid JSON request"}).encode(), "application/json")
+            return
+        if root == CONTROL_STEP_PATH:
+            status, result = self.services.control_step(value)
+        elif root == CONTROL_HOME_PATH:
+            status, result = self.services.control_home()
+        elif root == CONTROL_PRESET_PATH:
+            status, result = self.services.control_preset(value)
+        elif root == CONTROL_ZOOM_PATH:
+            status, result = self.services.control_zoom(value)
+        else:
+            status, result = self.services.control_codec(value)
+        self._send(status, json.dumps(result).encode(), "application/json")
+
+    def _subscription_from_path(self) -> str:
+        _, _, query = self.path.partition("?")
+        for part in query.split("&"):
+            key, _, value = part.partition("=")
+            if key == "sub":
+                return value
+        return ""
+
+    def _send(self, status: HTTPStatus, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+
+class OnvifServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, services: Services, port: int = ONVIF_PORT) -> None:
+        self.services = services
+        self._preview_processes: set[subprocess.Popen[bytes]] = set()
+        self._preview_lock = threading.Lock()
+        super().__init__(("0.0.0.0", port), _Handler)
+        self._thread: threading.Thread | None = None
+
+    @property
+    def port(self) -> int:
+        return int(self.server_address[1])
+
+    def start(self) -> None:
+        log.info("onvif listening on :%d%s", self.port, DEVICE_PATH)
+        self._thread = threading.Thread(target=self.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        for process in tuple(self._preview_processes):
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+        self.shutdown()
+        self.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)

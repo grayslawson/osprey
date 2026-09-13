@@ -1,0 +1,45 @@
+name: Osprey
+version: "0.1.0-alpha.1"
+slug: osprey
+description: Osprey PTZ operator and Frigate camera bridge
+url: https://github.com/REPLACE_ME/osprey
+startup: services
+boot: auto
+init: true
+arch:
+  - amd64
+  - aarch64
+  - armv7
+image: ghcr.io/REPLACE_ME/osprey-addon-{arch}
+host_network: true
+webui: http://[HOST]:[PORT:8000]/
+ingress: true
+ingress_port: 8000
+panel_icon: mdi:camera-control
+panel_title: Osprey
+ports:
+  8000/tcp: 8000
+ports_description:
+  8000/tcp: Osprey operator console (HTTP)
+map:
+  - config:rw
+options:
+  advertised_host: ""
+  camera_ip: ""
+  camera_mac: ""
+  camera_name: osprey-g5-ptz
+  announce: false
+  tracks: video1:h264,video2:h265
+  onvif_port: 8000
+  rtsp_port: 8554
+schema:
+  advertised_host: str
+  camera_ip: str?
+  camera_mac: str?
+  camera_name: str
+  announce: bool
+  tracks: str
+  onvif_port: port
+  rtsp_port: port
+timeout: 30
+watchdog: http://[HOST]:[PORT:8000]/
