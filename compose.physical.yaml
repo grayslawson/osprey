@@ -1,0 +1,132 @@
+# Physical UniFi G5 PTZ overlay for a native Linux host running rootless Podman.
+#
+# There is no host-side TCP relay on this path: the camera dials the VM's LAN
+# address directly, so the three camera-facing ports are published on
+# CUCKOO_PHYSICAL_BIND instead of loopback. A Windows/Docker Desktop host cannot
+# serve those LAN binds; it sets CUCKOO_PHYSICAL_BIND=127.0.0.1 and runs
+# docker/physical_lan_proxy.py in front of the loopback ports instead.
+#
+# Never set CUCKOO_PHYSICAL_BIND to 0.0.0.0. ONVIF and RTSP stay loopback-only;
+# the explicitly requested operator panel has its own LAN port below.
+services:
+  cuckoo:
+    command:
+      - python3
+      - main.py
+      # Advertised address for camera- and client-facing URLs. It must be the
+      # address the camera can dial back on: Cuckoo hands the camera
+      # wss://<host>:<control-port>/control for its PTZ channel, so this stays the
+      # LAN address. Frigate reaches the same address over the Compose network
+      # (see the onvif-lan/rtsp-lan publishes below, which the firewall scopes to
+      # the lab subnet).
+      - --host
+      - ${CUCKOO_PHYSICAL_HOST:?set CUCKOO_PHYSICAL_HOST in .env.physical}
+      - --cert
+      - /state/cuckoo.pem
+      - --tracks
+      - video2:h265
+      - --dump
+      - /state/cuckoo-messages.jsonl
+      - --name
+      - cuckoo-g5-physical-lab
+      # Rootless Podman's port forwarding rewrites the client source address, so
+      # an IP allowlist cannot work here; the camera-mac header check stays as the
+      # identity guard, and the host firewall limits who can reach the ports.
+      - --expected-camera-mac
+      - ${G5_PTZ_MAC:?set G5_PTZ_MAC in .env.physical}
+      - --no-announce
+      - --verbose
+    ports: !override
+      # Camera-facing channels bind the VM LAN address, so the physical camera
+      # reaches them without a relay. The host firewall gates who can connect;
+      # Cuckoo additionally rejects a mismatched camera-mac header.
+      - name: camera-control
+        target: 7442
+        published: "7442"
+        host_ip: "${CUCKOO_PHYSICAL_BIND:?set CUCKOO_PHYSICAL_BIND in .env.physical}"
+        protocol: tcp
+      - name: camera-snapshot
+        target: 7444
+        published: "7444"
+        host_ip: "${CUCKOO_PHYSICAL_BIND:?set CUCKOO_PHYSICAL_BIND in .env.physical}"
+        protocol: tcp
+      - name: camera-ingest
+        target: 7550
+        published: "7550"
+        host_ip: "${CUCKOO_PHYSICAL_BIND:?set CUCKOO_PHYSICAL_BIND in .env.physical}"
+        protocol: tcp
+      # ONVIF and RTSP are advertised at CUCKOO_PHYSICAL_HOST, so that address has
+      # to serve them or every ONVIF client would follow a dead XAddr. They are
+      # published only on the bind address and the host firewall accepts them
+      # solely from this project's bridge subnet, so the LAN cannot reach them.
+      # The loopback publishes below stay for host-side use.
+      - name: onvif-lan
+        target: 8000
+        published: "8000"
+        host_ip: "${CUCKOO_PHYSICAL_BIND:?set CUCKOO_PHYSICAL_BIND in .env.physical}"
+        protocol: tcp
+      - name: rtsp-lan
+        target: 8554
+        published: "8554"
+        host_ip: "${CUCKOO_PHYSICAL_BIND:?set CUCKOO_PHYSICAL_BIND in .env.physical}"
+        protocol: tcp
+      - name: onvif
+        target: 8000
+        published: "18001"
+        # The Cuckoo operator panel shares the ONVIF HTTP server.  Keep this
+        # distinct from the advertised 8000 ONVIF port so a trusted LAN user
+        # has one deliberate browser entrypoint.
+        host_ip: "${CUCKOO_PHYSICAL_BIND:?set CUCKOO_PHYSICAL_BIND in .env.physical}"
+        protocol: tcp
+      - name: rtsp
+        target: 8554
+        published: "18555"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - cuckoo-physical-state:/state
+
+  finch:
+    profiles:
+      - synthetic-only
+
+  frigate-init:
+    command: ["python3", "/opt/lab/frigate_prepare_physical.py"]
+    depends_on:
+      finch: !reset null
+
+  frigate:
+    environment:
+      FRIGATE_URL: http://127.0.0.1:5000
+      FRIGATE_CAMERA: g5_ptz
+      CUCKOO_HOST: cuckoo
+      CUCKOO_PORT: "8000"
+    ports: !override
+      # The physical Frigate UI is the only LAN-facing HTTP endpoint. It has no
+      # authentication while auth.enabled is false in frigate/config.physical.yml.
+      - name: frigate-physical-ui
+        target: 5000
+        published: "15001"
+        host_ip: "${CUCKOO_PHYSICAL_BIND:?set CUCKOO_PHYSICAL_BIND in .env.physical}"
+        protocol: tcp
+    volumes:
+      - frigate-physical-config:/config
+      - type: bind
+        source: ./frigate/config.physical.yml
+        target: /config/config.yml
+        # Frigate must persist movement_weights after physical calibration.
+        read_only: false
+      - frigate-physical-media:/media/frigate
+
+  frigate-detection-test:
+    environment:
+      FRIGATE_CAMERA: g5_ptz
+
+  frigate-autotrack-test:
+    environment:
+      FRIGATE_CAMERA: g5_ptz
+
+volumes:
+  cuckoo-physical-state:
+  frigate-physical-config:
+  frigate-physical-media:

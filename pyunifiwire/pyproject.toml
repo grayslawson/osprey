@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyunifiwire"
+version = "0.1.0"
+description = "The wire protocol UniFi Protect cameras and controllers speak — measured, not guessed"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["unifi", "protect", "ubiquiti", "camera", "nvr", "flv", "hevc", "websocket"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: System :: Networking",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/rjmotion/pyunifiwire"
+Issues = "https://github.com/rjmotion/pyunifiwire/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/unifiwire"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "SPEC.md", "README.md", "LICENSE"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unreachable = true
+files = ["src", "tests"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

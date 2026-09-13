@@ -1,0 +1,367 @@
+# Lab Compose for the Cuckoo/Finch/Frigate control path.
+#
+# The tmpfs mounts below use mode-only options. `mode=1777` is valid for Docker
+# and the Compose spec, while rootless Podman's Docker-compatible API rejects
+# Docker's `uid=`/`gid=` tmpfs options outright, so mode-only is the portable
+# form and no per-host override file is required.
+name: cuckoo-lab
+
+services:
+  cuckoo:
+    image: cuckoo-lab-dev:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    working_dir: /workspace/cuckoo
+    command:
+      - python3
+      - main.py
+      - --host
+      - cuckoo
+      - --cert
+      - /state/cuckoo.pem
+      - --tracks
+      - video2:h265
+      - --dump
+      - /state/cuckoo-messages.jsonl
+      - --name
+      - cuckoo-lab
+      - --no-announce
+      - --verbose
+    environment:
+      PYTHONPATH: /workspace/pyunifiwire/src
+    volumes:
+      - type: bind
+        source: ./cuckoo
+        target: /workspace/cuckoo
+      - type: bind
+        source: ./finch
+        target: /workspace/finch
+      - type: bind
+        source: ./pyunifiwire
+        target: /workspace/pyunifiwire
+      - type: bind
+        source: ./docker
+        target: /opt/lab
+        read_only: true
+      - cuckoo-state:/state
+    expose:
+      - "3702/udp"
+      - "7442"
+      - "7444"
+      - "7550"
+      - "8000"
+      - "8554"
+    ports:
+      - name: onvif
+        target: 8000
+        published: "18000"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - name: rtsp
+        target: 8554
+        published: "18554"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    networks:
+      lab:
+        aliases:
+          - cuckoo
+    healthcheck:
+      test: ["CMD", "python3", "/opt/lab/cuckoo_health.py"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: on-failure:5
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+
+  finch:
+    image: cuckoo-lab-dev:local
+    working_dir: /workspace/finch
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        set -- python3 main.py \
+          --host cuckoo \
+          --port 7442 \
+          --token anything \
+          --cert /state/finch.pem \
+          --mac 02C0FFEE1201 \
+          --name finch-synthetic-g5-ptz \
+          --source "$${FINCH_FIXTURE}" \
+          --fps 15 \
+          --lens-state /state/finch-lens.json \
+          --dump /state/finch-messages.jsonl \
+          --verbose
+        if [ "$${FINCH_VIRTUAL_LENS}" = "1" ]; then
+          set -- "$${@}" --virtual-lens
+        fi
+        exec "$${@}"
+    environment:
+      PYTHONPATH: /workspace/pyunifiwire/src
+      FINCH_FIXTURE: ${FINCH_FIXTURE:-/fixtures/frigate-person.h265}
+      FINCH_VIRTUAL_LENS: ${FINCH_VIRTUAL_LENS:-0}
+    volumes:
+      - type: bind
+        source: ./cuckoo
+        target: /workspace/cuckoo
+      - type: bind
+        source: ./finch
+        target: /workspace/finch
+      - type: bind
+        source: ./pyunifiwire
+        target: /workspace/pyunifiwire
+      - type: bind
+        source: ./docker
+        target: /opt/lab
+        read_only: true
+      - type: bind
+        source: ./fixtures
+        target: /fixtures
+        read_only: true
+      - finch-state:/state
+    depends_on:
+      cuckoo:
+        condition: service_healthy
+    networks:
+      - lab
+    healthcheck:
+      test: ["CMD", "python3", "/opt/lab/finch_health.py"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: on-failure:5
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+
+  integration-test:
+    image: cuckoo-lab-dev:local
+    working_dir: /workspace
+    command: ["python3", "/opt/lab/integration_test.py"]
+    environment:
+      EXPECTED_MAC: 02C0FFEE1201
+      EXPECTED_MODELS: "0xa59b,UVC G5 PTZ"
+      ONVIF_HOST: cuckoo
+      ONVIF_PORT: "8000"
+      RTSP_TRACK: video2
+      XDG_CACHE_HOME: /tmp/cache
+    volumes:
+      - type: bind
+        source: ./docker
+        target: /opt/lab
+        read_only: true
+      - cuckoo-state:/cuckoo-state:ro
+      - finch-state:/finch-state:ro
+    depends_on:
+      cuckoo:
+        condition: service_healthy
+      finch:
+        condition: service_healthy
+    networks:
+      - lab
+    profiles:
+      - test
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  frigate-init:
+    image: cuckoo-lab-dev:local
+    command: ["python3", "/opt/lab/frigate_prepare.py"]
+    environment:
+      XDG_CACHE_HOME: /tmp/cache
+    volumes:
+      - type: bind
+        source: ./docker
+        target: /opt/lab
+        read_only: true
+    depends_on:
+      cuckoo:
+        condition: service_healthy
+      finch:
+        condition: service_healthy
+    networks:
+      - lab
+    profiles:
+      - frigate
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  frigate:
+    image: cuckoo-lab-frigate:0.18.0-rc1-ptz-recovery
+    build:
+      context: .
+      dockerfile: docker/Frigate.Dockerfile
+    platform: linux/amd64
+    shm_size: 256mb
+    volumes:
+      - frigate-config:/config
+      - type: bind
+        source: ./frigate/config.yml
+        target: /config/config.yml
+      - type: bind
+        source: ./docker/integration_health.py
+        target: /opt/lab/integration_health.py
+        read_only: true
+      - frigate-media:/media/frigate
+    ports:
+      - name: frigate-ui
+        target: 5000
+        published: "15000"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    depends_on:
+      frigate-init:
+        condition: service_completed_successfully
+    environment:
+      FRIGATE_URL: http://127.0.0.1:5000
+      FRIGATE_CAMERA: synthetic_g5_ptz
+      CUCKOO_HOST: cuckoo
+      CUCKOO_PORT: "8000"
+    healthcheck:
+      test: ["CMD", "python3", "/opt/lab/integration_health.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - lab
+    profiles:
+      - frigate
+    restart: on-failure:5
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp/cache:size=256m,mode=1777
+    stop_grace_period: 30s
+
+  frigate-detection-test:
+    image: cuckoo-lab-dev:local
+    command: ["python3", "/opt/lab/frigate_detection_test.py"]
+    environment:
+      FRIGATE_URL: http://frigate:5000
+      FRIGATE_CAMERA: synthetic_g5_ptz
+      FRIGATE_LABEL: person
+      FRIGATE_ZONE: tracking_zone
+      FRIGATE_DETECTION_TIMEOUT: "90"
+    volumes:
+      - type: bind
+        source: ./docker
+        target: /opt/lab
+        read_only: true
+    depends_on:
+      frigate:
+        condition: service_healthy
+    networks:
+      - lab
+    profiles:
+      - frigate
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  frigate-autotrack-test:
+    image: cuckoo-lab-dev:local
+    command: ["python3", "/opt/lab/frigate_autotrack_test.py"]
+    environment:
+      FRIGATE_URL: http://frigate:5000
+      FRIGATE_CAMERA: synthetic_g5_ptz
+      FRIGATE_LABEL: person
+      FRIGATE_ZONE: tracking_zone
+      FRIGATE_AUTOTRACK_TIMEOUT: "120"
+    volumes:
+      - type: bind
+        source: ./docker
+        target: /opt/lab
+        read_only: true
+      - cuckoo-state:/cuckoo-state:ro
+    depends_on:
+      frigate:
+        condition: service_healthy
+    networks:
+      - lab
+    profiles:
+      - frigate
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  frigate-visual-motion-test:
+    image: cuckoo-lab-dev:local
+    command: ["python3", "/opt/lab/frigate_visual_motion_test.py"]
+    environment:
+      FRIGATE_URL: http://frigate:5000
+      FRIGATE_CAMERA: synthetic_g5_ptz
+      FRIGATE_VISUAL_TIMEOUT: "120"
+      ONVIF_HOST: cuckoo
+      ONVIF_PORT: "8000"
+      XDG_CACHE_HOME: /tmp/cache
+    volumes:
+      - type: bind
+        source: ./docker
+        target: /opt/lab
+        read_only: true
+      - finch-state:/finch-state:ro
+    depends_on:
+      frigate:
+        condition: service_healthy
+    networks:
+      - lab
+    profiles:
+      - frigate
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  lab: {}
+
+volumes:
+  cuckoo-state:
+  finch-state:
+  frigate-config:
+  frigate-media:
