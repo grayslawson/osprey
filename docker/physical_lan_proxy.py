@@ -1,8 +1,11 @@
 """Forward only the expected G5's LAN TCP channels to loopback Docker ports.
 
-Docker Desktop on this Windows host reserves the published LAN ports but does not
-complete inbound connections from the camera. This host-side relay leaves the
-container published only on loopback and does not inspect or log payloads.
+Windows/Docker Desktop fallback only. A native Linux host publishes the camera
+channels directly on CUCKOO_PHYSICAL_BIND and needs no relay. Docker Desktop
+under WSL mirrored networking reserves the published LAN ports but does not
+complete inbound connections from the camera, so this host-side relay binds the
+LAN address and forwards to the loopback ports published with
+``CUCKOO_PHYSICAL_BIND=127.0.0.1``. It does not inspect or log payloads.
 """
 
 import argparse
@@ -12,7 +15,10 @@ import logging
 from pathlib import Path
 
 
-PORTS = {7442: 17442, 7444: 17444, 7550: 17550}
+# LAN port -> loopback port published by the container. The numbers match the
+# native Linux binds, so the relay only translates addresses on a host that
+# cannot serve LAN binds itself.
+PORTS = {7442: 7442, 7444: 7444, 7550: 7550}
 CONNECT_TIMEOUT = 5
 READ_TIMEOUT = 3600
 WRITE_TIMEOUT = 30

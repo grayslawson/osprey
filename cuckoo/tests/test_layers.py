@@ -191,6 +191,123 @@ def test_parse_motor_state_accepts_flat_position_reply() -> None:
     assert parsed == (Position(pan=19767, tilt=14060, zoom=215, focus=0), 0)
 
 
+def test_parse_motor_state_accepts_g5_steps_reply() -> None:
+    """The real G5 answers GetCurrentPosition with degree + steps, not position.
+
+    Captured from a UVC G5 PTZ. Without this shape being understood every reply
+    was discarded, so a reserved move could only settle on the 60 s timeout.
+    """
+    parsed = ptz.parse_motor_state(
+        {
+            "degree": {"pan": -175.0, "tilt": -10.0, "zoom": 1.0},
+            "steps": {"focus": 46, "pan": 500, "tilt": 8000, "zoom": 0},
+        }
+    )
+    assert parsed == (Position(pan=500, tilt=8000, zoom=0, focus=46), 0)
+
+
+def test_focus_drift_does_not_hold_a_reserved_move() -> None:
+    """The lens hunting must not keep a finished pan/tilt/zoom move reserved."""
+    camera = _ptz_camera()
+    camera.motion.connect()
+    target = Position(pan=681, tilt=8000, zoom=0, focus=46)
+    assert camera.motion.begin(target, timeout=60.0)
+    assert camera.motion.status == "MOVING"
+    # The gimbal arrived; only autofocus is still moving.
+    camera.motion.update(Position(pan=681, tilt=8000, zoom=0, focus=58), activity=0)
+    assert camera.motion.status == "IDLE"
+    assert camera.motion.settled
+
+
+def test_g5_encoder_rounding_settles_a_reserved_move() -> None:
+    """The physical G5 can stop a few raw steps either side of its target."""
+    camera = _ptz_camera()
+    camera.motion.connect()
+    target = Position(pan=19631, tilt=12335, zoom=668, focus=117)
+    assert camera.motion.begin(target, timeout=60.0)
+    # Captured physical result: pan +4, tilt -1, exact zoom, changed autofocus.
+    camera.motion.update(
+        Position(pan=19635, tilt=12334, zoom=668, focus=139),
+        activity=16,
+        confirmed=True,
+    )
+    assert camera.motion.status == "IDLE"
+    assert camera.motion.settled
+
+
+def test_g5_post_settle_activity_does_not_reopen_the_reservation() -> None:
+    camera = _ptz_camera()
+    camera.motion.connect()
+    target = Position(pan=19631, tilt=12335, zoom=668, focus=117)
+    assert camera.motion.begin(target)
+    camera.motion.update(
+        Position(pan=19635, tilt=12334, zoom=668, focus=139),
+        activity=16,
+        confirmed=True,
+    )
+    # Autofocus/motor events near the confirmed pose are not a new move.
+    camera.motion.update(Position(pan=19635, tilt=12334, zoom=666, focus=112), activity=16)
+    assert camera.motion.status == "IDLE"
+    assert camera.motion.begin(Position(pan=19600, tilt=12335, zoom=668, focus=112))
+
+
+def test_g5_ignored_activity_at_the_new_target_settles_the_new_move() -> None:
+    """A delayed G5 motor frame can be the first terminal state of the next move.
+
+    Frigate calibration sends adjacent zoom increments.  The G5 marks its
+    terminal frame activity=16 but explicitly says to ignore that activity;
+    once its pose matches the new target, the following increment must not be
+    refused as busy.
+    """
+    camera = _ptz_camera()
+    camera.motion.connect()
+    target = Position(pan=19635, tilt=12334, zoom=730, focus=109)
+    assert camera.motion.begin(target)
+    camera.motion.update(
+        Position(pan=19635, tilt=12334, zoom=730, focus=115),
+        activity=16,
+        ignore_activity=True,
+    )
+    assert camera.motion.status == "IDLE"
+    assert camera.motion.begin(Position(pan=19635, tilt=12334, zoom=723, focus=115))
+
+
+def test_unflagged_activity_at_a_target_does_not_settle_a_reserved_move() -> None:
+    """Keep real Finch/genuine motor motion from releasing a move prematurely."""
+    camera = _ptz_camera()
+    camera.motion.connect()
+    target = Position(pan=19635, tilt=12334, zoom=730, focus=109)
+    assert camera.motion.begin(target)
+    camera.motion.update(
+        Position(pan=19635, tilt=12334, zoom=730, focus=115), activity=16
+    )
+    assert camera.motion.status == "MOVING"
+    assert not camera.motion.begin(Position(pan=19635, tilt=12334, zoom=723, focus=115))
+
+
+def test_consecutive_moves_settle_from_position_replies() -> None:
+    """Back-to-back moves must release the slot from a reply, not a timeout.
+
+    Calibration and autotracking both issue moves continuously; the real G5
+    answers each GetCurrentPosition with its new position.
+    """
+    camera = _ptz_camera()
+    camera.motion.connect()
+    camera.motion.update(Position(pan=500, tilt=8000, zoom=0, focus=46), activity=0)
+
+    assert camera.motion.begin(Position(pan=681, tilt=8000, zoom=0, focus=46), timeout=60.0)
+    assert camera.motion.status == "MOVING"
+    camera.motion.update(Position(pan=681, tilt=8000, zoom=0, focus=58), activity=0)
+    assert camera.motion.status == "IDLE"
+
+    assert camera.motion.begin(
+        Position(pan=862, tilt=8000, zoom=0, focus=58), timeout=60.0
+    ), "the previous move must release the slot without hitting the timeout"
+    camera.motion.update(Position(pan=862, tilt=8000, zoom=0, focus=41), activity=0)
+    assert camera.motion.status == "IDLE"
+    assert camera.motion.settled
+
+
 @pytest.mark.parametrize("payload", [{}, {"state": 1}, {"state": {}}])
 def test_parse_motor_state_rejects_malformed(payload: dict[str, Any]) -> None:
     assert ptz.parse_motor_state(payload) is None

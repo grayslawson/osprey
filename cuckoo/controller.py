@@ -38,6 +38,15 @@ CONTROL_PORT: Final = 7442
 READ_SIZE: Final = 65536
 SELECT_TIMEOUT_SEC: Final = 0.5
 
+# The camera opens its dedicated ptz1 socket only in answer to EnablePtzControl,
+# and it does not reliably re-dial after a drop — a stale socket from a previous
+# controller leaves it silent and every ONVIF move refused. A missing socket is
+# re-armed with a bounded, backing-off Disable/Enable pair.
+PTZ_RECOVERY_CALLBACK_TIMEOUT_SEC: Final = 15.0
+PTZ_RECOVERY_INITIAL_BACKOFF_SEC: Final = 2.0
+PTZ_RECOVERY_MAX_BACKOFF_SEC: Final = 30.0
+PTZ_RECOVERY_MAX_ATTEMPTS: Final = 5
+
 log = logging.getLogger("cuckoo.control")
 
 
@@ -48,6 +57,17 @@ def normalise_mac(value: str) -> str:
     return mac
 
 Handler = Callable[["Session", Envelope], None]
+
+
+@dataclass
+class PtzRecovery:
+    """One bounded callback-recovery sequence for a camera."""
+
+    attempts: int = 0
+    waiting_for_callback: bool = False
+    callback_deadline: float = 0.0
+    next_attempt_at: float = 0.0
+    exhausted: bool = False
 
 
 @dataclass
@@ -120,6 +140,7 @@ class Controller:
         images: snapshots.Store | None = None,
         expected_camera_ip: str | None = None,
         expected_camera_mac: str | None = None,
+        configured_cameras: dict[str, dict[str, object]] | None = None,
     ) -> None:
         self.cert = cert
         self.ingest_host = ingest_host
@@ -134,12 +155,15 @@ class Controller:
         self.expected_camera_mac = (
             normalise_mac(expected_camera_mac) if expected_camera_mac else None
         )
+        self.configured_cameras = configured_cameras or {}
         self.cameras: dict[str, Camera] = {}
         self._sessions: dict[socket.socket, Session] = {}
         self._sessions_lock = threading.Lock()
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
         self._ready: queue.Queue[Session] = queue.Queue()
+        # A recovery is owned per camera, never by each timer tick or socket.
+        self._ptz_recovery: dict[str, PtzRecovery] = {}
         self.on_adopted: Callable[[Camera], None] | None = None
         self.on_motion: Callable[[Camera], None] | None = None
         self.on_detection: Callable[[Camera, events.Detection], None] | None = None
@@ -210,7 +234,8 @@ class Controller:
                 if camera_mac != self.expected_camera_mac:
                     raise ws.ProtocolError(f"unexpected camera MAC {camera_mac}")
             sock.sendall(ws.handshake_response(upgrade))
-            sock.settimeout(None)
+            # Selector-driven reads must never block indefinitely on TLS.
+            sock.settimeout(0.5)
         except (ssl.SSLError, OSError, ws.ProtocolError) as exc:
             preview = locals().get("request", b"")
             if isinstance(preview, bytes) and preview:
@@ -229,7 +254,14 @@ class Controller:
             if upgrade.camera_mac
             else f"unknown-{peer[0]}"
         )
+        if self.configured_cameras and mac not in self.configured_cameras:
+            log.warning("rejected unregistered camera: mac=%s model=%s", mac, upgrade.camera_model)
+            sock.close()
+            return
         camera = self.cameras.setdefault(mac, Camera(mac=mac))
+        registration = self.configured_cameras.get(mac)
+        if registration is not None:
+            camera.name = str(registration.get("name", camera.name or mac))
         camera.model = upgrade.camera_model or camera.model
         camera.firmware = upgrade.camera_firmware or camera.firmware
         if not camera.tracks:
@@ -262,6 +294,7 @@ class Controller:
             sel.register(session.sock, selectors.EVENT_READ)
 
     def _drop(self, sock: socket.socket, sel: selectors.BaseSelector) -> None:
+        recovery_control: Session | None = None
         with self._sessions_lock:
             session = self._sessions.pop(sock, None)
             if session is not None and session.is_ptz_channel:
@@ -271,8 +304,19 @@ class Controller:
                 )
                 if not has_replacement:
                     session.camera.motion.disconnect()
+                    recovery_control = next(
+                        (
+                            candidate
+                            for candidate in self._sessions.values()
+                            if candidate.camera.mac == session.camera.mac
+                            and not candidate.is_ptz_channel
+                        ),
+                        None,
+                    )
         if session is not None:
             log.info("%s channel closed", session.upgrade.subprotocol or "?")
+        if recovery_control is not None:
+            self._request_ptz_recovery(recovery_control, time.monotonic())
         try:
             sel.unregister(sock)
         except (KeyError, ValueError):
@@ -288,6 +332,8 @@ class Controller:
             return
         try:
             chunk = sock.recv(READ_SIZE)
+        except (TimeoutError,):
+            return
         except (OSError, ssl.SSLError):
             chunk = b""
         if not chunk:
@@ -342,7 +388,12 @@ class Controller:
             parsed = ptz.parse_motor_state(message.payload)
             if parsed is not None:
                 position, activity = parsed
-                session.camera.motion.update(position, activity)
+                session.camera.motion.update(
+                    position,
+                    activity,
+                    confirmed=name == ptz.GET_POSITION,
+                    ignore_activity=bool(message.payload.get("ignoreActivity")),
+                )
                 if self.on_motion is not None:
                     self.on_motion(session.camera)
             if name == ptz.EVENT_MOTOR_STATE:
@@ -405,14 +456,15 @@ class Controller:
             # setup, not only on first adoption, so it can recreate that socket.
             if session.camera.is_ptz:
                 self._enable_ptz(session)
+                self._wait_for_ptz_callback(session.camera.mac, time.monotonic())
             if not session.camera.adopted:
                 session.camera.adopted = True
                 log.info("adopted %s", session.camera.mac)
                 if self.on_adopted is not None:
                     self.on_adopted(session.camera)
 
-    def _enable_ptz(self, session: Session) -> None:
-        """Hand the camera our own URL; it dials back on the ptz1 subprotocol.
+    def _ptz_url(self) -> str:
+        """Our management URL, which the camera dials back on for its PTZ socket.
 
         The port has to be in the URL whenever we are not on the default one, or
         the camera dials 7442 — which on a host already running a controller is
@@ -421,7 +473,98 @@ class Controller:
         authority = self.ingest_host
         if self.control_port != CONTROL_PORT:
             authority = f"{self.ingest_host}:{self.control_port}"
-        session.request(ptz.ENABLE_PTZ, ptz.enable(f"wss://{authority}{ws.CONTROL_PATH}"))
+        return f"wss://{authority}{ws.CONTROL_PATH}"
+
+    def _enable_ptz(self, session: Session) -> None:
+        """Hand the camera our own URL; it dials back on the ptz1 subprotocol."""
+        session.request(ptz.ENABLE_PTZ, ptz.enable(self._ptz_url()))
+
+    def _wait_for_ptz_callback(self, mac: str, now: float) -> None:
+        """Record the bounded wait after an EnablePtzControl command."""
+        recovery = self._ptz_recovery.get(mac)
+        if recovery is None:
+            recovery = PtzRecovery()
+            self._ptz_recovery[mac] = recovery
+        if recovery.waiting_for_callback or recovery.exhausted:
+            return
+        recovery.waiting_for_callback = True
+        recovery.callback_deadline = now + PTZ_RECOVERY_CALLBACK_TIMEOUT_SEC
+        log.info("PTZ recovery waiting for callback: mac=%s", mac)
+
+    def _request_ptz_recovery(self, session: Session, now: float) -> None:
+        """Start the one recovery owner after a live ptz1 socket disappears."""
+        mac = session.camera.mac
+        recovery = self._ptz_recovery.get(mac)
+        if recovery is not None and (recovery.waiting_for_callback or recovery.exhausted):
+            return
+        self._ptz_recovery[mac] = PtzRecovery(next_attempt_at=now)
+        log.warning("PTZ channel unavailable: mac=%s; recovery requested", mac)
+
+    def _recover_ptz(self, now: float) -> None:
+        """Drive bounded Disable/Enable recovery through management sockets only."""
+        with self._sessions_lock:
+            sessions = list(self._sessions.values())
+        controls = {
+            session.camera.mac: session
+            for session in sessions
+            if not session.is_ptz_channel
+        }
+        restored = {session.camera.mac for session in sessions if session.is_ptz_channel}
+
+        for mac, recovery in list(self._ptz_recovery.items()):
+            if mac in restored:
+                log.info("PTZ channel restored: mac=%s", mac)
+                del self._ptz_recovery[mac]
+                continue
+            session = controls.get(mac)
+            if session is None:
+                # PTZ recovery is meaningful only while its management channel is
+                # live; a new management setup will enable it again.
+                del self._ptz_recovery[mac]
+                continue
+            if recovery.exhausted:
+                continue
+            if recovery.waiting_for_callback:
+                if now < recovery.callback_deadline:
+                    continue
+                recovery.waiting_for_callback = False
+                backoff = min(
+                    PTZ_RECOVERY_INITIAL_BACKOFF_SEC * (2 ** recovery.attempts),
+                    PTZ_RECOVERY_MAX_BACKOFF_SEC,
+                )
+                recovery.next_attempt_at = now + backoff
+                log.warning(
+                    "PTZ recovery callback timed out: mac=%s; retry in %.1fs",
+                    mac,
+                    backoff,
+                )
+                continue
+            if now < recovery.next_attempt_at:
+                continue
+            if recovery.attempts >= PTZ_RECOVERY_MAX_ATTEMPTS:
+                recovery.exhausted = True
+                log.error(
+                    "PTZ recovery timed out: mac=%s after %d attempts",
+                    mac,
+                    recovery.attempts,
+                )
+                continue
+            recovery.attempts += 1
+            log.warning(
+                "PTZ recovery requested: mac=%s attempt=%d/%d",
+                mac,
+                recovery.attempts,
+                PTZ_RECOVERY_MAX_ATTEMPTS,
+            )
+            try:
+                session.request(ptz.DISABLE_PTZ, ptz.disable())
+                session.request(ptz.ENABLE_PTZ, ptz.enable(self._ptz_url()))
+            except (OSError, ssl.SSLError):
+                # The control socket will be dropped by the read loop; do not
+                # spin a second recovery owner while that happens.
+                recovery.next_attempt_at = now + PTZ_RECOVERY_INITIAL_BACKOFF_SEC
+                continue
+            self._wait_for_ptz_callback(mac, now)
 
     # --------------------------------------------------------------------- timers
 
@@ -444,6 +587,7 @@ class Controller:
                 log.debug("no ack for id=%s, stepping past", sequence.waiting_for)
                 sequence.on_timeout()
                 self._advance(session)
+        self._recover_ptz(time.monotonic())
 
 
     # ----------------------------------------------------------------------- moves

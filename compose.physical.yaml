@@ -1,87 +1,30 @@
+# Optional LAN binding for a physical camera. Frigate is installed and managed
+# separately by the user and is not part of this override.
 services:
-  cuckoo:
-    command:
-      - python3
-      - main.py
-      - --host
-      - ${CUCKOO_PHYSICAL_HOST:?set CUCKOO_PHYSICAL_HOST in .env.physical}
-      - --cert
-      - /state/cuckoo.pem
-      - --tracks
-      - video2:h265
-      - --dump
-      - /state/cuckoo-messages.jsonl
-      - --name
-      - cuckoo-g5-physical-lab
-      - --expected-camera-mac
-      - ${G5_PTZ_MAC:?set G5_PTZ_MAC in .env.physical}
-      - --no-announce
-      - --verbose
-    # Replace the synthetic lab's loopback ports so both projects can run
-    # during camera handoff without exposing ONVIF or RTSP to the LAN.
-    ports: !override
-      - name: onvif
-        target: 8000
-        published: "18001"
-        host_ip: 127.0.0.1
-        protocol: tcp
-      - name: rtsp
-        target: 8554
-        published: "18555"
-        host_ip: 127.0.0.1
-        protocol: tcp
+  osprey:
+    command: ["python3", "main.py", "--host", "${OSPREY_HOST:?set OSPREY_HOST}", "--cert", "/state/osprey.pem", "--expected-camera-mac", "${OSPREY_CAMERA_MAC:?set OSPREY_CAMERA_MAC}"]
+    ports:
       - name: camera-control
         target: 7442
-        published: "17442"
-        host_ip: 127.0.0.1
-        protocol: tcp
+        published: "7442"
+        host_ip: "${OSPREY_BIND:?set OSPREY_BIND}"
       - name: camera-snapshot
         target: 7444
-        published: "17444"
-        host_ip: 127.0.0.1
-        protocol: tcp
+        published: "7444"
+        host_ip: "${OSPREY_BIND:?set OSPREY_BIND}"
       - name: camera-ingest
         target: 7550
-        published: "17550"
-        host_ip: 127.0.0.1
-        protocol: tcp
-    volumes:
-      - cuckoo-physical-state:/state
-
-  finch:
-    profiles:
-      - synthetic-only
-
-  frigate-init:
-    command: ["python3", "/opt/lab/frigate_prepare_physical.py"]
-    depends_on:
-      finch: !reset null
-
-  frigate:
-    ports: !override
-      - name: frigate-physical-ui
-        target: 5000
-        published: "15001"
-        host_ip: 127.0.0.1
-        protocol: tcp
-    volumes:
-      - frigate-physical-config:/config
-      - type: bind
-        source: ./frigate/config.physical.yml
-        target: /config/config.yml
-        # Frigate must persist movement_weights after physical calibration.
-        read_only: false
-      - frigate-physical-media:/media/frigate
-
-  frigate-detection-test:
-    environment:
-      FRIGATE_CAMERA: g5_ptz
-
-  frigate-autotrack-test:
-    environment:
-      FRIGATE_CAMERA: g5_ptz
-
-volumes:
-  cuckoo-physical-state:
-  frigate-physical-config:
-  frigate-physical-media:
+        published: "7550"
+        host_ip: "${OSPREY_BIND:?set OSPREY_BIND}"
+      - name: onvif
+        target: 8000
+        published: "8000"
+        host_ip: "${OSPREY_BIND:?set OSPREY_BIND}"
+      - name: rtsp
+        target: 8554
+        published: "8554"
+        host_ip: "${OSPREY_BIND:?set OSPREY_BIND}"
+      - name: operator
+        target: 8000
+        published: "18001"
+        host_ip: "${OSPREY_BIND:?set OSPREY_BIND}"

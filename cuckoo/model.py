@@ -19,6 +19,10 @@ FOCUS: Final = "focus"
 
 AXES: Final[tuple[str, str, str, str]] = (PAN, TILT, ZOOM, FOCUS)
 MOTION_EVENT_TIMEOUT_SEC: Final = 60.0
+# The G5 reports the target pose after the motor controller rounds its stop
+# point. Physical captures show pan can differ by four raw encoder steps and
+# tilt by one while the camera is visibly settled at the requested view.
+VIEW_SETTLE_TOLERANCE_STEPS: Final = 4
 
 
 class Codec(Enum):
@@ -64,6 +68,29 @@ class Position:
 
     def as_dict(self) -> dict[str, int]:
         return {PAN: self.pan, TILT: self.tilt, ZOOM: self.zoom, FOCUS: self.focus}
+
+    def same_view_as(self, other: "Position") -> bool:
+        """True when the driven axes reached the same physical view.
+
+        Focus is deliberately excluded: the G5's autofocus hunts independently.
+        The driven motors may stop a few encoder steps either side of a requested
+        raw position, so use the measured G5 tolerance for pan/tilt/zoom only.
+        """
+        def same_axis(actual: int, expected: int) -> bool:
+            # Preserve exact semantics for small synthetic coordinates. G5 raw
+            # motor coordinates are much larger except at the zero zoom stop.
+            if max(abs(actual), abs(expected)) <= VIEW_SETTLE_TOLERANCE_STEPS:
+                return actual == expected
+            return abs(actual - expected) <= VIEW_SETTLE_TOLERANCE_STEPS
+
+        return all(
+            same_axis(actual, expected)
+            for actual, expected in zip(
+                (self.pan, self.tilt, self.zoom),
+                (other.pan, other.tilt, other.zoom),
+                strict=True,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -142,6 +169,7 @@ class Motion:
     updated_at: float = 0.0
     available: bool = False
     _target: Position | None = field(default=None, init=False, repr=False)
+    _settled_position: Position | None = field(default=None, init=False, repr=False)
     _seen_activity: bool = field(default=False, init=False, repr=False)
     _deadline: float = field(default=0.0, init=False, repr=False)
     _error: str | None = field(default="PTZ channel unavailable", init=False, repr=False)
@@ -175,6 +203,7 @@ class Motion:
         ):
             self.activity = 0
             self._target = None
+            self._settled_position = None
             self._seen_activity = False
             self._deadline = 0.0
             self._error = "motor state timeout"
@@ -209,6 +238,7 @@ class Motion:
             self._connected_once = True
             self.activity = 0
             self._target = None
+            self._settled_position = None
             self._seen_activity = False
             self._deadline = 0.0
             self._error = "awaiting PTZ state"
@@ -221,6 +251,7 @@ class Motion:
             self.available = False
             self.activity = 0
             self._target = None
+            self._settled_position = None
             self._seen_activity = False
             self._deadline = 0.0
             self._error = "PTZ channel unavailable"
@@ -255,6 +286,7 @@ class Motion:
         with self._lock:
             self.activity = 0
             self._target = None
+            self._settled_position = self.position
             self._seen_activity = False
             self._deadline = 0.0
             self._error = None
@@ -279,7 +311,13 @@ class Motion:
                 zoom_state = "MOVING" if self._zoom_pending else "IDLE"
             return self.position, pan_tilt_state, zoom_state, self._error
 
-    def update(self, position: Position, activity: int) -> None:
+    def update(
+        self,
+        position: Position,
+        activity: int,
+        confirmed: bool = False,
+        ignore_activity: bool = False,
+    ) -> None:
         with self._lock:
             self._error = None
             self.position = position
@@ -288,18 +326,53 @@ class Motion:
             # A zero-activity update for an older poll or superseded position must
             # not settle the command currently reserved by begin(). The camera's
             # terminal event carries the exact integer target we sent.
-            if activity != 0:
+            reached_target = self._target is not None and position.same_view_as(self._target)
+            if reached_target and (activity == 0 or confirmed or ignore_activity):
+                # The G5 can emit ignoreActivity=true / activity=16 after it has
+                # reached the requested motors.  Its explicit ignoreActivity flag
+                # means the activity word is stale lens/controller noise; the
+                # accompanying target pose may therefore settle this reservation.
+                # An unflagged nonzero motor event still cannot do so.
+                self.activity = 0
+                self._target = None
+                self._settled_position = position
+                self._seen_activity = False
+                self._deadline = 0.0
+                self._pan_tilt_pending = False
+                self._zoom_pending = False
+            elif activity != 0:
+                if (
+                    self._target is None
+                    and self._settled_position is not None
+                    and position.same_view_as(self._settled_position)
+                ):
+                    # The G5 repeats ignoreActivity motor frames after a target
+                    # has already been confirmed. They are lens noise, not a new
+                    # reservation, and must not make the next move fail busy.
+                    self.activity = 0
+                    self._pan_tilt_pending = False
+                    self._zoom_pending = False
+                    self.updated_at = time.time()
+                    return
                 self._seen_activity = True
                 self.activity = activity
                 if self._target is None:
                     self._pan_tilt_pending = True
                     self._zoom_pending = True
-                self._deadline = time.monotonic() + MOTION_EVENT_TIMEOUT_SEC
-            elif (
-                self._target is None and self._seen_activity
-            ) or position == self._target:
+                elif not self._pan_tilt_pending and not self._zoom_pending:
+                    # A real activity word at the target is contradictory but
+                    # still authoritative unless the camera set ignoreActivity.
+                    # Keep MoveStatus MOVING until a terminal/ignored update
+                    # arrives, so Frigate will poll instead of issuing a move
+                    # that begin() must reject as busy.
+                    self._pan_tilt_pending = True
+                    self._zoom_pending = True
+                if self._deadline == 0.0:
+                    self._deadline = time.monotonic() + MOTION_EVENT_TIMEOUT_SEC
+            elif self._target is None and self._seen_activity:
                 self.activity = activity
                 self._target = None
+                self._settled_position = position
                 self._seen_activity = False
                 self._deadline = 0.0
                 self._pan_tilt_pending = False
