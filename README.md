@@ -5,7 +5,7 @@
 <h1 align="center">Osprey</h1>
 
 <p align="center">
-  A local-first PTZ camera system that gives Frigate a calmer, more capable set of eyes.
+  A dedicated G5 PTZ controller for better Frigate autotracking.
 </p>
 
 <p align="center">
@@ -14,20 +14,38 @@
   <img alt="Local-first" src="https://img.shields.io/badge/video-local--first-304b61?style=flat-square">
 </p>
 
-Osprey brings camera control, saved views, live feedback, and Frigate
-autotracking together for a UniFi G5 PTZ. It is for people who want useful
-automation without handing their camera feed to a cloud service.
+Osprey exists to get the UniFi G5 PTZ out of Protect's disappointing built-in
+tracking path and into Frigate. Protect can drive the camera, but its tracking
+has not been reliable enough for real activity—especially when the subject is
+moving quickly or crossing the frame. Frigate provides a local, inspectable
+autotracking loop with better detection choices, event history, and tuning.
+
+Osprey is the bridge that makes that practical: it gives your existing Frigate
+instance an ONVIF/RTSP surface it can control, then gives you an operator
+console to see what the camera is doing and recover gracefully when it cannot
+keep up.
 
 > [!WARNING]
-> Osprey is alpha software. The current physical deployment has no user
-> accounts or authentication. Keep it on a trusted LAN, do not forward its
-> ports through a router, and supervise physical camera setup.
+> Osprey is alpha software. Keep it on a trusted LAN, do not forward its ports
+> through a router, and supervise physical camera setup.
 
-## Why Osprey
+## Why Frigate instead of Protect tracking
 
-Your PTZ camera should not feel like a separate appliance you only touch when
-something goes wrong. Osprey gives it a home position, named views, a real-time
-operator surface, and a path to measured, scene-aware tracking.
+Protect remains useful for camera management, but it is not the tracking system
+Osprey is built around. Frigate owns detection, object history, zones, recording,
+and the decision to move. Osprey translates those decisions into careful G5 PTZ
+commands, waits for real motor state, and exposes the result to the operator.
+
+That separation matters: a track can be measured, tuned, replayed, and rejected
+when its timing is wrong instead of looking convincing only in a short demo.
+
+## Clear product boundary
+
+Osprey is a controller, not an NVR. It **does not install, package, configure,
+or operate Frigate**. Bring an existing Frigate installation—on the same LAN,
+a separate host, or Home Assistant—and point it at Osprey's ONVIF and RTSP
+endpoints. You keep ownership of your detectors, recordings, retention,
+storage, updates, and Frigate configuration.
 
 | See clearly | Move deliberately | Stay in control |
 | --- | --- | --- |
@@ -37,9 +55,8 @@ operator surface, and a path to measured, scene-aware tracking.
 
 - **Operator console** — live preview with snapshot fallback, PTZ controls,
   telemetry, zoom, codec controls, Home, and named positions.
-- **Frigate integration** — local detection, recording, review, and PTZ
-  autotracking for people and cars. The physical profile also configures birds,
-  cats, and dogs.
+- **Frigate connection** — a configurable Frigate base URL and ONVIF/RTSP
+  endpoints for an existing Frigate installation to use for PTZ autotracking.
 - **Distance-aware zoom** — conservative absolute zoom avoids the rapid
   oscillation seen in early relative-zoom testing.
 - **Safety checks** — a fast-target acceptance tool measures detection-to-command
@@ -47,6 +64,8 @@ operator surface, and a path to measured, scene-aware tracking.
   accepted.
 - **Home Assistant direction** — an alpha add-on scaffold is included for
   contributors and early testers.
+- **Multi-camera and MQTT** — controller-scoped camera registration plus
+  configurable MQTT commands and camera-control events are in active work.
 
 ## What we are finishing next
 
@@ -80,18 +99,29 @@ works for the local development path. Windows with Docker Desktop is supported
 for local development; physical camera networking needs the Windows relay path.
 Apple Silicon and other architectures have not been validated yet.
 
-## Add Frigate
+## Connect your Frigate installation
 
-Frigate is intentionally kept separate so you keep control of storage,
-detectors, and upgrade timing. Start it after the controller stack is healthy:
+In **Settings → Frigate**, enter the base URL of the Frigate you already
+operate—for example `http://frigate.local:5000` or
+`http://192.168.1.40:5000`. Osprey uses it for integration health and
+convenient operator links; it never starts, upgrades, or rewrites Frigate.
 
-```bash
-docker compose --profile frigate run --rm frigate-init
-docker compose --profile frigate up -d --wait frigate
+Then add Osprey as the camera's ONVIF/RTSP source in your own Frigate config
+and enable Frigate autotracking. Your detector, object, zone, recording,
+zoom-mode, and retention choices remain entirely in Frigate.
+
+```yaml
+# Your existing Frigate configuration — illustrative only.
+cameras:
+  g5_ptz:
+    onvif:
+      host: osprey.local
+      port: 8000
+    ffmpeg:
+      inputs:
+        - path: rtsp://osprey.local:8554/video2
+          roles: [detect, record]
 ```
-
-Its local UI is available at `http://127.0.0.1:15000/`. Keep it loopback-only
-until you have a deliberate, authenticated network boundary.
 
 ## Home Assistant
 
