@@ -40,5 +40,3 @@ schema:
   tracks: str
   onvif_port: port
   rtsp_port: port
-timeout: 30
-watchdog: http://[HOST]:[PORT:8000]/
