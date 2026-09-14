@@ -11,3 +11,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 
+# Local agent configuration and deployment state.
+WATCHDOG.yml
+.env.*
+!.env.example
+!.env.physical.example
+osprey-state/
+*.log
