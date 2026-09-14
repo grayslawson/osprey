@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a newer Osprey release
+Documentation=https://github.com/grayslawson/osprey/blob/main/docs/installation.md
+
+[Service]
+Type=oneshot
+User=osprey
+Group=docker
+WorkingDirectory=/var/lib/osprey
+EnvironmentFile=-/etc/osprey/update.env
+ExecStart=/usr/local/libexec/osprey-update.sh --file /var/lib/osprey/compose.release.yaml --env-file /etc/osprey/release.env --latest --dry-run

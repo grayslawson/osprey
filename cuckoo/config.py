@@ -76,6 +76,50 @@ def validate_cameras(value: Any) -> list[dict[str, Any]]:
         result.append({**item, "mac": mac, "name": name.strip()})
     return result
 
+
+def validate_runtime(value: dict[str, Any]) -> None:
+    """Validate scalar runtime settings before any socket is opened.
+
+    JSON is user input. Failing with one actionable message is preferable to a
+    late ``TypeError`` from a server constructor or an accidentally malformed
+    URL advertised to Frigate.
+    """
+    host = value.get("host")
+    if host is not None and (
+        not isinstance(host, str)
+        or not host.strip()
+        or len(host) > 255
+        or re.fullmatch(r"[A-Za-z0-9_.:\[\]-]+", host.strip()) is None
+    ):
+        raise ValueError('"host" must be a hostname or IP address')
+    if not isinstance(value.get("name"), str) or not value["name"].strip():
+        raise ValueError('"name" must be a non-empty string')
+    if not isinstance(value.get("announce"), bool):
+        raise ValueError('"announce" must be a boolean')
+    tracks = value.get("tracks")
+    if not isinstance(tracks, dict) or not tracks:
+        raise ValueError('"tracks" must be a non-empty object')
+    for name, codec in tracks.items():
+        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", name) is None:
+            raise ValueError("track names must contain only letters, digits, '.', '_' or '-'")
+        if not isinstance(codec, str) or codec.lower() not in {"h264", "h265", "mjpg"}:
+            raise ValueError(f'tracks[{name!r}] must be h264, h265, or mjpg')
+    ports = value.get("ports")
+    if not isinstance(ports, dict):
+        raise ValueError('"ports" must be an object')
+    required = ("control", "ingest", "snapshot", "rtsp", "onvif", "discovery")
+    seen: dict[int, str] = {}
+    for key in required + ("onvif_read_only",):
+        port = ports.get(key)
+        if key == "onvif_read_only" and port is None:
+            continue
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
+            raise ValueError(f'ports.{key} must be an integer from 0 to 65535')
+        if port and port in seen:
+            raise ValueError(f'ports.{key} duplicates ports.{seen[port]}')
+        if port:
+            seen[port] = key
+
 # Every value cuckoo reads has a default here, so a config built from {} answers
 # everything. Ports mirror the module constants (asserted by the tests).
 DEFAULTS: Final[dict[str, Any]] = {
@@ -97,6 +141,8 @@ DEFAULTS: Final[dict[str, Any]] = {
         "snapshot": 7444,
         "rtsp": 8554,
         "onvif": 8000,
+        # Optional second ONVIF media-only persona for NVR/Protect consumers.
+        "onvif_read_only": None,
         "discovery": 3702,
     },
 }

@@ -25,7 +25,7 @@ python3 harness/ha_walk.py <host> <onvif-port> [--camera]
 `--camera` adds the checks that need a live stream and a movable head (playing the
 advertised RTSP URI, and asserting AbsoluteMove changes the reported position).
 
-Verified 14/14 against **finch** (the synthetic camera) and against a **real UVC
+Verified 14/14 against the synthetic camera fixture and a **real UVC
 G5 PTZ** — in the latter, AbsoluteMove moved the physical head and the advertised
 URI played `hevc 2688x1512` + AAC.
 
@@ -40,7 +40,7 @@ what "saved viewpoints" are in ONVIF terms.
 python3 harness/ptz_walk.py <host> <onvif-port>
 ```
 
-11/11 against **finch** and against the **real G5 PTZ**: GotoPreset recalled the
+11/11 against the synthetic camera fixture and the **real G5 PTZ**: GotoPreset recalled the
 saved position to within rounding on the physical camera.
 
 Measured, not assumed: the profiles cuckoo advertises are **H.265** (matching the

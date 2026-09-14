@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import io
 import http.client
+import logging
+from logbuffer import LogBuffer, redact
 import subprocess
 from http import HTTPStatus
 from typing import cast
@@ -594,12 +596,33 @@ def test_configuration_options_advertise_every_move_space() -> None:
 def test_presets_are_listed_with_normalised_positions() -> None:
     camera = a_camera()
     camera.presets[3] = Preset(3, "gate", Position(pan=500, tilt=8000, zoom=0, focus=0))
+    camera.presets[4] = Preset(4, "lower-loitering", Position())
+    camera.presets[5] = Preset(5, "back-porch", Position())
     service, _ = services(camera)
     body = ask(service, "GetPresets")
-    assert 'token="3"' in body and "<tt:Name>gate</tt:Name>" in body
+    assert all(
+        marker in body
+        for marker in (
+            'token="3"',
+            "<tt:Name>gate</tt:Name>",
+            'token="4"',
+            "<tt:Name>lower-loitering</tt:Name>",
+            'token="5"',
+            "<tt:Name>back-porch</tt:Name>",
+        )
+    )
     assert attributes_of(body, "PanTilt")["x"] == "-1.0000"
     # tilt at its motor minimum reports as fully up (+1) under the inverted axis.
     assert attributes_of(body, "PanTilt")["y"] == "1.0000"
+
+
+def test_soap_faults_and_events_escape_untrusted_text() -> None:
+    assert "&lt;script&gt;" in onvif.fault("<script>")
+    event = onvif.Event("topic<&", 'source"', "name", "value&")
+    body = event.as_xml()
+    assert "topic&lt;&amp;" in body
+    assert "source&quot;" in body
+    assert "value&amp;" in body
 
 
 def test_status_page_renders_live_telemetry() -> None:
@@ -616,6 +639,33 @@ def test_status_page_before_adoption_says_waiting() -> None:
     service, _ = services_before_adoption()
     page = service.status_page()
     assert "waiting" in page and "No camera adopted" in page
+
+
+def test_log_buffer_redacts_secrets_and_limits_endpoint() -> None:
+    buffer = LogBuffer(max_records=4)
+    record = logging.LogRecord(
+        "test.camera", logging.WARNING, __file__, 1,
+        "camera password=%s token=%s is unreachable", ("hidden", "opaque"), None,
+    )
+    buffer.emit(record)
+    service, _ = services()
+    service.logs = buffer
+    payload = service.log_entries(limit=10)
+    assert payload["warnings"] == 1
+    assert payload["errors"] == 0
+    entries = payload["entries"]
+    assert isinstance(entries, list) and entries
+    message = entries[0]["message"]
+    assert isinstance(message, str)
+    assert "[redacted]" in message
+    assert "hidden" not in message and "opaque" not in message
+    safe = redact('request password: "quoted" uri=http://user:secret@example.invalid')
+    assert "quoted" not in safe and "secret" not in safe
+    assert safe.count("[redacted]") == 2
+    for index in range(8):
+        buffer.emit(logging.LogRecord("test.camera", logging.INFO, __file__, index, "event %d", (index,), None))
+    assert len(buffer.entries(limit=100)) == 4
+    assert buffer.entries(limit=1)[0]["message"] == "event 7"
 
 
 def test_tilt_axis_is_inverted_so_onvif_up_raises_the_head() -> None:
@@ -935,6 +985,10 @@ def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
         response = connection.getresponse()
         assert response.status == 303
         response.read()
+        connection.request("GET", onvif.LOGS_API_PATH)
+        response = connection.getresponse()
+        assert response.status == 303
+        response.read()
         connection.request("POST", "/login", body="password=correct+horse",
                            headers={"Content-Type": "application/x-www-form-urlencoded"})
         response = connection.getresponse()
@@ -944,6 +998,12 @@ def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
         cookie = "; ".join(value for name, value in cookies if name.lower() == "set-cookie")
         session_cookie = next(value.split(";", 1)[0] for name, value in cookies
                               if name.lower() == "set-cookie" and value.startswith(f"{onvif.SESSION_COOKIE}="))
+        connection.request("GET", f"{onvif.LOGS_API_PATH}?limit=10&level=WARNING",
+                           headers={"Cookie": session_cookie})
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.OK
+        logs = response.read().decode()
+        assert '"entries"' in logs and '"warnings"' in logs and '"errors"' in logs
         connection.request("POST", onvif.CONTROL_STEP_PATH, body="{}",
                            headers={"Content-Type": "application/json", "Cookie": session_cookie})
         response = connection.getresponse()

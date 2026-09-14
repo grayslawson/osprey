@@ -127,3 +127,20 @@ def test_camera_registry_normalises_mac_and_preserves_settings() -> None:
 def test_camera_registry_rejects_invalid_entries(value: object) -> None:
     with pytest.raises(ValueError):
         config.validate_cameras(value)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"tracks": {}},
+        {"tracks": {"video1": "vp9"}},
+        {"ports": {"control": 7442, "ingest": 7442}},
+        {"name": ""},
+    ],
+)
+def test_runtime_validation_rejects_unsafe_or_incomplete_values(override: dict[str, object]) -> None:
+    candidate = config.merged(override)
+    if "tracks" in override and override["tracks"] == {}:
+        candidate["tracks"] = {}
+    with pytest.raises(ValueError):
+        config.validate_runtime(candidate)

@@ -1,3 +1,14 @@
 **
 !docker/
 !docker/Dockerfile
+!cuckoo/
+!cuckoo/**
+!pyunifiwire/
+!pyunifiwire/**
+!homeassistant/
+!homeassistant/addon/
+!homeassistant/addon/osprey/
+!homeassistant/addon/osprey/run.sh
+!scripts/
+!scripts/osprey
+!scripts/osprey-doctor.sh

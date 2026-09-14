@@ -1,6 +1,0 @@
-finch.pem
-*.key
-*.crt
-__pycache__/
-.mypy_cache/
-.pytest_cache/

@@ -36,6 +36,7 @@ from xml.etree import ElementTree
 from media import BANDWIDTH_WINDOW
 from model import PAN, TILT, ZOOM, Camera, Position
 from frigate_config import Store
+from logbuffer import BUFFER, LogBuffer
 
 ONVIF_PORT: Final = 8000
 DEVICE_PATH: Final = "/onvif/device_service"
@@ -53,6 +54,7 @@ CONTROL_ZOOM_PATH: Final = "/control/zoom"
 MANUAL_STEP_FRACTION: Final = 0.04
 LOGIN_PATH: Final = "/login"
 FRIGATE_API_PATH: Final = "/api/frigate"
+LOGS_API_PATH: Final = "/api/logs"
 SESSION_COOKIE: Final = "osprey_session"
 CSRF_FIELD: Final = "csrf"
 
@@ -65,9 +67,12 @@ class AdminAuth:
     session; only the operator UI, preview, snapshots, and JSON controls use it.
     """
 
+    SESSION_TTL_SEC: Final = 12 * 60 * 60
+    MAX_SESSIONS: Final = 32
+
     def __init__(self, password_hash: str | None = None) -> None:
         self.password_hash = password_hash.strip() if password_hash else None
-        self._sessions: dict[str, str] = {}
+        self._sessions: dict[str, tuple[str, float]] = {}
         self._lock = threading.Lock()
 
     @property
@@ -86,6 +91,11 @@ class AdminAuth:
                 raise RuntimeError(f"cannot read OSPREY_ADMIN_PASSWORD_FILE: {exc}") from exc
             if password:
                 encoded = cls.hash_password(password)
+        if not encoded:
+            log.warning(
+                "operator console authentication is disabled; configure "
+                "OSPREY_ADMIN_PASSWORD_HASH or OSPREY_ADMIN_PASSWORD_FILE"
+            )
         return cls(encoded)
 
     @staticmethod
@@ -114,16 +124,33 @@ class AdminAuth:
             return None
         session, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
         with self._lock:
-            self._sessions[session] = csrf
+            now = time.time()
+            self._drop_expired(now)
+            if len(self._sessions) >= self.MAX_SESSIONS:
+                oldest = min(self._sessions, key=lambda key: self._sessions[key][1])
+                del self._sessions[oldest]
+            self._sessions[session] = (csrf, now + self.SESSION_TTL_SEC)
         return session, csrf
 
     def csrf(self, session: str) -> str | None:
         with self._lock:
-            return self._sessions.get(session)
+            item = self._sessions.get(session)
+            if item is None:
+                return None
+            if item[1] <= time.time():
+                del self._sessions[session]
+                return None
+            return item[0]
 
     def logout(self, session: str) -> None:
         with self._lock:
             self._sessions.pop(session, None)
+
+    def _drop_expired(self, now: float | None = None) -> None:
+        current = time.time() if now is None else now
+        for session, (_, expires) in list(self._sessions.items()):
+            if expires <= current:
+                del self._sessions[session]
 
 
 @dataclass(frozen=True)
@@ -388,11 +415,11 @@ class Event:
         return (
             "<wsnt:NotificationMessage>"
             f"<wsnt:Topic Dialect=\"http://docs.oasis-open.org/wsn/t-1/TopicExpression/Simple\">"
-            f"{self.topic}</wsnt:Topic>"
+            f"{html.escape(self.topic)}</wsnt:Topic>"
             "<wsnt:Message>"
-            f'<tt:Message UtcTime="{stamp}" PropertyOperation="Changed">'
-            f'<tt:Source><tt:SimpleItem Name="Source" Value="{self.source}"/></tt:Source>'
-            f'<tt:Data><tt:SimpleItem Name="{self.name}" Value="{self.value}"/></tt:Data>'
+            f'<tt:Message UtcTime="{html.escape(stamp)}" PropertyOperation="Changed">'
+            f'<tt:Source><tt:SimpleItem Name="Source" Value="{html.escape(self.source)}"/></tt:Source>'
+            f'<tt:Data><tt:SimpleItem Name="{html.escape(self.name)}" Value="{html.escape(self.value)}"/></tt:Data>'
             "</tt:Message></wsnt:Message></wsnt:NotificationMessage>"
         )
 
@@ -490,7 +517,7 @@ def envelope(body: str) -> str:
 def fault(reason: str) -> str:
     return envelope(
         "<s:Fault><s:Code><s:Value>s:Receiver</s:Value></s:Code>"
-        f"<s:Reason><s:Text xml:lang=\"en\">{reason}</s:Text></s:Reason></s:Fault>"
+        f"<s:Reason><s:Text xml:lang=\"en\">{html.escape(reason)}</s:Text></s:Reason></s:Fault>"
     )
 
 
@@ -555,7 +582,8 @@ class Services:
     """Turns parsed calls into SOAP responses, using only the device model."""
 
     def __init__(self, backend: Backend, host: str, port: int = ONVIF_PORT,
-                 auth: AdminAuth | None = None, onvif_auth: OnvifAuth | None = None) -> None:
+                 auth: AdminAuth | None = None, onvif_auth: OnvifAuth | None = None,
+                 read_only: bool = False, logs: LogBuffer | None = None) -> None:
         self.backend = backend
         self.host = host
         self.port = port
@@ -563,11 +591,23 @@ class Services:
         self.started_at = time.time()
         self.auth = auth or AdminAuth()
         self.onvif_auth = onvif_auth or OnvifAuth()
+        self.read_only = read_only
+        self.logs = logs or BUFFER
         self.frigate_store = Store.from_environment()
         self.frigate_url = self.frigate_store.load()
 
     def frigate_settings(self) -> dict[str, object]:
         return {"base_url": self.frigate_url, "configured": self.frigate_url is not None}
+
+    def log_entries(self, limit: int = 100, minimum: int = logging.INFO) -> dict[str, object]:
+        """Return recent, redacted records for the authenticated console."""
+        entries = self.logs.entries(limit, minimum)
+        summary = self.logs.summary()
+        return {
+            "entries": entries,
+            "warnings": summary["warnings"],
+            "errors": summary["errors"],
+        }
 
     def set_frigate_url(self, value: object) -> tuple[HTTPStatus, dict[str, object]]:
         if not isinstance(value, str):
@@ -581,7 +621,13 @@ class Services:
     # ------------------------------------------------------------- addressing
 
     def address(self, path: str) -> str:
-        return f"http://{self.host}:{self.port}{path}"
+        return f"http://{html.escape(self.host, quote=True)}:{self.port}{html.escape(path, quote=True)}"
+
+    @property
+    def ptz_enabled(self) -> bool:
+        """Whether this ONVIF persona exposes or accepts PTZ operations."""
+        camera = self.backend.camera()
+        return not self.read_only and camera is not None and camera.is_ptz
 
     # ------------------------------------------------------------ local control
     def control_step(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
@@ -722,8 +768,26 @@ class Services:
         frigate = self.frigate_settings()
         frigate_url = esc(frigate["base_url"] or "")
         if camera is None:
-            body = "<section><h2>Camera</h2><p class='muted'>No camera adopted yet.</p></section>"
-            return "<!doctype html><title>Osprey · operator console</title><p>waiting</p>" + body
+            counts = self.logs.summary()
+            alert = f"{counts['errors']} error(s), {counts['warnings']} warning(s) in recent log"
+            body = (
+                "<section><h2>Camera</h2><p class='muted'>No camera adopted yet.</p></section>"
+                "<section class='span'><div class='section-head'><div><h2>Logs &amp; alerts</h2>"
+                "<p class='muted'>Recent Osprey records; the host journal remains the full log.</p></div>"
+                f"<strong id='log-alert' class='alert-warning'>{esc(alert)}</strong></div>"
+                "<pre id='log-output' class='log-output' aria-live='polite'>Loading recent logs…</pre></section>"
+            )
+            return (
+                "<!doctype html><html lang='en'><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Osprey · operator console</title></head><body><main><h1>Osprey operator console</h1>"
+                f"<p>Controller state: waiting · {esc(self.host)}:{self.port}</p><div>{body}</div>"
+                "<script>async function loadLogs(){const out=document.getElementById('log-output');"
+                "try{const response=await fetch('/api/logs?limit=100');const data=await response.json();"
+                "if(!response.ok)throw new Error(data.error||'request failed');out.textContent=data.entries.map(e=>`[${e.timestamp}] ${e.level} ${e.logger}: ${e.message}`).join('\\n')||'No records yet';"
+                "document.getElementById('log-alert').textContent=`${data.errors} error(s), ${data.warnings} warning(s) in recent log`;"
+                "}catch(error){out.textContent='Unable to load logs: '+error}}loadLogs();setInterval(loadLogs,5000);</script>"
+                "</main></body></html>"
+            )
         else:
             pos = camera.motion.position
             pan = camera.pan_range.to_normalised(pos.pan)
@@ -858,6 +922,24 @@ class Services:
             )
             settings = (f"<section><h2>Supported settings</h2><div class='controls'>{codec_controls}</div>"
                         "<p class='muted'>Codec changes are applied by the active encoder backend.</p></section>" if codec_controls else "")
+
+            log_counts = self.logs.summary()
+            alert_class = "alert-danger" if log_counts["errors"] else ("alert-warning" if log_counts["warnings"] else "alert-ok")
+            alert_text = (
+                f"{log_counts['errors']} error(s), {log_counts['warnings']} warning(s) in the recent log"
+                if log_counts["errors"] or log_counts["warnings"]
+                else "No warnings in the recent log"
+            )
+            logs_section = (
+                "<section class='span'><div class='section-head'><div><h2>Logs &amp; alerts</h2>"
+                "<p class='muted'>Recent Osprey records; the host journal remains the full log.</p></div>"
+                f"<strong id='log-alert' class='{alert_class}'>{esc(alert_text)}</strong></div>"
+                "<div class='controls log-controls'><label>Show <select id='log-level' aria-label='Minimum log level'>"
+                "<option value='INFO'>All records</option><option value='WARNING'>Warnings and errors</option>"
+                "<option value='ERROR'>Errors only</option></select></label>"
+                "<button type='button' id='refresh-logs'>Refresh</button></div>"
+                "<pre id='log-output' class='log-output' aria-live='polite'>Loading recent logs…</pre></section>"
+            )
             # Framing is a single operator task: put the browser preview and
             # PTZ buttons in the first two grid cells, side by side on desktop.
         frigate = self.frigate_settings()
@@ -871,7 +953,7 @@ class Services:
             "<p id='frigate-feedback' class='muted' aria-live='polite'>"
             f"{'Configured' if frigate['configured'] else 'Not configured'}</p></section>"
         )
-        body = metrics + live_section + controls + camera_section + settings + frigate_section + bandwidth + presets + endpoints
+        body = metrics + live_section + controls + camera_section + settings + logs_section + frigate_section + bandwidth + presets + endpoints
 
         state = "adopted" if camera else "waiting"
         badge = "ok" if camera else "warn"
@@ -918,6 +1000,7 @@ class Services:
             "img{max-width:100%;border-radius:6px;display:block}"
             "button,select,input{font:inherit;padding:.48rem .7rem;border:1px solid var(--line);border-radius:7px;background:#0b151d;color:var(--fg)}"
             "button{cursor:pointer;transition:.15s ease}button:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.controls{display:flex;flex-wrap:wrap;gap:.55rem;align-items:center}.controls label{display:flex;align-items:center;gap:.45rem}.controls input[type=range]{accent-color:var(--accent);padding:0}.primary{background:var(--accent);border-color:var(--accent);color:#071217;font-weight:700}.danger{border-color:var(--danger);color:var(--danger)}"
+            ".log-controls{margin:.6rem 0}.log-output{max-height:18rem;overflow:auto;margin:0;padding:.8rem;background:#081018;border:1px solid var(--line);border-radius:8px;color:var(--head);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word}.alert-ok{color:var(--ok)}.alert-warning{color:var(--warn)}.alert-danger{color:var(--danger)}"
             "@media (prefers-color-scheme: dark){:root{color-scheme:dark}}"
             "@media(max-width:760px){section{grid-column:1/-1}.metric-grid{grid-template-columns:repeat(2,1fr)}.wrap{padding:20px 12px 32px}}@media(max-width:420px){.metric-grid{grid-template-columns:1fr 1fr}.metric strong{font-size:1rem}}"
             "footer{color:var(--muted);opacity:.7;font-size:.72rem;margin-top:1.2rem}"
@@ -929,6 +1012,7 @@ class Services:
             "<footer>Snapshot fallback refreshes every 5s · operator actions are sent to the local controller</footer>"
             "<script>async function post(path,data){const e=document.getElementById('feedback');try{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(e)e.textContent=r.ok?(j.message||'Command completed'):(j.error||'Command failed');return{r:r,j:j}}catch(err){if(e)e.textContent='Controller unavailable — check the camera connection';return null}}const step=document.getElementById('step-size'),stepOut=document.getElementById('step-value');if(step)step.oninput=()=>stepOut.textContent=step.value+'%';document.querySelectorAll('[data-axis]').forEach(b=>b.onclick=()=>post('/control/step',{axis:b.dataset.axis,direction:Number(b.dataset.direction),step:Number(step?.value||4)}));const zoom=document.getElementById('zoom-level'),zoomOut=document.getElementById('zoom-value');if(zoom){let timer;zoom.oninput=()=>{zoomOut.textContent=zoom.value+'%';clearTimeout(timer);timer=setTimeout(()=>post('/control/zoom',{percent:Number(zoom.value)}),350)}}const home=document.getElementById('save-home');if(home)home.onclick=async()=>{home.disabled=true;home.textContent='Saving…';await post('/control/home',{});home.disabled=false;home.textContent='Save current view as Home'};const preset=document.getElementById('save-preset');if(preset)preset.onclick=()=>{const n=document.getElementById('preset-name');if(n.value.trim())post('/control/preset',{action:'save',name:n.value.trim()})};document.querySelectorAll('[data-goto-preset]').forEach(b=>b.onclick=()=>post('/control/preset',{action:'goto',name:b.dataset.gotoPreset}));document.querySelectorAll('[data-track]').forEach(s=>s.onchange=()=>post('/control/codec',{track:s.dataset.track,codec:s.value}));const sf=document.getElementById('snapshot-fallback');if(sf)setInterval(()=>{sf.src='/snapshot/?t='+Date.now()},5000);</script>"
             "<script>const frigateForm=document.getElementById('frigate-form');if(frigateForm)frigateForm.onsubmit=async(e)=>{e.preventDefault();const out=document.getElementById('frigate-feedback');out.textContent='Saving…';const result=await post('/api/frigate',{base_url:document.getElementById('frigate-url').value});if(result)out.textContent=result.r.ok?'Frigate connection saved':'Save failed: '+(result.j.error||'invalid URL')};</script>"
+            "<script>async function refreshLogs(){const out=document.getElementById('log-output');if(!out)return;const level=(document.getElementById('log-level')||{}).value||'INFO';try{const response=await fetch('/api/logs?limit=100&level='+encodeURIComponent(level));const data=await response.json();if(!response.ok)throw new Error(data.error||'request failed');out.textContent=data.entries.map(e=>`[${e.timestamp}] ${e.level} ${e.logger}: ${e.message}`).join('\\n')||'No records yet';const alert=document.getElementById('log-alert');if(alert){alert.textContent=`${data.errors} error(s), ${data.warnings} warning(s) in recent log`;alert.className=data.errors?'alert-danger':(data.warnings?'alert-warning':'alert-ok')}}catch(error){out.textContent='Unable to load logs: '+error}}document.getElementById('refresh-logs')?.addEventListener('click',refreshLogs);document.getElementById('log-level')?.addEventListener('change',refreshLogs);refreshLogs();setInterval(refreshLogs,5000);</script>"
             "</div></body></html>"
         )
 
@@ -967,14 +1051,19 @@ class Services:
         return envelope(
             "<tds:GetDeviceInformationResponse>"
             f"<tds:Manufacturer>{MANUFACTURER}</tds:Manufacturer>"
-            f"<tds:Model>{camera.model if camera else 'unknown'}</tds:Model>"
-            f"<tds:FirmwareVersion>{camera.firmware if camera else '0'}</tds:FirmwareVersion>"
-            f"<tds:SerialNumber>{camera.mac if camera else '000000000000'}</tds:SerialNumber>"
-            f"<tds:HardwareId>{camera.model if camera else 'unknown'}</tds:HardwareId>"
+            f"<tds:Model>{html.escape(camera.model if camera else 'unknown')}</tds:Model>"
+            f"<tds:FirmwareVersion>{html.escape(camera.firmware if camera else '0')}</tds:FirmwareVersion>"
+            f"<tds:SerialNumber>{html.escape(camera.mac if camera else '000000000000')}</tds:SerialNumber>"
+            f"<tds:HardwareId>{html.escape(camera.model if camera else 'unknown')}</tds:HardwareId>"
             "</tds:GetDeviceInformationResponse>"
         )
 
     def _get_capabilities(self, call: Call) -> str:
+        ptz = (
+            f"<tt:PTZ><tt:XAddr>{self.address(PTZ_PATH)}</tt:XAddr></tt:PTZ>"
+            if self.ptz_enabled
+            else ""
+        )
         return envelope(
             "<tds:GetCapabilitiesResponse><tds:Capabilities>"
             # ONVIF Capabilities is a strict sequence: Device, Events, Imaging,
@@ -994,7 +1083,7 @@ class Services:
             "<tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast>"
             "<tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>"
             "</tt:StreamingCapabilities></tt:Media>"
-            f"<tt:PTZ><tt:XAddr>{self.address(PTZ_PATH)}</tt:XAddr></tt:PTZ>"
+            f"{ptz}"
             "</tds:Capabilities></tds:GetCapabilitiesResponse>"
         )
 
@@ -1002,10 +1091,11 @@ class Services:
         entries = [
             ("http://www.onvif.org/ver10/device/wsdl", DEVICE_PATH),
             ("http://www.onvif.org/ver10/media/wsdl", MEDIA_PATH),
-            ("http://www.onvif.org/ver20/ptz/wsdl", PTZ_PATH),
             ("http://www.onvif.org/ver20/imaging/wsdl", IMAGING_PATH),
             ("http://www.onvif.org/ver10/events/wsdl", EVENTS_PATH),
         ]
+        if self.ptz_enabled:
+            entries.insert(2, ("http://www.onvif.org/ver20/ptz/wsdl", PTZ_PATH))
         body = "".join(
             f"<tds:Service><tds:Namespace>{namespace}</tds:Namespace>"
             f"<tds:XAddr>{self.address(path)}</tds:XAddr>"
@@ -1022,11 +1112,11 @@ class Services:
             "onvif://www.onvif.org/Profile/Streaming",
             f"onvif://www.onvif.org/name/{camera.name if camera else 'cuckoo'}",
         ]
-        if camera is not None and camera.is_ptz:
+        if self.ptz_enabled:
             scopes.append("onvif://www.onvif.org/type/ptz")
         body = "".join(
             "<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef>"
-            f"<tt:ScopeItem>{scope}</tt:ScopeItem></tds:Scopes>"
+            f"<tt:ScopeItem>{html.escape(scope)}</tt:ScopeItem></tds:Scopes>"
             for scope in scopes
         )
         return envelope(f"<tds:GetScopesResponse>{body}</tds:GetScopesResponse>")
@@ -1041,7 +1131,7 @@ class Services:
 
     def _get_ptz_service_capabilities(self, call: Call) -> str:
         camera = self.backend.camera()
-        supported = camera is not None and camera.is_ptz
+        supported = self.ptz_enabled
         value = "true" if supported else "false"
         return envelope(
             "<tptz:GetServiceCapabilitiesResponse>"
@@ -1058,7 +1148,7 @@ class Services:
         if track is None:
             return ""
         ptz = ""
-        if camera.is_ptz:
+        if self.ptz_enabled:
             ptz = (
                 f'<tt:PTZConfiguration token="{PTZ_CONFIG}">'
                 f"<tt:Name>{PTZ_CONFIG}</tt:Name><tt:UseCount>1</tt:UseCount>"
@@ -1068,14 +1158,14 @@ class Services:
             )
         encoding = "H265" if track.codec.value == "h265" else track.codec.value.upper()
         return (
-            f'<{prefix} token="{name}" fixed="true"><tt:Name>{name}</tt:Name>'
+            f'<{prefix} token="{html.escape(name, quote=True)}" fixed="true"><tt:Name>{html.escape(name)}</tt:Name>'
             f'<tt:VideoSourceConfiguration token="VideoSource">'
             "<tt:Name>VideoSource</tt:Name><tt:UseCount>1</tt:UseCount>"
             "<tt:SourceToken>VideoSource</tt:SourceToken>"
             f'<tt:Bounds x="0" y="0" width="{track.width}" height="{track.height}"/>'
             "</tt:VideoSourceConfiguration>"
-            f'<tt:VideoEncoderConfiguration token="{name}">'
-            f"<tt:Name>{name}</tt:Name><tt:UseCount>1</tt:UseCount>"
+            f'<tt:VideoEncoderConfiguration token="{html.escape(name, quote=True)}">'
+            f"<tt:Name>{html.escape(name)}</tt:Name><tt:UseCount>1</tt:UseCount>"
             f"<tt:Encoding>{encoding}</tt:Encoding>"
             f"<tt:Resolution><tt:Width>{track.width}</tt:Width>"
             f"<tt:Height>{track.height}</tt:Height></tt:Resolution>"
@@ -1123,7 +1213,7 @@ class Services:
         if camera is None:
             return fault("no camera")
         body = "".join(
-            f'<trt:Configurations token="{track.name}"><tt:Name>{track.name}</tt:Name>'
+            f'<trt:Configurations token="{html.escape(track.name, quote=True)}"><tt:Name>{html.escape(track.name)}</tt:Name>'
             "<tt:UseCount>1</tt:UseCount>"
             f"<tt:Encoding>{'H265' if track.codec.value == 'h265' else track.codec.value.upper()}"
             "</tt:Encoding>"
@@ -1162,7 +1252,7 @@ class Services:
         uri = self.backend.stream_uri(token)
         return envelope(
             "<trt:GetStreamUriResponse><trt:MediaUri>"
-            f"<tt:Uri>{uri}</tt:Uri>"
+            f"<tt:Uri>{html.escape(uri)}</tt:Uri>"
             "<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
             "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
             "<tt:Timeout>PT60S</tt:Timeout>"
@@ -1173,7 +1263,7 @@ class Services:
         token = call.text("ProfileToken") or "video1"
         return envelope(
             "<trt:GetSnapshotUriResponse><trt:MediaUri>"
-            f"<tt:Uri>{self.backend.snapshot_uri(token)}</tt:Uri>"
+            f"<tt:Uri>{html.escape(self.backend.snapshot_uri(token))}</tt:Uri>"
             "<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
             "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
             "<tt:Timeout>PT60S</tt:Timeout>"
@@ -1183,9 +1273,13 @@ class Services:
     # --------------------------------------------------------------------- PTZ
 
     def _get_nodes(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         return envelope(f"<tptz:GetNodesResponse>{self._node_xml('tptz:PTZNode')}</tptz:GetNodesResponse>")
 
     def _get_node(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         return envelope(f"<tptz:GetNodeResponse>{self._node_xml('tptz:PTZNode')}</tptz:GetNodeResponse>")
 
     def _node_xml(self, element: str) -> str:
@@ -1201,6 +1295,8 @@ class Services:
         )
 
     def _get_configurations(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         return envelope(
             "<tptz:GetConfigurationsResponse>"
             f'<tptz:PTZConfiguration token="{PTZ_CONFIG}">'
@@ -1211,9 +1307,13 @@ class Services:
         )
 
     def _get_configuration(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         return self._get_configurations(call)
 
     def _get_configuration_options(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         # Other clients (ODM, some NVRs) read move-mode support from here; Home
         # Assistant instead reads it from the PTZConfiguration's Default*Space
         # elements in GetProfiles (see PTZ_DEFAULT_SPACES). Answered for both.
@@ -1227,6 +1327,8 @@ class Services:
         )
 
     def _get_status(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         camera = self.backend.camera()
         if camera is None:
             return fault("no camera")
@@ -1295,6 +1397,8 @@ class Services:
         return Position(pan=pan, tilt=tilt, zoom=zoom_value, focus=current.focus)
 
     def _absolute_move(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         camera = self.backend.camera()
         if camera is None:
             return fault("no camera")
@@ -1304,6 +1408,8 @@ class Services:
         return envelope("<tptz:AbsoluteMoveResponse/>")
 
     def _relative_move(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         camera = self.backend.camera()
         if camera is None:
             return fault("no camera")
@@ -1317,6 +1423,8 @@ class Services:
         return envelope("<tptz:RelativeMoveResponse/>")
 
     def _continuous_move(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         """The camera has no continuous verb, so velocity becomes one relative step.
 
         A client holding an arrow key sends these repeatedly, which gives the same
@@ -1335,11 +1443,15 @@ class Services:
         return envelope("<tptz:ContinuousMoveResponse/>")
 
     def _stop(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         # Each step completes on its own, so there is nothing to interrupt.
         self.backend.refresh_position()
         return envelope("<tptz:StopResponse/>")
 
     def _get_presets(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         camera = self.backend.camera()
         if camera is None:
             return fault("no camera")
@@ -1349,13 +1461,15 @@ class Services:
             tilt = -camera.tilt_range.to_normalised(preset.position.tilt)  # +Y = up, as elsewhere
             zoom = (camera.zoom_range.to_normalised(preset.position.zoom) + 1.0) / 2.0
             body += (
-                f'<tptz:Preset token="{index}"><tt:Name>{preset.name}</tt:Name>'
+                f'<tptz:Preset token="{index}"><tt:Name>{html.escape(preset.name)}</tt:Name>'
                 f'<tt:PTZPosition><tt:PanTilt x="{pan:.4f}" y="{tilt:.4f}"/>'
                 f'<tt:Zoom x="{zoom:.4f}"/></tt:PTZPosition></tptz:Preset>'
             )
         return envelope(f"<tptz:GetPresetsResponse>{body}</tptz:GetPresetsResponse>")
 
     def _goto_preset(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         token = call.text("PresetToken")
         try:
             index = int(token)
@@ -1366,6 +1480,8 @@ class Services:
         return envelope("<tptz:GotoPresetResponse/>")
 
     def _set_preset(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         name = call.text("PresetName") or "preset"
         token = call.text("PresetToken")
         index: int | None
@@ -1382,6 +1498,8 @@ class Services:
         )
 
     def _remove_preset(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         try:
             index = int(call.text("PresetToken"))
         except ValueError:
@@ -1417,7 +1535,7 @@ class Services:
         return envelope(
             "<tev:CreatePullPointSubscriptionResponse>"
             "<tev:SubscriptionReference>"
-            f"<wsa:Address>{address}</wsa:Address>"
+            f"<wsa:Address>{html.escape(address)}</wsa:Address>"
             "</tev:SubscriptionReference>"
             f"<wsnt:CurrentTime>{utc()}</wsnt:CurrentTime>"
             f"<wsnt:TerminationTime>{utc(time.time() + 60)}</wsnt:TerminationTime>"
@@ -1536,10 +1654,11 @@ def canonical_camera_id(camera: Camera) -> str:
 class CameraRegistry:
     """Thread-safe collection of independently constructed camera services."""
 
-    def __init__(self, services: Services) -> None:
+    def __init__(self, services: Services | None = None) -> None:
         self._items: dict[str, Services] = {}
         self._lock = threading.RLock()
-        self.register(services)
+        if services is not None:
+            self.register(services)
 
     def register(self, services: Services) -> str:
         camera = services.backend.camera()
@@ -1611,10 +1730,24 @@ class _Handler(BaseHTTPRequestHandler):
             self._login_page()
             return
         if root == FRIGATE_API_PATH:
+            if self.services.read_only:
+                self._send(HTTPStatus.NOT_FOUND, b"operator console is disabled on this endpoint", "text/plain")
+                return
             if self._require_admin():
                 self._send(HTTPStatus.OK, json.dumps(self.services.frigate_settings()).encode(), "application/json")
             return
+        if root == LOGS_API_PATH:
+            if self.services.read_only:
+                self._send(HTTPStatus.NOT_FOUND, b"operator console is disabled on this endpoint", "text/plain")
+                return
+            if not self._require_admin():
+                return
+            self._logs_json()
+            return
         if root in ("/", "/status", "/status/"):
+            if self.services.read_only:
+                self._send(HTTPStatus.NOT_FOUND, b"operator console is disabled on this endpoint", "text/plain")
+                return
             if not self._require_admin():
                 return
             page = self.services.status_page()
@@ -1622,6 +1755,7 @@ class _Handler(BaseHTTPRequestHandler):
             active_id = getattr(self, "_active_camera_id", None)
             if active_id:
                 page = page.replace("/api/frigate", f"/cameras/{html.escape(active_id)}/api/frigate")
+                page = page.replace(LOGS_API_PATH, f"/cameras/{html.escape(active_id)}{LOGS_API_PATH}")
             if isinstance(server, OnvifServer) and server.registry is not None and len(server.registry.ids()) > 1:
                 links = "".join(
                     f"<a href='/cameras/{html.escape(identifier)}/status'>{html.escape(identifier)}</a> "
@@ -1641,12 +1775,35 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, image, "image/jpeg")
             return
         if root.startswith(PREVIEW_PATH):
+            if self.services.read_only:
+                self._send(HTTPStatus.NOT_FOUND, b"preview is disabled on this endpoint", "text/plain")
+                return
             if not self._require_admin():
                 return
             token = unquote(root[len(PREVIEW_PATH):]).strip("/")
             self._serve_preview(token)
             return
         self._send(HTTPStatus.NOT_FOUND, b"", "text/plain")
+
+    def _logs_json(self) -> None:
+        """Serve a bounded, redacted log tail to the authenticated console."""
+        _, _, query = self.path.partition("?")
+        values = parse_qs(query, keep_blank_values=False)
+        try:
+            limit = int(values.get("limit", ["100"])[0])
+        except (TypeError, ValueError):
+            self._send(HTTPStatus.BAD_REQUEST, b'{"error":"limit must be an integer"}', "application/json")
+            return
+        if not 1 <= limit <= 500:
+            self._send(HTTPStatus.BAD_REQUEST, b'{"error":"limit must be between 1 and 500"}', "application/json")
+            return
+        level_name = values.get("level", ["INFO"])[0].upper()
+        minimum = logging._nameToLevel.get(level_name)
+        if minimum is None or minimum < logging.INFO:
+            self._send(HTTPStatus.BAD_REQUEST, b'{"error":"level must be INFO, WARNING, or ERROR"}', "application/json")
+            return
+        payload = self.services.log_entries(limit, minimum)
+        self._send(HTTPStatus.OK, json.dumps(payload, separators=(",", ":")).encode(), "application/json")
 
     def _serve_preview(self, token: str) -> None:
         camera = self.services.backend.camera()
@@ -1711,6 +1868,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._login()
             return
         if root in (CONTROL_STEP_PATH, CONTROL_HOME_PATH, CONTROL_PRESET_PATH, CONTROL_ZOOM_PATH, "/control/codec", FRIGATE_API_PATH):
+            if self.services.read_only:
+                self._send(HTTPStatus.FORBIDDEN, b"controls are disabled on this endpoint", "text/plain")
+                return
             if not self._require_admin(csrf=True):
                 return
             self._control_json(root)

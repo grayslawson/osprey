@@ -46,7 +46,7 @@ The UI should feel like a well-labelled piece of field equipment: current state 
 - **Register:** Product/operator. Dense cards and technical details are appropriate; buttons use plain verbs and state messages explain what failed.
 - **Signature:** Telemetry and control live in the same restrained slate-and-blue instrument panel, with a snapshot as the primary visual anchor.
 - **Restraint:** Do not introduce decorative hero art, gradients, dashboard widgets without real data, or controls for unsupported camera settings.
-- **Security boundary:** The current telemetry page is a trusted-network lab/operator surface. A release UI must be served separately behind authenticated application routes; do not represent this page as an authenticated admin console.
+- **Security boundary:** The telemetry page is a trusted-network operator surface and must remain behind authenticated application routes in a release deployment.
 - **Token ownership/runtime mapping:** `cuckoo/onvif.py` owns the current inline CSS variables. The frontmatter records those tokens so a later shared web application can migrate them deliberately rather than copy values ad hoc.
 
 ## Colors
@@ -100,4 +100,4 @@ Use literal operational vocabulary: “PTZ channel unavailable”, “wait for m
 - **Do:** Keep every displayed control backed by a real controller capability.
 - **Do:** Keep stream, PTZ, and preset state near the action that depends on it.
 - **Don't:** Add a browser-playable audio claim when the browser cannot play the RTSP audio stream.
-- **Don't:** Treat the lab telemetry page as a substitute for the authenticated release application.
+- **Don't:** Treat the telemetry page as a substitute for a properly authenticated release application.

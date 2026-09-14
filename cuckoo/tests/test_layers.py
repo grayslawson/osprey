@@ -273,7 +273,7 @@ def test_g5_ignored_activity_at_the_new_target_settles_the_new_move() -> None:
 
 
 def test_unflagged_activity_at_a_target_does_not_settle_a_reserved_move() -> None:
-    """Keep real Finch/genuine motor motion from releasing a move prematurely."""
+    """Keep genuine motor motion from releasing a move prematurely."""
     camera = _ptz_camera()
     camera.motion.connect()
     target = Position(pan=19635, tilt=12334, zoom=730, focus=109)
