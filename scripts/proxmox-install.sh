@@ -1,14 +1,41 @@
 #!/bin/sh
 # Proxmox guest helper; dry-run by default.
 set -eu
-usage() { echo 'Usage: proxmox-install.sh --host ADDRESS [--image IMAGE] [--runtime docker|podman] [--state-dir PATH] [--apply] [--force]'; }
-host='' ; image=ghcr.io/grayslawson/osprey:latest ; runtime=docker ; state=/var/lib/osprey ; onvif=8000 ; rtsp=8554 ; apply=false ; force=false
-while [ "$#" -gt 0 ]; do case "$1" in --host|--image|--runtime|--state-dir|--onvif-port|--rtsp-port) [ "$#" -gt 1 ] || exit 2; eval "${1#--}='$2'"; shift 2;; --apply) apply=true; shift;; --force) force=true; shift;; --dry-run) apply=false; shift;; --help) usage; exit 0;; *) usage >&2; exit 2;; esac; done
+usage() { echo 'Usage: proxmox-install.sh --host ADDRESS --image IMAGE [--bind-address ADDRESS] [--runtime docker|podman] [--state-dir PATH] [--apply] [--force]'; }
+host='' ; bind=127.0.0.1 ; image='' ; runtime=docker ; state=/var/lib/osprey ; onvif=8000 ; rtsp=8554 ; apply=false ; force=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --host|--bind-address|--image|--runtime|--state-dir|--onvif-port|--rtsp-port)
+      [ "$#" -gt 1 ] || { usage >&2; exit 2; }
+      case "$1" in
+        --host) host=$2 ;;
+        --bind-address) bind=$2 ;;
+        --image) image=$2 ;;
+        --runtime) runtime=$2 ;;
+        --state-dir) state=$2 ;;
+        --onvif-port) onvif=$2 ;;
+        --rtsp-port) rtsp=$2 ;;
+      esac
+      shift 2
+      ;;
+    --apply) apply=true; shift ;;
+    --force) force=true; shift ;;
+    --dry-run) apply=false; shift ;;
+    --help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
 [ -n "$host" ] || { echo '--host is required' >&2; exit 2; }
+[ -n "$image" ] || { echo '--image is required; use an immutable release tag or digest' >&2; exit 2; }
 case "$host" in *[!A-Za-z0-9._:%\[\]-]*) echo 'unsafe host' >&2; exit 2;; esac
+case "$bind" in *[!A-Za-z0-9._:%\[\]-]*) echo 'unsafe bind address' >&2; exit 2;; esac
 case "$image" in ''|*[!A-Za-z0-9._:/@-]*) echo 'unsafe image' >&2; exit 2;; esac
+case "$image" in *:latest|*:main|*:master) echo 'image must use an immutable release tag or digest' >&2; exit 2;; esac
+case "$image" in *@sha256:*) digest=${image##*@sha256:}; [ "${#digest}" -eq 64 ] || { echo 'image digest must contain 64 hexadecimal characters' >&2; exit 2; }; case "$digest" in *[!0-9A-Fa-f]*) echo 'image digest must be hexadecimal' >&2; exit 2;; esac ;; esac
+case "$runtime" in docker|podman) ;; *) echo 'runtime must be docker or podman' >&2; exit 2;; esac
 case "$state" in /*) ;; *) echo 'state must be absolute' >&2; exit 2;; esac
 [ "$state" != / ] || { echo 'refusing state root' >&2; exit 2; }
+case "$state" in */../*|*/..|../*|..) echo 'state must not contain parent-directory segments' >&2; exit 2;; esac
 case "$state" in *[!A-Za-z0-9._/-]*) echo 'unsafe state path' >&2; exit 2;; esac
 case "$onvif:$rtsp" in *[!0-9:]*|*:|:*) echo 'ports must be numeric' >&2; exit 2;; esac
 [ "$onvif" -ge 1 ] 2>/dev/null && [ "$onvif" -le 65535 ] || exit 2; [ "$rtsp" -ge 1 ] 2>/dev/null && [ "$rtsp" -le 65535 ] || exit 2
@@ -27,7 +54,7 @@ services:
     working_dir: /workspace/cuckoo
     environment: {PYTHONPATH: /workspace/pyunifiwire/src}
     volumes: ["$state:/state"]
-    ports: ["$onvif:8000", "$rtsp:8554"]
+ports: ["$bind:$onvif:8000", "$bind:$rtsp:8554"]
     restart: unless-stopped
     read_only: true
     tmpfs: [/tmp:mode=1777]

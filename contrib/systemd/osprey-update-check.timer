@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Osprey releases daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+Unit=osprey-update-check.service
+
+[Install]
+WantedBy=timers.target

@@ -139,3 +139,25 @@ def test_wrong_path_is_a_404(tmp_path: Path) -> None:
         connection.close()
     finally:
         server.stop()
+
+
+def test_upload_allowlist_rejects_unregistered_peer() -> None:
+    store = snapshots.Store("http://127.0.0.1:7444")
+    server = snapshots.SnapshotServer(
+        store, cert=None, port=0, allowed_peers={"192.0.2.1"}
+    )
+    server.start()
+    try:
+        token, _ = store.mint("AABBCCDDEEFF")
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_address[1], timeout=5
+        )
+        connection.request(
+            "POST", f"{snapshots.UPLOAD_PREFIX}{token}", body=JPEG,
+            headers={"Content-Length": str(len(JPEG))},
+        )
+        assert connection.getresponse().status == 403
+        connection.close()
+        assert store.awaiting(token) is not None
+    finally:
+        server.stop()

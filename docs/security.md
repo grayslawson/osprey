@@ -1,38 +1,71 @@
 # Security boundary
 
-Osprey's ONVIF SOAP and RTSP protocols are intentionally compatible with
-ordinary cameras and Frigate. They are not authenticated protocols in this
-implementation: ONVIF clients commonly send empty credentials, and enabling
-WS-Security by default would break existing Frigate deployments. Treat these
-ports as a camera-network service, not an Internet service.
+Osprey's ONVIF and RTSP services are designed to interoperate with ordinary
+camera clients and are exposed on the local network. Treat them as camera
+network services, not Internet services.
 
-* Bind published ports to a dedicated LAN interface or localhost (`OSPREY_BIND`);
-  do not publish them to `0.0.0.0` on an untrusted host. Permit only the camera
-  and Frigate in the host firewall or an equivalent network segment.
-* Put the operator UI behind HTTPS (a reverse proxy is recommended) and set
-  `OSPREY_ADMIN_PASSWORD_HASH` or `OSPREY_ADMIN_PASSWORD_FILE`. The UI session
-  has CSRF protection; ONVIF/RTSP access does not imply UI access.
-* MQTT is disabled by default. When enabled, use broker ACLs, credentials and
-  TLS certificate verification. Movement commands are allow-listed and retained
-  commands are ignored; never grant the bridge a wildcard broker ACL.
-* Keep Protect credentials and password files outside the repository, with
-  root-only permissions. Configuration and error logs must not contain them.
+- Bind published ports to a dedicated LAN interface or localhost with
+  `OSPREY_BIND`; do not publish them on `0.0.0.0` on an untrusted host.
+- Permit only the camera, Frigate, and approved NVR clients through your host
+  firewall or network segment.
+- Protect the browser operator console with `OSPREY_ADMIN_PASSWORD_HASH` or
+  `OSPREY_ADMIN_PASSWORD_FILE`, and put it behind an HTTPS reverse proxy when
+  accessed remotely. UI sessions use CSRF protection; ONVIF/RTSP access does
+  not grant access to the console.
+- MQTT is disabled by default. When enabled, use TLS, certificate validation,
+  broker authentication, and least-privilege ACLs. Osprey accepts only
+  allow-listed command topics and ignores retained movement commands.
+- Keep camera, Protect, MQTT, and admin secrets in root-owned files or a
+  deployment secret manager outside the repository. Error logs must not contain
+  their values.
+- SOAP request bodies are capped at 256 KiB before XML parsing to limit memory
+  and CPU abuse. Frigate URL validation rejects embedded credentials, queries,
+  and fragments.
 
-SOAP request bodies are capped at 256 KiB before XML parsing to limit memory and
-CPU abuse. Frigate URL metadata rejects credentials, queries and fragments; it
-is not fetched by Osprey and must still be treated as operator-supplied data.
+## ONVIF authentication
 
-Optional ONVIF WS-Security UsernameToken authentication is enabled only when
-`OSPREY_ONVIF_USERNAME` and either `OSPREY_ONVIF_PASSWORD` or
-`OSPREY_ONVIF_PASSWORD_FILE` are set. It requires a PasswordDigest on every SOAP
-request; there is no anonymous fallback. Leave the username unset for the
-existing Frigate empty-credential compatibility mode. Use
-`OSPREY_ONVIF_PASSWORD_FILE` instead of the password variable when possible;
-the file should be root-readable and contain only the password. Digests expire
-after five minutes and each nonce is accepted only once.
+ONVIF WS-Security UsernameToken authentication is opt-in because some Frigate
+clients use anonymous ONVIF. Set `OSPREY_ONVIF_USERNAME` together with either
+`OSPREY_ONVIF_PASSWORD` or `OSPREY_ONVIF_PASSWORD_FILE` to require a
+PasswordDigest on every SOAP request; there is no anonymous fallback when it is
+enabled. Password files should be root-readable and contain only the password.
+Digests expire after five minutes and each nonce is accepted once.
 
-If authenticated ONVIF becomes necessary, deploy an authenticating reverse
-proxy restricted to the Frigate host and configure Frigate with those proxy
-credentials. Do not expose a proxy to the camera callback path without testing
-the camera's ONVIF interoperability; this remains an explicit deployment
-choice rather than an unsafe compatibility-breaking default.
+Leave the username unset for the anonymous compatibility mode, and test the
+Frigate client's behavior before changing a running installation. A TLS
+reverse proxy restricted to the Frigate host is another deployment option, but
+test camera/NVR interoperability before inserting it into the camera path.
+
+### What anonymous ONVIF exposes
+
+With authentication disabled, any host that can reach Osprey's ONVIF port can
+query device/media/PTZ capabilities, obtain stream and snapshot URIs, read
+events, and issue PTZ operations (including moves and preset changes). The
+ONVIF port does not grant the browser admin session, MQTT credentials, or the
+camera's private control-channel credentials, but network access should still
+be treated as control-plane access. Osprey's RTSP service is a separate local
+media service and currently has no RTSP user/password gate, so ONVIF
+authentication alone does not hide the video stream.
+
+When authentication is enabled, clients must send an ONVIF WS-Security
+UsernameToken using `PasswordDigest`; anonymous SOAP calls are rejected. Frigate
+supports ONVIF credentials in each camera's `onvif.user` and `onvif.password`
+settings and should be configured with the same Osprey credentials. This
+protects PTZ and ONVIF metadata from other LAN clients, but clients/NVRs that do
+not support WS-Security may no longer discover or control the camera.
+
+Leave Frigate's `onvif.tls_insecure` at its default `false` when using Osprey
+authentication. Frigate passes that setting to its ONVIF client as the
+no-digest switch; setting it to `true` disables the UsernameToken digest and
+will make an authenticated Osprey endpoint reject the requests.
+
+**Recommendation:** keep anonymous ONVIF only on a firewall-isolated camera
+network while validating a deployment. For a shared or untrusted LAN, create a
+dedicated Osprey ONVIF account, configure the matching Frigate credentials,
+test discovery, presets, movement, events, and autotracking, then enable
+`OSPREY_ONVIF_USERNAME`/`OSPREY_ONVIF_PASSWORD_FILE`. Restrict RTSP separately
+with network ACLs or a trusted proxy until RTSP authentication is available.
+
+Implementation references: Frigate's [ONVIF camera configuration](https://github.com/blakeblackshear/frigate/blob/dev/frigate/config/camera/onvif.py),
+[ONVIF controller](https://github.com/blakeblackshear/frigate/blob/dev/frigate/ptz/onvif.py),
+and the [ONVIF Core Specification](https://www.onvif.org/specs/core/ONVIF-Core-Specification.html).

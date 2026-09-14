@@ -1,19 +1,16 @@
 # Connecting an existing Frigate installation
 
-Osprey is the controller for supported UniFi PTZ cameras. It is not an NVR and
-does not distribute, start, upgrade, or alter Frigate. Install and operate
-Frigate independently, then connect that Frigate instance to Osprey as it would
-to any ONVIF/RTSP camera.
+Osprey is a controller for supported UniFi PTZ cameras, not an NVR. Install
+and operate Frigate independently, then add Osprey as an ONVIF/RTSP camera.
 
 ## Network contract
 
-Osprey exposes one ONVIF device endpoint and RTSP stream per registered camera.
-In Frigate, use the Osprey host address and its ONVIF/RTSP ports; do not use the
-camera's Protect address as Frigate's PTZ endpoint. Osprey is the component that
-receives Frigate's ONVIF moves and sends the corresponding G5 PTZ commands.
+Use the Osprey host address in Frigate, not the physical camera's Protect
+address. Frigate sends ONVIF PTZ commands to Osprey; Osprey translates them to
+the camera's private control channel and re-publishes the camera's media.
 
 ```yaml
-# Existing Frigate configuration. Addresses and camera names are examples.
+# Existing Frigate configuration — addresses are examples.
 cameras:
   driveway_ptz:
     onvif:
@@ -25,40 +22,52 @@ cameras:
           roles: [detect, record]
 ```
 
-Configure the labels, zones, detectors, recording, retention, autotracking
-mode, and zoom behavior in Frigate. Those choices belong to the Frigate owner
-and Osprey never rewrites them.
+Configure labels, zones, detectors, recording, retention, autotracking mode,
+and zoom behavior in Frigate. Those choices belong to the Frigate owner;
+Osprey never rewrites them.
 
-## Frigate address in Osprey
+## Frigate URL in the Osprey console
 
-The operator console's **Settings → Frigate** field takes the base URL of the
-Frigate instance associated with the selected camera, such as
-`http://frigate.local:5000`. It is used for health feedback and a convenient
-operator link. It is not a remote-control channel for Frigate and it does not
-give Osprey permission to modify Frigate configuration.
-
-Use `http` only on a trusted LAN. If Frigate is reachable through HTTPS, enter
-its complete `https://` base URL and ensure Osprey can validate the certificate.
-Do not embed credentials in the URL. Protect the Osprey operator console with
-its administrator password and expose neither ONVIF nor RTSP to untrusted
-networks.
+In **Settings → Frigate**, enter the base URL of the Frigate instance associated
+with the selected camera, such as `http://frigate.local:5000`. This is used for
+health feedback and a convenient operator link; it is not a remote-control
+channel and does not grant Osprey permission to modify Frigate. Use a complete
+`https://` URL when TLS is enabled and do not embed credentials in the URL.
 
 ## Verify the connection
 
-1. Confirm that Frigate can reach Osprey's ONVIF endpoint and selected RTSP
-   stream.
-2. Confirm that the camera appears in Frigate and that the selected stream
-   decodes.
+1. Confirm Frigate can reach Osprey's ONVIF endpoint and selected RTSP stream.
+2. Confirm the stream appears in Frigate and decodes correctly.
 3. Save at least one Home or named Osprey position before enabling automatic
    return-to-home behavior.
-4. Enable and tune autotracking in Frigate, starting with a supervised test.
-5. Review Osprey's camera status and control-event history for rejected or
+4. Enable and tune Frigate autotracking with a supervised test.
+5. Review Osprey camera status and control-event history for rejected or
    contended moves before leaving the system unattended.
 
-Osprey reports its own endpoint and controller health. A healthy Osprey link is
-not proof that Frigate detection or tracking is correctly configured; inspect
-Frigate's own logs and events for that part of the pipeline.
+Healthy Osprey status does not prove Frigate detection or tracking is correct;
+inspect Frigate's own logs and event pipeline. For the Protect custody
+limitation, see [Protect and Osprey](protect-dual-adoption.md).
 
-For the related UniFi Protect custody limitation and the distinction between
-native adoption and a media-only ONVIF/RTSP persona, see
-[Protect and Osprey: custody versus re-share](protect-dual-adoption.md).
+## Named-position discovery and refresh
+
+Osprey returns every saved named position from the ONVIF `GetPresets` response;
+the `home` position is not privileged on the wire. Frigate discovers that list
+when its ONVIF controller initializes a camera and then keeps the list in memory.
+Consequently, a position saved in Osprey after Frigate connected will not appear
+in Frigate's live-view preset menu immediately.
+
+After adding or renaming positions in Osprey, restart Frigate or trigger an
+ONVIF camera reinitialization (for example, save the camera's ONVIF settings in
+Frigate). Reloading only the browser page is not sufficient if Frigate's
+ONVIF controller is still initialized. Verify the refresh in Frigate's logs;
+it should report the number of presets found. Osprey's operator console and an
+ONVIF client such as the included `harness/ptz_walk.py` show the authoritative
+list served by Osprey.
+
+Frigate normalizes preset names to lower case for its menu and command matching,
+so names that differ only by capitalization are treated as one position. Keep
+names unique (for example, `home`, `lower-loitering`, and `back-porch`) and set
+`onvif.autotracking.return_preset` to the exact name you want Frigate to use.
+
+This behavior follows Frigate's ONVIF controller implementation, which loads
+presets during camera initialization: [Frigate PTZ ONVIF controller](https://github.com/blakeblackshear/frigate/blob/dev/frigate/ptz/onvif.py).

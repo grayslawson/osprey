@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply Osprey releases on an operator-approved schedule
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=false
+RandomizedDelaySec=30m
+Unit=osprey-update-apply.service
+
+[Install]
+WantedBy=timers.target

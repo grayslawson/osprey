@@ -10,7 +10,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates ffmpeg tini \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir onvif-zeep==0.2.12 uiprotect==16.10.0
+ && printf '%s\n' \
+      'paho-mqtt==2.1.0 --hash=sha256:6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee' \
+      > /tmp/requirements-runtime.txt \
+ && python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-runtime.txt \
+ && rm /tmp/requirements-runtime.txt
 
 COPY cuckoo /opt/osprey/cuckoo
 COPY pyunifiwire /opt/osprey/pyunifiwire

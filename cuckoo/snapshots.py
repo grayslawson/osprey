@@ -111,6 +111,11 @@ class _Handler(BaseHTTPRequestHandler):
         log.debug("%s %s", self.address_string(), format % args)
 
     def do_POST(self) -> None:  # noqa: N802 - name fixed by http.server
+        server = self.server
+        assert isinstance(server, SnapshotServer)
+        if server.allowed_peers and self.client_address[0] not in server.allowed_peers:
+            self._respond(HTTPStatus.FORBIDDEN)
+            return
         if not self.path.startswith(UPLOAD_PREFIX):
             self._respond(HTTPStatus.NOT_FOUND)
             return
@@ -218,8 +223,15 @@ class SnapshotServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, store: Store, cert: Path | None, port: int = SNAPSHOT_PORT) -> None:
+    def __init__(
+        self,
+        store: Store,
+        cert: Path | None,
+        port: int = SNAPSHOT_PORT,
+        allowed_peers: set[str] | frozenset[str] | None = None,
+    ) -> None:
         self.store = store
+        self.allowed_peers = frozenset(allowed_peers or ())
         super().__init__(("0.0.0.0", port), _Handler, bind_and_activate=False)
         if cert is not None:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

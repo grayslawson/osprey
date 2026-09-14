@@ -303,6 +303,9 @@ class _Handler(socketserver.BaseRequestHandler):
         server = self.server
         assert isinstance(server, IngestServer)
         peer = self.client_address[0]
+        if server.allowed_peers and peer not in server.allowed_peers:
+            log.warning("rejecting media ingest from unregistered peer %s", peer)
+            return
         connection = Connection(server.hub, fallback_name=f"{server.fallback_name}")
         log.info("ingest connection from %s", peer)
         sock = self.request
@@ -330,9 +333,16 @@ class IngestServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self, hub: Hub, port: int = INGEST_PORT, fallback_name: str = "video1") -> None:
+    def __init__(
+        self,
+        hub: Hub,
+        port: int = INGEST_PORT,
+        fallback_name: str = "video1",
+        allowed_peers: set[str] | frozenset[str] | None = None,
+    ) -> None:
         self.hub = hub
         self.fallback_name = fallback_name
+        self.allowed_peers = frozenset(allowed_peers or ())
         self.closing = threading.Event()
         super().__init__(("0.0.0.0", port), _Handler)
         self._thread: threading.Thread | None = None

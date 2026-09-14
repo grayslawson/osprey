@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Hand the camera over to cuckoo, and hand it back.
 #
 # The camera already dials this host on :7442, so nothing on the camera has to
@@ -32,8 +32,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CONTAINER="${CUCKOO_CONTAINER:-flock-emu}"
-RESIDENT_UNIT="${CUCKOO_RESIDENT_UNIT:-ds}"
+CONTAINER="${CUCKOO_CONTAINER:-osprey-resident}"
+RESIDENT_UNIT="${CUCKOO_RESIDENT_UNIT:-osprey}"
 HOST="${CUCKOO_HOST:-}"
 LOG="${CUCKOO_LOG:-/tmp/cuckoo.log}"
 DUMP="${CUCKOO_DUMP:-/tmp/cuckoo-messages.jsonl}"
