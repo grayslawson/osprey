@@ -168,7 +168,17 @@ class OnvifAuth:
             digest = base64.b64decode(values.get("Password", ""), validate=True)
             if not 16 <= len(nonce) <= 64 or len(digest) != 20 or not created:
                 return False
-            parsed = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+            # ONVIF devices vary: both second precision and fractional
+            # precision UTC timestamps are common.
+            parsed = None
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+                try:
+                    parsed = datetime.strptime(created, fmt).replace(tzinfo=timezone.utc)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                return False
             now = time.time()
             if abs(now - parsed.timestamp()) > self.max_skew_seconds:
                 return False
