@@ -82,12 +82,19 @@ def auto_track(track_timeout_sec: int = 20, back_to_preset: bool = True) -> dict
 def parse_motor_state(payload: dict[str, Any]) -> tuple[Position, int] | None:
     """Read a pushed gimbal update or a position-query reply.
 
+    Two shapes arrive from the real G5. A pushed `EventMotorState` nests the
+    position under `state`; the answer to `GetCurrentPosition` is flat, with the
+    motor units under `steps` alongside a human-readable `degree` view of the
+    same pose. Both carry motor units, so both map onto Position unchanged.
+
     `activity` is a flag word, not a magnitude: zero means settled. `scale` tells
     you which coordinate system the position is in, so it must not be assumed.
     """
     nested = payload.get("state")
     state = nested if isinstance(nested, dict) else payload
     raw = state.get("position")
+    if not isinstance(raw, dict):
+        raw = state.get("steps")
     if not isinstance(raw, dict):
         return None
 

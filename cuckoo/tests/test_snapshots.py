@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import io
 import ssl
 import threading
 from pathlib import Path
@@ -42,6 +43,32 @@ def test_tokens_are_single_use() -> None:
 def test_unknown_token_is_refused() -> None:
     store = snapshots.Store("https://10.0.0.1:7444")
     assert not store.claim("not-a-token", JPEG)
+
+
+def test_multipart_upload_extracts_jpeg_payload() -> None:
+    boundary = b"------------------------camera"
+    body = (b"--" + boundary + b"\r\nContent-Disposition: form-data; name=upload; filename=x.jpg\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n" + JPEG + b"\r\n--" + boundary + b"--\r\n")
+    assert snapshots._extract_upload(body, 'multipart/form-data; boundary="' + boundary.decode() + '"') == JPEG
+
+
+def test_malformed_multipart_upload_is_rejected() -> None:
+    assert snapshots._extract_upload(b"--bad\r\nnot an image", "multipart/form-data; boundary=bad") is None
+
+
+def test_multipart_upload_with_trailing_data_is_rejected() -> None:
+    boundary = b"camera"
+    body = (b"--camera\r\nContent-Disposition: form-data; name=upload\r\n\r\n"
+            + JPEG + b"\r\n--camera--\r\nextra")
+    assert snapshots._extract_upload(body, "multipart/form-data; boundary=camera") is None
+
+
+def test_content_length_short_read_is_rejected() -> None:
+    request = type("Request", (), {
+        "headers": {"Content-Length": "10", "Transfer-Encoding": ""},
+        "rfile": io.BytesIO(b"short"),
+    })()
+    assert snapshots._Handler._read_body(request) is None
 
 
 def test_expired_token_is_refused_and_forgotten() -> None:

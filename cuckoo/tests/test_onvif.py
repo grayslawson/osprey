@@ -6,7 +6,11 @@ a namespace, token or coordinate convention drifts.
 
 from __future__ import annotations
 
+import io
 import http.client
+import subprocess
+from http import HTTPStatus
+from typing import cast
 from xml.etree import ElementTree
 
 import pytest
@@ -753,3 +757,352 @@ def test_capabilities_are_in_the_onvif_schema_order() -> None:
     body = ask(service, "GetCapabilities")
     order = [body.index(f"<tt:{name}>") for name in ("Device", "Events", "Imaging", "Media", "PTZ")]
     assert order == sorted(order), "capabilities must follow the ONVIF schema sequence"
+
+
+def test_control_step_validates_axis_and_direction() -> None:
+    service, _ = services()
+    status, result = service.control_step({"axis": "pan", "direction": 2})
+    assert status == HTTPStatus.BAD_REQUEST
+    assert "invalid" in cast(str, result["error"])
+    status, _ = service.control_step({"axis": "pan"})
+    assert status == HTTPStatus.BAD_REQUEST
+
+
+def test_control_step_rejects_non_integer_step() -> None:
+    service, _ = services()
+    status, result = service.control_step({"axis": "pan", "direction": 1, "step": "4"})
+    assert status == HTTPStatus.BAD_REQUEST
+    assert result["error"]
+    status, result = service.control_step({"axis": "pan", "direction": 1, "step": 4.5})
+    assert status == HTTPStatus.BAD_REQUEST
+    assert result["error"]
+
+
+def test_control_step_clamps_and_moves_a_small_target() -> None:
+    service, recorder = services()
+    backend = service.backend
+    backend.move_relative = recorder._move
+    status, result = service.control_step({"axis": "pan", "direction": 1})
+    assert status == HTTPStatus.OK
+    assert result["ok"] is True
+    assert recorder.absolute[-1].pan == 19400  # 4% of the 35,000-step range
+
+
+def test_control_step_tilt_up_decreases_g5_raw_tilt() -> None:
+    service, recorder = services()
+    service.backend.move_relative = recorder._move
+    status, _ = service.control_step({"axis": "tilt", "direction": 1, "step": 4})
+    assert status == HTTPStatus.OK
+    assert recorder.absolute[-1].tilt == 12600
+
+
+def test_control_step_reports_unavailable_or_busy_move() -> None:
+    service, recorder = services()
+    service.backend.move_relative = lambda _position: False
+    service.backend.move_refusal = lambda: "PTZ channel unavailable"
+    status, result = service.control_step({"axis": "zoom", "direction": 1})
+    assert status == HTTPStatus.CONFLICT
+    assert result["error"] == "PTZ channel unavailable"
+    assert recorder.camera is not None
+    recorder.camera.motion.activity = 1
+    service.backend.move_refusal = lambda: "the camera is already moving"
+    status, result = service.control_step({"axis": "zoom", "direction": -1})
+    assert status == HTTPStatus.CONFLICT
+    assert result["error"] == "the camera is already moving"
+
+
+def test_control_home_rejects_busy_camera_and_replaces_existing_token() -> None:
+    service, recorder = services()
+    assert recorder.camera is not None
+    recorder.camera.presets[3] = Preset(3, "Home", Position(pan=1, tilt=2, zoom=3))
+    current = recorder.camera.motion.position
+    assert recorder.camera.motion.begin(
+        Position(
+            pan=current.pan + 1,
+            tilt=current.tilt,
+            zoom=current.zoom,
+            focus=current.focus,
+        )
+    )
+    status, result = service.control_home()
+    assert status == HTTPStatus.CONFLICT
+    assert "movement" in cast(str, result["error"])
+    recorder.camera.motion.cancel()
+    status, result = service.control_home()
+    assert status == HTTPStatus.OK
+    assert result["token"] == 3
+    assert result["updated"] is True
+    assert result["message"] == "Home position updated"
+    assert recorder.camera.presets[3].name == "home"
+
+
+def test_control_home_creates_home_when_missing() -> None:
+    service, recorder = services()
+    assert recorder.camera is not None
+    status, result = service.control_home()
+    assert status == HTTPStatus.OK
+    assert result["token"] == 7
+    assert result["updated"] is False
+    assert result["message"] == "Home position saved"
+    assert recorder.camera.presets[7].name == "home"
+
+
+def test_control_step_honors_custom_step_and_control_zoom_bounds() -> None:
+    service, recorder = services()
+    service.backend.move_relative = recorder._move
+    status, _ = service.control_step({"axis": "pan", "direction": 1, "step": 20})
+    assert status == HTTPStatus.OK
+    assert recorder.absolute[-1].pan == 25000
+    service.backend.move_absolute = recorder._move
+    status, _ = service.control_zoom({"percent": 0})
+    assert status == HTTPStatus.OK
+    assert recorder.absolute[-1].zoom == 0
+    status, _ = service.control_zoom({"percent": 100})
+    assert status == HTTPStatus.OK
+    assert recorder.absolute[-1].zoom == 730
+    status, _ = service.control_zoom({"percent": 101})
+    assert status == HTTPStatus.BAD_REQUEST
+
+
+class _PreviewProcess:
+    def __init__(self) -> None:
+        self.stdout = io.BytesIO(
+            b"--ffmpeg\r\nContent-Type: image/jpeg\r\n\r\npreview\r\n--ffmpeg--\r\n"
+            + b"x" * 128
+        )
+        self.terminated = False
+
+    def poll(self) -> None:
+        return None
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        self.terminated = True
+
+
+def test_preview_streams_an_adopted_known_track_and_caps_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, recorder = services()
+    process = _PreviewProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: process)
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", f"{onvif.PREVIEW_PATH}video1")
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.OK
+        assert response.getheader("Content-Type") == "multipart/x-mixed-replace; boundary=ffmpeg"
+        assert b"preview" in response.read(64)
+        connection.close()
+
+        assert server._preview_lock.acquire(timeout=1)
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+            connection.request("GET", f"{onvif.PREVIEW_PATH}video1")
+            response = connection.getresponse()
+            assert response.status == HTTPStatus.SERVICE_UNAVAILABLE
+            response.read()
+            connection.close()
+        finally:
+            server._preview_lock.release()
+
+        assert recorder.camera is not None
+        recorder.camera.adopted = False
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", f"{onvif.PREVIEW_PATH}video1")
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.NOT_FOUND
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
+
+
+def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
+    recorder = Recorder(a_camera())
+    auth = onvif.AdminAuth(onvif.AdminAuth.hash_password("correct horse"))
+    service = onvif.Services(recorder.backend(), host="127.0.0.1", port=8000, auth=auth)
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        assert response.status == 303
+        response.read()
+        connection.request("POST", "/login", body="password=correct+horse",
+                           headers={"Content-Type": "application/x-www-form-urlencoded"})
+        response = connection.getresponse()
+        assert response.status == 303
+        cookies = response.getheaders()
+        response.read()
+        cookie = "; ".join(value for name, value in cookies if name.lower() == "set-cookie")
+        session_cookie = next(value.split(";", 1)[0] for name, value in cookies
+                              if name.lower() == "set-cookie" and value.startswith(f"{onvif.SESSION_COOKIE}="))
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body="{}",
+                           headers={"Content-Type": "application/json", "Cookie": session_cookie})
+        response = connection.getresponse()
+        assert response.status == 403
+        response.read()
+        csrf = next(value.split("=", 1)[1].split(";", 1)[0] for name, value in cookies
+                    if name.lower() == "set-cookie" and value.startswith("osprey_csrf="))
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body='{"axis":"pan","direction":1}',
+                           headers={"Content-Type": "application/json", "Cookie": cookie,
+                                    "X-CSRF-Token": csrf})
+        response = connection.getresponse()
+        assert response.status in (200, 409)
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
+
+
+def test_camera_registry_requires_adopted_canonical_ids_and_scopes_routes() -> None:
+    first, _ = services()
+    registry = onvif.CameraRegistry(first)
+    identifier = registry.ids()[0]
+    assert identifier.startswith("g5-ptz-")
+    assert registry.get(identifier) is first
+    assert registry.get("missing") is None
+    unadopted, _ = services()
+    camera = unadopted.backend.camera()
+    assert camera is not None
+    camera.adopted = False
+    with pytest.raises(ValueError, match="unadopted"):
+        registry.register(unadopted)
+
+
+def test_two_camera_dashboard_and_frigate_api_are_selection_scoped() -> None:
+    first, _ = services()
+    second, _ = services()
+    second_camera = second.backend.camera()
+    assert second_camera is not None
+    second_camera.mac = "02:00:00:00:00:02"
+    first.frigate_url = "http://frigate-one:5000"
+    second.frigate_url = "http://frigate-two:5000"
+    registry = onvif.CameraRegistry(first)
+    second_id = registry.register(second)
+    server = onvif.OnvifServer(first, port=0, registry=registry)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", f"/cameras/{second_id}/status")
+        response = connection.getresponse()
+        page = response.read().decode()
+        assert response.status == 200
+        assert "frigate-two:5000" in page and "frigate-one:5000" not in page
+        connection.request("GET", f"/cameras/{second_id}/api/frigate")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.read() == b'{"base_url": "http://frigate-two:5000", "configured": true}'
+        connection.request("GET", "/cameras/unknown/status")
+        response = connection.getresponse()
+        assert response.status == 404
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
+
+
+def test_preview_malformed_uri_releases_exclusive_lock() -> None:
+    service, _ = services()
+    service.backend.stream_uri = lambda _token: "rtsp://camera:not-a-port/video1"
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=2)
+        connection.request("GET", f"{onvif.PREVIEW_PATH}video1")
+        assert connection.getresponse().status == HTTPStatus.SERVICE_UNAVAILABLE
+        connection.close()
+        assert server._preview_lock.acquire(blocking=False)
+        server._preview_lock.release()
+    finally:
+        server.stop()
+
+
+def test_preview_shutdown_kills_stuck_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StuckProcess:
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+            self.waits = 0
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.waits += 1
+            if not self.killed:
+                raise subprocess.TimeoutExpired("ffmpeg", timeout or 0.0)
+            return 0
+
+        def kill(self) -> None:
+            self.killed = True
+
+    process = StuckProcess()
+    server = onvif.OnvifServer(services()[0], port=0)
+    server._preview_processes.add(process)  # type: ignore[arg-type]
+    monkeypatch.setattr(server, "shutdown", lambda: None)
+    try:
+        server.stop()
+        assert process.terminated and process.killed
+    finally:
+        server.server_close()
+
+
+def test_control_codec_validates_track_and_codec() -> None:
+    service, _ = services()
+    status, _ = service.control_codec({"track": "video1", "codec": "vp9"})
+    assert status == HTTPStatus.BAD_REQUEST
+    status, _ = service.control_codec({"track": "missing", "codec": "h264"})
+    assert status == HTTPStatus.NOT_FOUND
+
+
+def test_control_preset_saves_by_name_and_goes_to_known_name() -> None:
+    service, recorder = services()
+    assert recorder.camera is not None
+    recorder.camera.presets[4] = Preset(4, "Gate", Position())
+    service.backend.set_preset = recorder._set_preset
+    service.backend.goto_preset = recorder._goto
+    status, result = service.control_preset({"action": "save", "name": "gate"})
+    assert status == HTTPStatus.OK
+    assert result["token"] == 4
+    status, result = service.control_preset({"action": "goto", "name": "GATE"})
+    assert status == HTTPStatus.OK
+    assert recorder.preset_gotos[-1] == (4, 1000)
+    assert result["name"] == "Gate"
+
+
+def test_control_preset_rejects_unknown_or_invalid_names() -> None:
+    service, _ = services()
+    status, _ = service.control_preset({"action": "goto", "name": "missing"})
+    assert status == HTTPStatus.NOT_FOUND
+    status, _ = service.control_preset({"action": "save", "name": " "})
+    assert status == HTTPStatus.BAD_REQUEST
+
+
+def test_control_http_requires_json_and_rejects_malformed_payload() -> None:
+    service, _ = services()
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{}", headers={"Content-Type": "text/plain"})
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.UNSUPPORTED_MEDIA_TYPE
+        response.read()
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{bad", headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.BAD_REQUEST
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
