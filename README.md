@@ -59,9 +59,9 @@ storage, updates, and Frigate configuration.
   endpoints for an existing Frigate installation to use for PTZ autotracking.
 - **Distance-aware zoom** — conservative absolute zoom avoids the rapid
   oscillation seen in early relative-zoom testing.
-- **Safety checks** — a fast-target acceptance tool measures detection-to-command
-  delay and predicted-versus-observed motor timing before revised settings are
-  accepted.
+- **Control safety** — shared movement arbitration rejects competing manual,
+  MQTT, sentry, and tracking commands instead of letting sources fight over a
+  camera.
 - **Home Assistant direction** — an alpha add-on scaffold is included for
   contributors and early testers.
 - **Multi-camera and MQTT** — controller-scoped camera registration plus
@@ -83,9 +83,8 @@ Osprey currently runs from this repository with Docker Compose.
 ```bash
 git clone https://github.com/grayslawson/osprey.git
 cd osprey
-docker compose build cuckoo
-docker compose up -d --wait --wait-timeout 120 cuckoo finch
-docker compose --profile test run --rm integration-test
+docker compose build osprey
+docker compose up -d --wait --wait-timeout 120 osprey
 ```
 
 When the verification step completes, open the local operator page:
