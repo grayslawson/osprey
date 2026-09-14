@@ -18,6 +18,14 @@ Set `OSPREY_IMAGE=ghcr.io/grayslawson/osprey:vX.Y.Z` to pin a release. Images ta
 
 Use a small Debian/Ubuntu VM or unprivileged LXC with Docker/Podman and this Compose file. Give it a bridged LAN interface able to reach the camera and existing Frigate, and expose only ONVIF/RTSP to the trusted network. Do not run Frigate in this container. A VM is the fallback if LXC networking or ffmpeg behavior is restricted.
 
+For a repeatable guest setup, copy `scripts/proxmox-install.sh` into the guest and first inspect the plan:
+
+```sh
+sh proxmox-install.sh --host 192.0.2.10 --runtime podman
+```
+
+The helper validates amd64/arm64 and refuses to overwrite an existing state file. Add `--apply` only after reviewing the printed values; it may install the selected runtime with `apt-get`, write `/var/lib/osprey/compose.yaml`, and start the pinned image. Use `--image ghcr.io/grayslawson/osprey:vX.Y.Z` for releases. It never creates or modifies a Proxmox VM/LXC itself and contains no camera credentials.
+
 ## Home Assistant
 
 An alpha add-on scaffold is in [`homeassistant/addon/osprey`](../homeassistant/addon/osprey/README.md). It is not in the official store: per-architecture images must be published and tested with the Home Assistant add-on builder first. HA still uses an external Frigate instance.
