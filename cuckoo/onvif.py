@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import base64
 import subprocess
 import threading
 import time
@@ -121,6 +122,42 @@ class AdminAuth:
     def logout(self, session: str) -> None:
         with self._lock:
             self._sessions.pop(session, None)
+
+
+@dataclass(frozen=True)
+class OnvifAuth:
+    """Optional WS-Security UsernameToken verifier.
+
+    Disabled when ``username`` is unset, preserving camera/Frigate behaviour.
+    PasswordDigest is ``Base64(SHA1(nonce + created + password))`` per ONVIF.
+    """
+    username: str | None = None
+    password: str | None = None
+
+    @classmethod
+    def from_environment(cls) -> "OnvifAuth":
+        return cls(os.environ.get("OSPREY_ONVIF_USERNAME"), os.environ.get("OSPREY_ONVIF_PASSWORD"))
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.username and self.password)
+
+    def valid(self, payload: bytes) -> bool:
+        if not self.enabled:
+            return True
+        try:
+            root = ElementTree.fromstring(payload)
+            token = next((e for e in root.iter() if local_name(e.tag) == "UsernameToken"), None)
+            if token is None:
+                return False
+            values = {local_name(e.tag): (e.text or "") for e in token.iter()}
+            nonce = base64.b64decode(values.get("Nonce", ""), validate=True)
+            created = values.get("Created", "")
+            digest = base64.b64decode(values.get("Password", ""), validate=True)
+            return hmac.compare_digest(values.get("Username", ""), self.username or "") and hmac.compare_digest(
+                digest, hashlib.sha1(nonce + created.encode() + (self.password or "").encode()).digest())
+        except (ElementTree.ParseError, ValueError, TypeError):
+            return False
 
 SOAP: Final = "http://www.w3.org/2003/05/soap-envelope"
 NAMESPACES: Final = {
@@ -467,13 +504,14 @@ class Services:
     """Turns parsed calls into SOAP responses, using only the device model."""
 
     def __init__(self, backend: Backend, host: str, port: int = ONVIF_PORT,
-                 auth: AdminAuth | None = None) -> None:
+                 auth: AdminAuth | None = None, onvif_auth: OnvifAuth | None = None) -> None:
         self.backend = backend
         self.host = host
         self.port = port
         self.subscriptions = Subscriptions()
         self.started_at = time.time()
         self.auth = auth or AdminAuth()
+        self.onvif_auth = onvif_auth or OnvifAuth()
         self.frigate_store = Store.from_environment()
         self.frigate_url = self.frigate_store.load()
 
@@ -1638,6 +1676,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, b"request too large", "text/plain")
             return
         payload = self.rfile.read(length) if length else b""
+        if not self.services.onvif_auth.valid(payload):
+            self._send(HTTPStatus.UNAUTHORIZED, fault("ONVIF authentication required").encode(), "text/xml")
+            return
         call = parse_call(payload)
         if call is None:
             self._send(HTTPStatus.BAD_REQUEST, fault("unparseable request").encode(), "text/xml")
