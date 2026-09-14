@@ -9,9 +9,12 @@ services:
       PYTHONPATH: /workspace/pyunifiwire/src
     volumes:
       - osprey-state:/state
+    # Keep camera protocols private by default. Set OSPREY_BIND explicitly to
+    # the LAN address/interface used by Frigate (never 0.0.0.0 on an untrusted
+    # host).
     ports:
-      - "${OSPREY_ONVIF_PORT:-8000}:8000"
-      - "${OSPREY_RTSP_PORT:-8554}:8554"
+      - "${OSPREY_BIND:-127.0.0.1}:${OSPREY_ONVIF_PORT:-8000}:8000"
+      - "${OSPREY_BIND:-127.0.0.1}:${OSPREY_RTSP_PORT:-8554}:8554"
     restart: unless-stopped
     init: true
     read_only: true
