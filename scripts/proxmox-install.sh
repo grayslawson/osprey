@@ -16,15 +16,30 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$host" ] || { echo '--host is required' >&2; exit 2; }
 case "$runtime" in docker|podman) ;; *) echo '--runtime must be docker or podman' >&2; exit 2;; esac
+case "$host" in *[!A-Za-z0-9._:%\[\]-]*|*[	 \r\n]*) echo 'host contains unsafe characters' >&2; exit 2;; esac
+case "$image" in ''|*[!A-Za-z0-9._:/@-]*) echo 'image contains unsafe characters' >&2; exit 2;; esac
+case "$state" in ''|/|*[!A-Za-z0-9._/-]*) echo 'state directory must be a safe absolute path' >&2; exit 2;; esac
+case "$state" in /*) ;; *) echo 'state directory must be absolute' >&2; exit 2;; esac
 case "$onvif:$rtsp" in *[!0-9:]*|*:|:*) echo 'ports must be numeric' >&2; exit 2;; esac
+[ "$onvif" -ge 1 ] 2>/dev/null && [ "$onvif" -le 65535 ] || { echo 'invalid ONVIF port' >&2; exit 2; }
+[ "$rtsp" -ge 1 ] 2>/dev/null && [ "$rtsp" -le 65535 ] || { echo 'invalid RTSP port' >&2; exit 2; }
 arch=$(uname -m)
 case "$arch" in x86_64|amd64|aarch64|arm64) ;; *) echo "Unsupported architecture: $arch" >&2; exit 1;; esac
 [ "$(id -u)" -eq 0 ] || [ "$apply" != true ] || { echo '--apply must run as root' >&2; exit 1; }
 compose="$state/compose.yaml"
+[ ! -e "$state" ] || [ -d "$state" ] || { echo "state path is not a directory: $state" >&2; exit 1; }
 [ ! -e "$compose" ] || [ "$force" = true ] || { echo "$compose exists; use --force" >&2; exit 1; }
 echo "validated $arch guest; image=$image runtime=$runtime host=$host"
 if [ "$apply" != true ]; then echo "dry-run: would create $state, write compose.yaml, pull image, and start Osprey"; exit 0; fi
 if ! command -v "$runtime" >/dev/null; then command -v apt-get >/dev/null || { echo "Install $runtime first" >&2; exit 1; }; apt-get update; apt-get install -y "$runtime"; fi
+if "$runtime" compose version >/dev/null 2>&1; then
+  compose_cmd="$runtime compose"
+elif command -v "${runtime}-compose" >/dev/null 2>&1; then
+  compose_cmd="${runtime}-compose"
+else
+  echo "$runtime Compose support is required (install its compose plugin)" >&2
+  exit 1
+fi
 mkdir -p "$state"
 cat > "$compose" <<EOF
 services:
@@ -41,5 +56,5 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 EOF
-"$runtime" compose -f "$compose" up -d
-echo "Osprey started; inspect with: $runtime compose -f $compose ps"
+$compose_cmd -f "$compose" up -d
+echo "Osprey started; inspect with: $compose_cmd -f $compose ps"
