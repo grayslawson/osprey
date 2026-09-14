@@ -70,6 +70,12 @@ storage, updates, and Frigate configuration.
 
 See [multi-camera setup](docs/multi-camera.md) and the [MQTT topic contract](docs/mqtt.md).
 
+Before building a checkout, run the read-only [onboarding preflight](docs/onboarding-runbook.md):
+
+```bash
+./docker/onboarding_preflight.sh
+```
+
 ## What we are finishing next
 
 | In progress | Why it matters |
@@ -80,7 +86,7 @@ See [multi-camera setup](docs/multi-camera.md) and the [MQTT topic contract](doc
 
 ## Get started
 
-Osprey currently runs from this repository with Docker Compose.
+Osprey can run from the published GHCR image; see [installation and distribution](docs/installation.md). Docker Compose from this repository remains the development path.
 
 ```bash
 git clone https://github.com/grayslawson/osprey.git
