@@ -28,7 +28,7 @@ open_firewall() {
     printf 'firewall: no nixos-fw chain found; leaving host firewall untouched\n'
     return 0
   fi
-  for port in 7442 7444 7550 15001 18001; do
+  for port in 7442 7444 7550 8000 8554 18001; do
     if sudo iptables -C nixos-fw -p tcp --dport "$port" -j nixos-fw-accept 2>/dev/null; then
       printf 'firewall: tcp/%s already allowed\n' "$port"
     else
@@ -40,8 +40,8 @@ open_firewall() {
 
 allow_onvif_from_lab() {
   # Cuckoo advertises its LAN bind address in ONVIF XAddrs, so the container that
-  # speaks ONVIF to it (the physical Frigate) must reach 8000 and 8554 there.
-  # Scope the accepts to this project's own bridge subnet so the LAN cannot.
+  # External consumers on the project bridge may need ONVIF/RTSP advertised
+  # ports. Scope accepts to this project's own bridge subnet so the LAN cannot.
   local subnet port
   subnet=$(docker network inspect cuckoo-physical-lab_lab \
     --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null | head -n1)
@@ -64,11 +64,10 @@ allow_onvif_from_lab() {
 
 open_firewall
 
-"${compose[@]}" build cuckoo
-"${compose[@]}" up -d --no-deps --wait --wait-timeout 120 cuckoo
+"${compose[@]}" build osprey
+"${compose[@]}" up -d --no-deps --wait --wait-timeout 120 osprey
 
-allow_onvif_from_lab
 "${compose[@]}" ps
 
 printf '\nphysical listeners:\n'
-ss -ltn | awk 'NR == 1 || $4 ~ /:(7442|7444|7550|15001|18001|18555)$/'
+ss -ltn | awk 'NR == 1 || $4 ~ /:(8000|8554|18001)$/'

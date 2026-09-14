@@ -15,10 +15,14 @@ from __future__ import annotations
 import html
 import json
 import logging
+import hashlib
+import hmac
+import os
+import secrets
 import subprocess
 import threading
 import time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from collections import deque
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -28,6 +32,7 @@ from xml.etree import ElementTree
 
 from media import BANDWIDTH_WINDOW
 from model import PAN, TILT, ZOOM, Camera, Position
+from frigate_config import Store
 
 ONVIF_PORT: Final = 8000
 DEVICE_PATH: Final = "/onvif/device_service"
@@ -42,6 +47,79 @@ CONTROL_HOME_PATH: Final = "/control/home"
 CONTROL_PRESET_PATH: Final = "/control/preset"
 CONTROL_ZOOM_PATH: Final = "/control/zoom"
 MANUAL_STEP_FRACTION: Final = 0.04
+LOGIN_PATH: Final = "/login"
+FRIGATE_API_PATH: Final = "/api/frigate"
+SESSION_COOKIE: Final = "osprey_session"
+CSRF_FIELD: Final = "csrf"
+
+
+class AdminAuth:
+    """Small, dependency-free browser auth boundary for the local operator UI.
+
+    Password hashes use ``pbkdf2_sha256$iterations$salt$derived``.  ONVIF SOAP
+    remains unauthenticated because cameras and NVRs cannot use this browser
+    session; only the operator UI, preview, snapshots, and JSON controls use it.
+    """
+
+    def __init__(self, password_hash: str | None = None) -> None:
+        self.password_hash = password_hash.strip() if password_hash else None
+        self._sessions: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.password_hash)
+
+    @classmethod
+    def from_environment(cls) -> "AdminAuth":
+        encoded = os.environ.get("OSPREY_ADMIN_PASSWORD_HASH")
+        password_file = os.environ.get("OSPREY_ADMIN_PASSWORD_FILE")
+        if not encoded and password_file:
+            try:
+                with open(password_file, encoding="utf-8") as handle:
+                    password = handle.read().strip()
+            except OSError as exc:
+                raise RuntimeError(f"cannot read OSPREY_ADMIN_PASSWORD_FILE: {exc}") from exc
+            if password:
+                encoded = cls.hash_password(password)
+        return cls(encoded)
+
+    @staticmethod
+    def hash_password(password: str, iterations: int = 310_000) -> str:
+        salt = secrets.token_hex(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), iterations)
+        return f"pbkdf2_sha256${iterations}${salt}${digest.hex()}"
+
+    def verify(self, password: str) -> bool:
+        if not self.password_hash:
+            return False
+        try:
+            scheme, count, salt, expected = self.password_hash.split("$", 3)
+            if scheme != "pbkdf2_sha256":
+                return False
+            rounds = int(count)
+            if not 100_000 <= rounds <= 2_000_000:
+                return False
+            actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), rounds).hex()
+        except (ValueError, TypeError):
+            return False
+        return hmac.compare_digest(actual, expected)
+
+    def login(self, password: str) -> tuple[str, str] | None:
+        if not self.verify(password):
+            return None
+        session, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+        with self._lock:
+            self._sessions[session] = csrf
+        return session, csrf
+
+    def csrf(self, session: str) -> str | None:
+        with self._lock:
+            return self._sessions.get(session)
+
+    def logout(self, session: str) -> None:
+        with self._lock:
+            self._sessions.pop(session, None)
 
 SOAP: Final = "http://www.w3.org/2003/05/soap-envelope"
 NAMESPACES: Final = {
@@ -387,12 +465,28 @@ def parse_call(payload: bytes) -> Call | None:
 class Services:
     """Turns parsed calls into SOAP responses, using only the device model."""
 
-    def __init__(self, backend: Backend, host: str, port: int = ONVIF_PORT) -> None:
+    def __init__(self, backend: Backend, host: str, port: int = ONVIF_PORT,
+                 auth: AdminAuth | None = None) -> None:
         self.backend = backend
         self.host = host
         self.port = port
         self.subscriptions = Subscriptions()
         self.started_at = time.time()
+        self.auth = auth or AdminAuth()
+        self.frigate_store = Store.from_environment()
+        self.frigate_url = self.frigate_store.load()
+
+    def frigate_settings(self) -> dict[str, object]:
+        return {"base_url": self.frigate_url, "configured": self.frigate_url is not None}
+
+    def set_frigate_url(self, value: object) -> tuple[HTTPStatus, dict[str, object]]:
+        if not isinstance(value, str):
+            return HTTPStatus.BAD_REQUEST, {"error": "base_url must be a string"}
+        try:
+            self.frigate_url = self.frigate_store.save(value)
+        except ValueError as exc:
+            return HTTPStatus.BAD_REQUEST, {"error": str(exc)}
+        return HTTPStatus.OK, self.frigate_settings()
 
     # ------------------------------------------------------------- addressing
 
@@ -535,8 +629,11 @@ class Services:
         mins, secs = divmod(rem, 60)
         uptime = (f"{days}d " if days else "") + f"{hours:02d}:{mins:02d}:{secs:02d}"
 
+        frigate = self.frigate_settings()
+        frigate_url = esc(frigate["base_url"] or "")
         if camera is None:
             body = "<section><h2>Camera</h2><p class='muted'>No camera adopted yet.</p></section>"
+            return "<!doctype html><title>Osprey · operator console</title><p>waiting</p>" + body
         else:
             pos = camera.motion.position
             pan = camera.pan_range.to_normalised(pos.pan)
@@ -673,7 +770,18 @@ class Services:
                         "<p class='muted'>Codec changes are applied by the active encoder backend.</p></section>" if codec_controls else "")
             # Framing is a single operator task: put the browser preview and
             # PTZ buttons in the first two grid cells, side by side on desktop.
-            body = metrics + live_section + controls + camera_section + settings + bandwidth + presets + endpoints
+        frigate = self.frigate_settings()
+        frigate_url = esc(frigate["base_url"] or "")
+        frigate_section = (
+            "<section><h2>Frigate connection</h2>"
+            "<p class='muted'>Osprey connects to an existing Frigate instance; it never manages its configuration.</p>"
+            f"<form id='frigate-form'><label>Base URL <input id='frigate-url' type='url' required "
+            f"value='{frigate_url}' placeholder='http://frigate:5000'></label> "
+            "<button class='primary' type='submit'>Save connection</button></form>"
+            "<p id='frigate-feedback' class='muted' aria-live='polite'>"
+            f"{'Configured' if frigate['configured'] else 'Not configured'}</p></section>"
+        )
+        body = metrics + live_section + controls + camera_section + settings + frigate_section + bandwidth + presets + endpoints
 
         state = "adopted" if camera else "waiting"
         badge = "ok" if camera else "warn"
@@ -730,6 +838,7 @@ class Services:
             f"<div class='grid'>{body}</div>"
             "<footer>Snapshot fallback refreshes every 5s · operator actions are sent to the local controller</footer>"
             "<script>async function post(path,data){const e=document.getElementById('feedback');try{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(e)e.textContent=r.ok?(j.message||'Command completed'):(j.error||'Command failed');return{r:r,j:j}}catch(err){if(e)e.textContent='Controller unavailable — check the camera connection';return null}}const step=document.getElementById('step-size'),stepOut=document.getElementById('step-value');if(step)step.oninput=()=>stepOut.textContent=step.value+'%';document.querySelectorAll('[data-axis]').forEach(b=>b.onclick=()=>post('/control/step',{axis:b.dataset.axis,direction:Number(b.dataset.direction),step:Number(step?.value||4)}));const zoom=document.getElementById('zoom-level'),zoomOut=document.getElementById('zoom-value');if(zoom){let timer;zoom.oninput=()=>{zoomOut.textContent=zoom.value+'%';clearTimeout(timer);timer=setTimeout(()=>post('/control/zoom',{percent:Number(zoom.value)}),350)}}const home=document.getElementById('save-home');if(home)home.onclick=async()=>{home.disabled=true;home.textContent='Saving…';await post('/control/home',{});home.disabled=false;home.textContent='Save current view as Home'};const preset=document.getElementById('save-preset');if(preset)preset.onclick=()=>{const n=document.getElementById('preset-name');if(n.value.trim())post('/control/preset',{action:'save',name:n.value.trim()})};document.querySelectorAll('[data-goto-preset]').forEach(b=>b.onclick=()=>post('/control/preset',{action:'goto',name:b.dataset.gotoPreset}));document.querySelectorAll('[data-track]').forEach(s=>s.onchange=()=>post('/control/codec',{track:s.dataset.track,codec:s.value}));const sf=document.getElementById('snapshot-fallback');if(sf)setInterval(()=>{sf.src='/snapshot/?t='+Date.now()},5000);</script>"
+            "<script>const frigateForm=document.getElementById('frigate-form');if(frigateForm)frigateForm.onsubmit=async(e)=>{e.preventDefault();const out=document.getElementById('frigate-feedback');out.textContent='Saving…';const result=await post('/api/frigate',{base_url:document.getElementById('frigate-url').value});if(result)out.textContent=result.r.ok?'Frigate connection saved':'Save failed: '+(result.j.error||'invalid URL')};</script>"
             "</div></body></html>"
         )
 
@@ -1326,6 +1435,47 @@ def _snake(action: str) -> str:
     return "".join(out)
 
 
+def canonical_camera_id(camera: Camera) -> str:
+    """Stable URL-safe identity; never use display names or array indexes."""
+    mac = "".join(character for character in camera.mac.lower() if character.isalnum())
+    if len(mac) != 12:
+        raise ValueError("camera MAC is required for a canonical camera id")
+    return f"g5-ptz-{mac}"
+
+
+class CameraRegistry:
+    """Thread-safe collection of independently constructed camera services."""
+
+    def __init__(self, services: Services) -> None:
+        self._items: dict[str, Services] = {}
+        self._lock = threading.RLock()
+        self.register(services)
+
+    def register(self, services: Services) -> str:
+        camera = services.backend.camera()
+        if camera is None or not camera.adopted:
+            raise ValueError("cannot register an unadopted camera")
+        identifier = canonical_camera_id(camera)
+        with self._lock:
+            existing = self._items.get(identifier)
+            if existing is not None and existing is not services:
+                raise ValueError(f"camera id already registered: {identifier}")
+            self._items[identifier] = services
+        return identifier
+
+    def get(self, identifier: str) -> Services | None:
+        with self._lock:
+            return self._items.get(identifier)
+
+    def ids(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(self._items))
+
+    def remove(self, identifier: str) -> None:
+        with self._lock:
+            self._items.pop(identifier, None)
+
+
 # -------------------------------------------------------------------- transport
 
 
@@ -1336,17 +1486,64 @@ class _Handler(BaseHTTPRequestHandler):
     def services(self) -> Services:
         server = self.server
         assert isinstance(server, OnvifServer)
-        return server.services
+        return getattr(self, "_active_services", server.services)
+
+    def _select_camera(self, root: str) -> str | None:
+        """Select an explicit camera-scoped route, rejecting ambiguity."""
+        if not root.startswith("/cameras/"):
+            self._active_services = self.server.services  # type: ignore[attr-defined]
+            self._active_camera_id = None
+            return root
+        parts = root.split("/", 3)
+        if len(parts) != 4 or not parts[2] or not parts[3]:
+            self._send(HTTPStatus.NOT_FOUND, b"camera route requires id and resource", "text/plain")
+            return None
+        server = self.server
+        assert isinstance(server, OnvifServer)
+        selected = server.registry.get(parts[2]) if server.registry is not None else None
+        if selected is None:
+            self._send(HTTPStatus.NOT_FOUND, b"unknown camera", "text/plain")
+            return None
+        self._active_services = selected
+        self._active_camera_id = parts[2]
+        return "/" + parts[3]
 
     def log_message(self, format: str, *args: object) -> None:
         log.debug("%s %s", self.address_string(), format % args)
 
     def do_GET(self) -> None:  # noqa: N802 - name fixed by http.server
         root, _, _ = self.path.partition("?")
+        selected_root = self._select_camera(root)
+        if selected_root is None:
+            return
+        root = selected_root
+        if root == LOGIN_PATH:
+            self._login_page()
+            return
+        if root == FRIGATE_API_PATH:
+            if self._require_admin():
+                self._send(HTTPStatus.OK, json.dumps(self.services.frigate_settings()).encode(), "application/json")
+            return
         if root in ("/", "/status", "/status/"):
-            self._send(HTTPStatus.OK, self.services.status_page().encode(), "text/html; charset=utf-8")
+            if not self._require_admin():
+                return
+            page = self.services.status_page()
+            server = self.server
+            active_id = getattr(self, "_active_camera_id", None)
+            if active_id:
+                page = page.replace("/api/frigate", f"/cameras/{html.escape(active_id)}/api/frigate")
+            if isinstance(server, OnvifServer) and server.registry is not None and len(server.registry.ids()) > 1:
+                links = "".join(
+                    f"<a href='/cameras/{html.escape(identifier)}/status'>{html.escape(identifier)}</a> "
+                    for identifier in server.registry.ids()
+                )
+                page = page.replace("<body>", f"<body><nav aria-label='Camera selection'><strong>Camera:</strong> {links}</nav>", 1)
+            self._send(HTTPStatus.OK, page.encode(), "text/html; charset=utf-8")
             return
         if self.path.startswith(SNAPSHOT_PATH):
+            # Snapshot URLs are also consumed by Frigate and ONVIF clients.
+            # They carry an opaque track token and remain public on the
+            # camera-facing ONVIF port; the operator UI and controls are auth'd.
             image = self.services.backend.snapshot()
             if image is None:
                 self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"", "text/plain")
@@ -1354,6 +1551,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, image, "image/jpeg")
             return
         if root.startswith(PREVIEW_PATH):
+            if not self._require_admin():
+                return
             token = unquote(root[len(PREVIEW_PATH):]).strip("/")
             self._serve_preview(token)
             return
@@ -1366,7 +1565,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         server = self.server
         assert isinstance(server, OnvifServer)
-        if not server._preview_lock.acquire(blocking=False):
+        preview_lock = server.preview_lock(getattr(self, "_active_camera_id", None))
+        if not preview_lock.acquire(blocking=False):
             self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"preview busy", "text/plain")
             return
         uri = self.services.backend.stream_uri(token)
@@ -1383,7 +1583,7 @@ class _Handler(BaseHTTPRequestHandler):
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             )
         except (OSError, ValueError):
-            server._preview_lock.release()
+            preview_lock.release()
             self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"preview unavailable", "text/plain")
             return
         server._preview_processes.add(process)
@@ -1409,11 +1609,20 @@ class _Handler(BaseHTTPRequestHandler):
                     process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     process.kill()
-            server._preview_lock.release()
+            preview_lock.release()
 
     def do_POST(self) -> None:  # noqa: N802 - name fixed by http.server
         root, _, _ = self.path.partition("?")
-        if root in (CONTROL_STEP_PATH, CONTROL_HOME_PATH, CONTROL_PRESET_PATH, CONTROL_ZOOM_PATH, "/control/codec"):
+        selected_root = self._select_camera(root)
+        if selected_root is None:
+            return
+        root = selected_root
+        if root == LOGIN_PATH:
+            self._login()
+            return
+        if root in (CONTROL_STEP_PATH, CONTROL_HOME_PATH, CONTROL_PRESET_PATH, CONTROL_ZOOM_PATH, "/control/codec", FRIGATE_API_PATH):
+            if not self._require_admin(csrf=True):
+                return
             self._control_json(root)
             return
         try:
@@ -1435,6 +1644,77 @@ class _Handler(BaseHTTPRequestHandler):
             body = self.services.handle(call)
         status = HTTPStatus.INTERNAL_SERVER_ERROR if "s:Fault" in body else HTTPStatus.OK
         self._send(status, body.encode(), "application/soap+xml; charset=utf-8")
+
+    def _session(self) -> tuple[str, str] | None:
+        cookie = self.headers.get("Cookie", "")
+        session = next((part.split("=", 1)[1] for part in cookie.split("; ")
+                        if part.startswith(f"{SESSION_COOKIE}=")), "")
+        token = self.services.auth.csrf(session)
+        return (session, token) if token else None
+
+    def _require_admin(self, *, csrf: bool = False) -> bool:
+        auth = self.services.auth
+        if not auth.enabled:
+            return True
+        session = self._session()
+        if session is None:
+            if not csrf:
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", LOGIN_PATH)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self._send(HTTPStatus.UNAUTHORIZED, b'{"error":"login required"}', "application/json")
+            return False
+        if csrf:
+            supplied = self.headers.get("X-CSRF-Token", "")
+            if not supplied:
+                supplied = next((part.split("=", 1)[1] for part in self.headers.get("Cookie", "").split("; ")
+                                 if part.startswith("osprey_csrf=")), "")
+            if not hmac.compare_digest(supplied, session[1]):
+                # Drain the rejected request so HTTP/1.1 keep-alive cannot
+                # interpret its JSON bytes as the next request line.
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if 0 <= length <= 4096:
+                        self.rfile.read(length)
+                except ValueError:
+                    pass
+                self._send(HTTPStatus.FORBIDDEN, b'{"error":"invalid csrf token"}', "application/json")
+                return False
+        return True
+
+    def _login_page(self, error: str = "") -> None:
+        if not self.services.auth.enabled:
+            self._send(HTTPStatus.NOT_FOUND, b"admin authentication is not configured", "text/plain")
+            return
+        message = f"<p class='error'>{html.escape(error)}</p>" if error else ""
+        body = ("<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Sign in · Osprey</title><style>body{font:16px system-ui;max-width:26rem;margin:12vh auto;padding:1.5rem;background:#101820;color:#eef}"
+                "input,button{font:inherit;padding:.7rem;margin:.4rem 0;width:100%;box-sizing:border-box}button{background:#6ee7b7;border:0;font-weight:700}.error{color:#fca5a5}</style>"
+                f"<h1>Osprey operator console</h1><p>Sign in to control the camera.</p>{message}"
+                "<form method='post' action='/login'><label>Password<input name='password' type='password' autocomplete='current-password' required autofocus></label><button>Sign in</button></form>")
+        self._send(HTTPStatus.OK, body.encode(), "text/html; charset=utf-8")
+
+    def _login(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > 2048:
+                raise ValueError
+            values = parse_qs(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self._send(HTTPStatus.BAD_REQUEST, b"invalid login request", "text/plain")
+            return
+        session = self.services.auth.login(values.get("password", [""])[0])
+        if session is None:
+            self._login_page("Invalid password")
+            return
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session[0]}; HttpOnly; SameSite=Lax; Path=/")
+        self.send_header("Set-Cookie", f"osprey_csrf={session[1]}; SameSite=Lax; Path=/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _control_json(self, root: str) -> None:
         try:
@@ -1461,6 +1741,8 @@ class _Handler(BaseHTTPRequestHandler):
             status, result = self.services.control_preset(value)
         elif root == CONTROL_ZOOM_PATH:
             status, result = self.services.control_zoom(value)
+        elif root == FRIGATE_API_PATH:
+            status, result = self.services.set_frigate_url(value.get("base_url") if isinstance(value, dict) else None)
         else:
             status, result = self.services.control_codec(value)
         self._send(status, json.dumps(result).encode(), "application/json")
@@ -1486,16 +1768,28 @@ class OnvifServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, services: Services, port: int = ONVIF_PORT) -> None:
+    def __init__(self, services: Services, port: int = ONVIF_PORT,
+                 auth: AdminAuth | None = None,
+                 registry: CameraRegistry | None = None) -> None:
         self.services = services
+        if auth is not None:
+            self.services.auth = auth
+        self.registry = registry
         self._preview_processes: set[subprocess.Popen[bytes]] = set()
-        self._preview_lock = threading.Lock()
+        self._preview_locks: dict[str | None, threading.Lock] = {None: threading.Lock()}
+        # Compatibility for integrations/tests that inspect the single-camera lock.
+        self._preview_lock = self._preview_locks[None]
         super().__init__(("0.0.0.0", port), _Handler)
         self._thread: threading.Thread | None = None
 
     @property
     def port(self) -> int:
         return int(self.server_address[1])
+
+    def preview_lock(self, camera_id: str | None) -> threading.Lock:
+        if camera_id is None:
+            return self._preview_locks[None]
+        return self._preview_locks.setdefault(camera_id, threading.Lock())
 
     def start(self) -> None:
         log.info("onvif listening on :%d%s", self.port, DEVICE_PATH)

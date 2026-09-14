@@ -1,6 +1,6 @@
 """Run cuckoo.
 
-    python3 main.py --host 192.168.1.10
+    python3 main.py --host 192.0.2.10
 
 `--host` is the address the camera should reach us on; it is written into the
 stream destinations, the snapshot upload URL and the PTZ callback, and it is what
@@ -20,6 +20,7 @@ import os
 import signal
 import sys
 import threading
+from http import HTTPStatus
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
@@ -30,12 +31,14 @@ from unifiwire import certs
 import discovery
 import events
 import media
+import mqtt_bridge
 import onvif
 import rtsp
 import snapshots
 from controller import CONTROL_PORT, Controller, normalise_mac
 from unifiwire.envelope import Envelope
 from model import Camera, Codec, Position
+from sentry_runtime import MovementGate
 
 DEFAULT_CERT: Final = "cuckoo.pem"
 SNAPSHOT_WAIT_SEC: Final = 10.0
@@ -62,6 +65,8 @@ class Options:
     dump: Path | None = None
     expected_camera_ip: str | None = None
     expected_camera_mac: str | None = None
+    cameras: tuple[dict[str, object], ...] = ()
+    mqtt: mqtt_bridge.MqttConfig = field(default_factory=mqtt_bridge.MqttConfig)
 
 
 @dataclass
@@ -78,6 +83,7 @@ class Stack:
     services: onvif.Services
     north: onvif.OnvifServer
     finder: discovery.DiscoveryServer
+    mqtt: mqtt_bridge.MqttBridge | None = None
 
     def start_servers(self) -> None:
         self.ingest.start()
@@ -85,9 +91,13 @@ class Stack:
         self.stream.start()
         self.north.start()
         self.finder.start()
+        if self.mqtt is not None:
+            self.mqtt.start()
 
     def stop(self) -> None:
         self.controller.stop()
+        if self.mqtt is not None:
+            self.mqtt.stop()
         for server in (self.finder, self.north, self.stream, self.uploads, self.ingest):
             try:
                 server.stop()
@@ -164,6 +174,10 @@ def resolve_options(args: argparse.Namespace) -> Options:
 
     if not effective["host"]:
         raise SystemExit('no host set — pass --host or set "host" in the config file')
+    try:
+        registered = tuple(config.validate_cameras(effective.get("cameras", [])))
+    except ValueError as exc:
+        raise SystemExit(f"invalid camera registry: {exc}") from exc
     names, codecs = tracks_to_model(effective["tracks"])
     return Options(
         host=effective["host"],
@@ -185,6 +199,8 @@ def resolve_options(args: argparse.Namespace) -> Options:
             if getattr(args, "expected_camera_mac", None)
             else None
         ),
+        cameras=registered,
+        mqtt=mqtt_bridge.MqttConfig.from_mapping(effective.get("mqtt")),
     )
 
 
@@ -217,6 +233,7 @@ def build(options: Options) -> Stack:
         images=images,
         expected_camera_ip=options.expected_camera_ip,
         expected_camera_mac=options.expected_camera_mac,
+        configured_cameras={str(item["mac"]): item for item in options.cameras},
     )
 
     def current() -> Camera | None:
@@ -298,10 +315,44 @@ def build(options: Options) -> Stack:
         set_encoder=set_encoder,
         telemetry=hub.stats,
     )
-    services = onvif.Services(backend, host=options.host, port=options.onvif_port)
+    services = onvif.Services(backend, host=options.host, port=options.onvif_port,
+                               auth=onvif.AdminAuth.from_environment())
     north = onvif.OnvifServer(services, port=options.onvif_port)
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
+    movement_gate = MovementGate()
+
+    def mqtt_result(status: HTTPStatus, result: dict[str, object]) -> dict[str, object]:
+        if status != HTTPStatus.OK:
+            raise RuntimeError(str(result.get("error", "camera command refused")))
+        return result
+
+    def mqtt_step(data: dict[str, object]) -> object:
+        with movement_gate.lease("mqtt"):
+            status, result = services.control_step(data)
+            return mqtt_result(status, result)
+
+    def mqtt_zoom(data: dict[str, object]) -> object:
+        with movement_gate.lease("mqtt"):
+            status, result = services.control_zoom(data)
+            return mqtt_result(status, result)
+
+    def mqtt_goto(name: str) -> object:
+        with movement_gate.lease("mqtt"):
+            status, result = services.control_preset({"action": "goto", "name": name})
+            return mqtt_result(status, result)
+
+    def mqtt_home() -> object:
+        with movement_gate.lease("mqtt"):
+            status, result = services.control_home()
+            return mqtt_result(status, result)
+
+    mqtt_runtime: mqtt_bridge.MqttBridge | None = None
+    if options.mqtt.enabled:
+        mqtt_runtime = mqtt_bridge.MqttBridge(
+            options.mqtt, mqtt_bridge.PahoMqttAdapter(options.mqtt), movement_gate,
+            step=mqtt_step, zoom=mqtt_zoom, goto_preset=mqtt_goto, home=mqtt_home,
+        )
 
     identity = discovery.identity_for(
         options.host, north.port, onvif.DEVICE_PATH, options.name, ptz=False
@@ -358,6 +409,7 @@ def build(options: Options) -> Stack:
         stream=stream,
         services=services,
         north=north,
+        mqtt=mqtt_runtime,
         finder=finder,
     )
 

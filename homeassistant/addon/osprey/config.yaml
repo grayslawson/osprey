@@ -2,15 +2,14 @@ name: Osprey
 version: "0.1.0-alpha.1"
 slug: osprey
 description: Osprey PTZ operator and Frigate camera bridge
-url: https://github.com/REPLACE_ME/osprey
+url: https://github.com/grayslawson/osprey
 startup: services
 boot: auto
 init: true
 arch:
   - amd64
   - aarch64
-  - armv7
-image: ghcr.io/REPLACE_ME/osprey-addon-{arch}
+image: ghcr.io/grayslawson/osprey-addon-{arch}
 host_network: true
 webui: http://[HOST]:[PORT:8000]/
 ingress: true

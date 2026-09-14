@@ -79,7 +79,7 @@ container, the HEVC/AAC bitstream — lives in
 
 ```sh
 ./test.sh                            # mypy --strict, then pytest. No camera, no network beyond loopback.
-./run.sh --host 192.168.1.10         # --host must be routable from the camera and clients — not loopback
+./run.sh --host 192.0.2.10           # --host must be routable from the camera and clients — not loopback
 ```
 
 `--host` is written into the stream destinations, the snapshot upload URL, the PTZ
@@ -97,11 +97,22 @@ missing file just means defaults + flags. So the same run is expressible either 
 ```jsonc
 // cuckoo.json
 {
-  "host": "192.168.1.10",
+  "host": "192.0.2.10",
+  "cameras": [
+    { "mac": "AABBCCDDEEFF", "name": "Driveway", "ip": "192.0.2.20" },
+    { "mac": "112233445566", "name": "Back yard" }
+  ],
   "tracks": { "video1": "h264", "video2": "h265", "video3": "h264" },
   "ports": { "onvif": 8000, "rtsp": 8554 }
 }
 ```
+
+`cameras` is optional. When omitted or empty, the controller retains its
+backwards-compatible accept-any-camera behavior. When present, each camera must
+have a unique 12-digit MAC (`:` and `-` separators are accepted), and only
+registered cameras may connect. `name` is shown to ONVIF clients; `ip` is an
+optional operator hint and is not used as the camera identity. Invalid entries
+are rejected at startup with the offending list index.
 
 ```sh
 ./run.sh --config cuckoo.json                       # all from the file

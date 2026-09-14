@@ -68,6 +68,8 @@ storage, updates, and Frigate configuration.
   state, then automate them with optional broker-backed MQTT commands and
   non-retained control events.
 
+See [multi-camera setup](docs/multi-camera.md) and the [MQTT topic contract](docs/mqtt.md).
+
 ## What we are finishing next
 
 | In progress | Why it matters |
@@ -102,12 +104,15 @@ Apple Silicon and other architectures have not been validated yet.
 
 In **Settings → Frigate**, enter the base URL of the Frigate you already
 operate—for example `http://frigate.local:5000` or
-`http://192.168.1.40:5000`. Osprey uses it for integration health and
+`http://192.0.2.40:5000`. Osprey uses it for integration health and
 convenient operator links; it never starts, upgrades, or rewrites Frigate.
 
 Then add Osprey as the camera's ONVIF/RTSP source in your own Frigate config
 and enable Frigate autotracking. Your detector, object, zone, recording,
 zoom-mode, and retention choices remain entirely in Frigate.
+
+See the [existing-Frigate integration guide](docs/frigate-integration.md) for
+the network contract and a supervised verification path.
 
 ```yaml
 # Your existing Frigate configuration — illustrative only.

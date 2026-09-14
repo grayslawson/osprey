@@ -140,6 +140,7 @@ class Controller:
         images: snapshots.Store | None = None,
         expected_camera_ip: str | None = None,
         expected_camera_mac: str | None = None,
+        configured_cameras: dict[str, dict[str, object]] | None = None,
     ) -> None:
         self.cert = cert
         self.ingest_host = ingest_host
@@ -154,6 +155,7 @@ class Controller:
         self.expected_camera_mac = (
             normalise_mac(expected_camera_mac) if expected_camera_mac else None
         )
+        self.configured_cameras = configured_cameras or {}
         self.cameras: dict[str, Camera] = {}
         self._sessions: dict[socket.socket, Session] = {}
         self._sessions_lock = threading.Lock()
@@ -232,7 +234,8 @@ class Controller:
                 if camera_mac != self.expected_camera_mac:
                     raise ws.ProtocolError(f"unexpected camera MAC {camera_mac}")
             sock.sendall(ws.handshake_response(upgrade))
-            sock.settimeout(None)
+            # Selector-driven reads must never block indefinitely on TLS.
+            sock.settimeout(0.5)
         except (ssl.SSLError, OSError, ws.ProtocolError) as exc:
             preview = locals().get("request", b"")
             if isinstance(preview, bytes) and preview:
@@ -251,7 +254,14 @@ class Controller:
             if upgrade.camera_mac
             else f"unknown-{peer[0]}"
         )
+        if self.configured_cameras and mac not in self.configured_cameras:
+            log.warning("rejected unregistered camera: mac=%s model=%s", mac, upgrade.camera_model)
+            sock.close()
+            return
         camera = self.cameras.setdefault(mac, Camera(mac=mac))
+        registration = self.configured_cameras.get(mac)
+        if registration is not None:
+            camera.name = str(registration.get("name", camera.name or mac))
         camera.model = upgrade.camera_model or camera.model
         camera.firmware = upgrade.camera_firmware or camera.firmware
         if not camera.tracks:
@@ -322,6 +332,8 @@ class Controller:
             return
         try:
             chunk = sock.recv(READ_SIZE)
+        except (TimeoutError,):
+            return
         except (OSError, ssl.SSLError):
             chunk = b""
         if not chunk:

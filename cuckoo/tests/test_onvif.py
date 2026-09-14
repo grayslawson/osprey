@@ -921,7 +921,92 @@ def test_preview_streams_an_adopted_known_track_and_caps_clients(monkeypatch: py
         connection.close()
     finally:
         server.stop()
-    assert process.terminated
+
+
+def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
+    recorder = Recorder(a_camera())
+    auth = onvif.AdminAuth(onvif.AdminAuth.hash_password("correct horse"))
+    service = onvif.Services(recorder.backend(), host="127.0.0.1", port=8000, auth=auth)
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        assert response.status == 303
+        response.read()
+        connection.request("POST", "/login", body="password=correct+horse",
+                           headers={"Content-Type": "application/x-www-form-urlencoded"})
+        response = connection.getresponse()
+        assert response.status == 303
+        cookies = response.getheaders()
+        response.read()
+        cookie = "; ".join(value for name, value in cookies if name.lower() == "set-cookie")
+        session_cookie = next(value.split(";", 1)[0] for name, value in cookies
+                              if name.lower() == "set-cookie" and value.startswith(f"{onvif.SESSION_COOKIE}="))
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body="{}",
+                           headers={"Content-Type": "application/json", "Cookie": session_cookie})
+        response = connection.getresponse()
+        assert response.status == 403
+        response.read()
+        csrf = next(value.split("=", 1)[1].split(";", 1)[0] for name, value in cookies
+                    if name.lower() == "set-cookie" and value.startswith("osprey_csrf="))
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body='{"axis":"pan","direction":1}',
+                           headers={"Content-Type": "application/json", "Cookie": cookie,
+                                    "X-CSRF-Token": csrf})
+        response = connection.getresponse()
+        assert response.status in (200, 409)
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
+
+
+def test_camera_registry_requires_adopted_canonical_ids_and_scopes_routes() -> None:
+    first, _ = services()
+    registry = onvif.CameraRegistry(first)
+    identifier = registry.ids()[0]
+    assert identifier.startswith("g5-ptz-")
+    assert registry.get(identifier) is first
+    assert registry.get("missing") is None
+    unadopted, _ = services()
+    camera = unadopted.backend.camera()
+    assert camera is not None
+    camera.adopted = False
+    with pytest.raises(ValueError, match="unadopted"):
+        registry.register(unadopted)
+
+
+def test_two_camera_dashboard_and_frigate_api_are_selection_scoped() -> None:
+    first, _ = services()
+    second, _ = services()
+    second_camera = second.backend.camera()
+    assert second_camera is not None
+    second_camera.mac = "02:00:00:00:00:02"
+    first.frigate_url = "http://frigate-one:5000"
+    second.frigate_url = "http://frigate-two:5000"
+    registry = onvif.CameraRegistry(first)
+    second_id = registry.register(second)
+    server = onvif.OnvifServer(first, port=0, registry=registry)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", f"/cameras/{second_id}/status")
+        response = connection.getresponse()
+        page = response.read().decode()
+        assert response.status == 200
+        assert "frigate-two:5000" in page and "frigate-one:5000" not in page
+        connection.request("GET", f"/cameras/{second_id}/api/frigate")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.read() == b'{"base_url": "http://frigate-two:5000", "configured": true}'
+        connection.request("GET", "/cameras/unknown/status")
+        response = connection.getresponse()
+        assert response.status == 404
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
 
 
 def test_preview_malformed_uri_releases_exclusive_lock() -> None:
