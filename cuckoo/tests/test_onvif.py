@@ -1106,3 +1106,24 @@ def test_control_http_requires_json_and_rejects_malformed_payload() -> None:
         connection.close()
     finally:
         server.stop()
+
+
+def test_soap_request_body_is_bounded_before_parsing() -> None:
+    service, _ = services()
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        body = b"<" * (onvif.MAX_SOAP_REQUEST_BYTES + 1)
+        connection.request(
+            "POST",
+            onvif.DEVICE_PATH,
+            body=body,
+            headers={"Content-Type": "application/soap+xml"},
+        )
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
