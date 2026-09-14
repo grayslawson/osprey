@@ -313,3 +313,17 @@ def test_a_real_camera_shaped_config_makes_the_stream_ready() -> None:
     assert result is None, "a config tag yields no frame"
     assert stream.ready, "the real camera's parameter sets were not recognised"
     assert stream.parameters.length_size == 4
+def test_ingest_allowlist_rejects_unregistered_peer() -> None:
+    hub = media.Hub()
+    server = media.IngestServer(hub, port=0, allowed_peers={"192.0.2.1"})
+    server.start()
+    try:
+        address = server.server_address
+        host = str(address[0])
+        port = int(address[1])
+        with socket.create_connection((host, port), timeout=5) as client:
+            client.sendall(stream_bytes("video1"))
+        time.sleep(0.05)
+        assert hub.names() == []
+    finally:
+        server.stop()

@@ -1,7 +1,9 @@
 name: osprey
 services:
   osprey:
-    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:latest}
+    # Require an explicit image reference. The update helper validates that
+    # references use an immutable release tag or digest.
+    image: ${OSPREY_IMAGE:?Set OSPREY_IMAGE to an immutable release tag or digest}
     pull_policy: always
     working_dir: /workspace/cuckoo
     command: ["python3", "main.py", "--host", "${OSPREY_HOST:?Set OSPREY_HOST to the host/LAN address}", "--cert", "/state/osprey.pem"]

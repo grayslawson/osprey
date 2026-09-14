@@ -27,7 +27,6 @@ set +a
 # environment names used by the Osprey deployment files.
 CUCKOO_PHYSICAL_BIND=${OSPREY_BIND:-}
 G5_PTZ_IP=${OSPREY_CAMERA_IP:-}
-G5_PTZ_MAC=${OSPREY_CAMERA_MAC:-}
 
 for name in OSPREY_HOST OSPREY_BIND OSPREY_CAMERA_IP OSPREY_CAMERA_MAC; do
   [[ -n ${!name:-} ]] || fail "missing $name in $ENV_FILE"
@@ -53,7 +52,7 @@ observed=$(ip neigh show "$OSPREY_CAMERA_IP" |
   head -n1)
 [[ -n $observed ]] || fail "no ARP entry for ${G5_PTZ_IP}; cannot verify the camera MAC"
 [[ $(normalise_mac "$observed") == "$MAC" ]] ||
-  fail "camera MAC ${observed} does not match G5_PTZ_MAC ${MAC}"
+fail "camera MAC ${observed} does not match OSPREY_CAMERA_MAC ${MAC}"
 
 timeout 5 bash -c "</dev/tcp/${OSPREY_CAMERA_IP}/443" 2>/dev/null ||
   fail "camera ${G5_PTZ_IP} did not accept HTTPS on TCP 443"
@@ -70,7 +69,7 @@ compose=(
   --env-file "$ENV_FILE"
   -f compose.yaml
   -f compose.physical.yaml
-  -p cuckoo-physical-lab
+  -p osprey-physical
 )
 
 docker compose --env-file "$ENV_FILE" -f compose.yaml config --quiet ||
@@ -108,7 +107,7 @@ expect_bind 18001 "$OSPREY_BIND"
 
 printf 'preflight: camera %s (%s) reachable and verified over ARP\n' "$G5_PTZ_IP" "$MAC"
 printf 'preflight: LAN binds on %s -> 8000, 8554, 18001\n' "$CUCKOO_PHYSICAL_BIND"
-printf 'preflight: advertised ONVIF/RTSP on %s -> 8000, 8554 (firewall: lab subnet only)\n' \
+printf 'preflight: advertised ONVIF/RTSP on %s -> 8000, 8554 (firewall: deployment subnet only)\n' \
   "$CUCKOO_PHYSICAL_BIND"
 printf 'preflight: loopback only -> 18555\n'
 printf 'preflight: Osprey Compose renders; no camera, firewall, or Protect state changed\n'

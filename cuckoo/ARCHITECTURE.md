@@ -104,10 +104,11 @@ against a fake peer:
   TLS, then the ONVIF face checked against it.
 - **acceptance** ([`harness/`](harness)) — a real ONVIF client (`python-onvif-zeep`,
   the Home Assistant stack) walking the onboarding and the full PTZ surface against
-  a live cuckoo, verified against both finch and a real G5 PTZ.
+  a live Osprey, verified against a fake peer and a real G5 PTZ.
 
 ## Not built
 
-Talkback (AAC out over UDP `:7004`), MJPEG `:7551`, applying Imaging settings
-(they are reported, not yet written), ONVIF authentication, and a wire-level
-preset delete (`RemovePreset` currently forgets the slot locally only).
+Talkback (AAC out over UDP `:7004`), MJPEG `:7551`, applying Imaging settings,
+and a wire-level preset delete (`RemovePreset` currently forgets the slot
+locally only). ONVIF UsernameToken authentication is implemented as an opt-in
+deployment feature; test Frigate compatibility before enabling it.

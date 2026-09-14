@@ -15,8 +15,8 @@ camera itself.
     python3 custody.py restore --host <controller> --user <u> --password <p>
     python3 custody.py status  --host <controller> --user <u> --password <p>
 
-Without `--mac` it acts on every adopted camera, which on a lab controller is
-usually the one you mean. Pass `--mac` when it is not.
+Without `--mac`, the action applies to every adopted camera returned by the
+resident controller. Pass `--mac` to limit it to one camera.
 """
 
 from __future__ import annotations

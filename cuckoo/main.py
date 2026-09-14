@@ -1,6 +1,6 @@
 """Run cuckoo.
 
-    python3 main.py --host 192.168.1.10
+    python3 main.py --host 192.0.2.10
 
 `--host` is the address the camera should reach us on; it is written into the
 stream destinations, the snapshot upload URL and the PTZ callback, and it is what
@@ -33,6 +33,7 @@ import events
 import media
 import mqtt_bridge
 import onvif
+import logbuffer
 import rtsp
 import snapshots
 from controller import CONTROL_PORT, Controller, normalise_mac
@@ -60,6 +61,9 @@ class Options:
     snapshot_port: int = snapshots.SNAPSHOT_PORT
     rtsp_port: int = rtsp.RTSP_PORT
     onvif_port: int = onvif.ONVIF_PORT
+    # Optional second ONVIF persona for read-only NVR/Protect consumption.
+    # RTSP remains shared with the primary persona.
+    onvif_read_only_port: int | None = None
     discovery_port: int = discovery.WS_DISCOVERY_PORT
     announce: bool = True
     dump: Path | None = None
@@ -83,6 +87,7 @@ class Stack:
     services: onvif.Services
     north: onvif.OnvifServer
     finder: discovery.DiscoveryServer
+    read_only_north: onvif.OnvifServer | None = None
     mqtt: mqtt_bridge.MqttBridge | None = None
 
     def start_servers(self) -> None:
@@ -90,6 +95,8 @@ class Stack:
         self.uploads.start()
         self.stream.start()
         self.north.start()
+        if self.read_only_north is not None:
+            self.read_only_north.start()
         self.finder.start()
         if self.mqtt is not None:
             self.mqtt.start()
@@ -98,7 +105,9 @@ class Stack:
         self.controller.stop()
         if self.mqtt is not None:
             self.mqtt.stop()
-        for server in (self.finder, self.north, self.stream, self.uploads, self.ingest):
+        for server in (self.finder, self.read_only_north, self.north, self.stream, self.uploads, self.ingest):
+            if server is None:
+                continue
             try:
                 server.stop()
             except OSError as exc:  # pragma: no cover - shutdown races
@@ -167,11 +176,17 @@ def resolve_options(args: argparse.Namespace) -> Options:
     for flag, key in (
         (args.control_port, "control"), (args.ingest_port, "ingest"),
         (args.snapshot_port, "snapshot"), (args.rtsp_port, "rtsp"),
-        (args.onvif_port, "onvif"), (args.discovery_port, "discovery"),
+        (args.onvif_port, "onvif"),
+        (getattr(args, "onvif_read_only_port", None), "onvif_read_only"),
+        (args.discovery_port, "discovery"),
     ):
         if flag is not None:
             ports[key] = flag
 
+    try:
+        config.validate_runtime(effective)
+    except ValueError as exc:
+        raise SystemExit(f"invalid runtime configuration: {exc}") from exc
     if not effective["host"]:
         raise SystemExit('no host set — pass --host or set "host" in the config file')
     try:
@@ -190,6 +205,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
         snapshot_port=ports["snapshot"],
         rtsp_port=ports["rtsp"],
         onvif_port=ports["onvif"],
+        onvif_read_only_port=ports.get("onvif_read_only"),
         discovery_port=ports["discovery"],
         announce=effective["announce"],
         dump=args.dump,
@@ -209,14 +225,33 @@ def build(options: Options) -> Stack:
 
     hub = media.Hub()
 
+    # Media and snapshot callbacks are separate unauthenticated TCP surfaces.
+    # When camera addresses are known, keep them camera-only as well as guarding
+    # the TLS control channel. An empty set preserves discovery for deployments
+    # where the camera receives a dynamic address; those deployments must use a
+    # firewall or VLAN boundary (see docs/security.md).
+    allowed_camera_peers: set[str] = set()
+    for item in options.cameras:
+        camera_ip = item.get("ip")
+        if isinstance(camera_ip, str) and camera_ip.strip():
+            allowed_camera_peers.add(camera_ip.strip())
+    if options.expected_camera_ip:
+        allowed_camera_peers.add(options.expected_camera_ip)
+
     # Listeners first: every URL we hand out has to name the port actually bound,
     # not the one asked for. They differ whenever a port is left to the system.
     ingest = media.IngestServer(
-        hub, port=options.ingest_port, fallback_name=options.tracks[0] if options.tracks else "video1"
+        hub,
+        port=options.ingest_port,
+        fallback_name=options.tracks[0] if options.tracks else "video1",
+        allowed_peers=allowed_camera_peers,
     )
     ingest_port = int(ingest.server_address[1])
     images = snapshots.Store("https://placeholder")  # rewritten below, once bound
-    uploads = snapshots.SnapshotServer(images, cert=options.cert, port=options.snapshot_port)
+    uploads = snapshots.SnapshotServer(
+        images, cert=options.cert, port=options.snapshot_port,
+        allowed_peers=allowed_camera_peers,
+    )
     snapshot_port = int(uploads.server_address[1])
     images.base_url = f"https://{options.host}:{snapshot_port}"
     stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port)
@@ -298,29 +333,105 @@ def build(options: Options) -> Stack:
         fresh = control.snapshot(mac, timeout=SNAPSHOT_WAIT_SEC)
         return fresh if fresh is not None else images.latest.get(mac)
 
-    backend = onvif.Backend(
-        camera=current,
-        stream_uri=lambda token: f"rtsp://{options.host}:{stream.port}/{token}",
-        snapshot_uri=lambda token: (
-            f"http://{options.host}:{north.port}{onvif.SNAPSHOT_PATH}{token}"
-        ),
-        snapshot=snapshot,
-        move_absolute=move,
-        move_relative=move,
-        goto_preset=goto_preset,
-        set_preset=set_preset,
-        remove_preset=remove_preset,
-        refresh_position=refresh_position,
-        move_refusal=move_refusal,
-        set_encoder=set_encoder,
-        telemetry=hub.stats,
-    )
+    def backend_for(camera_mac: str | None) -> onvif.Backend:
+        """Build a northbound backend pinned to one camera identity.
+
+        The media and discovery listeners are shared, but every ONVIF service
+        gets camera-specific PTZ, snapshot, and preset callables. This prevents
+        a second adopted camera from accidentally moving the first one.
+        """
+        def selected() -> Camera | None:
+            return control.cameras.get(camera_mac) if camera_mac else current()
+
+        def selected_mac() -> str | None:
+            camera = selected()
+            return camera.mac if camera is not None else None
+
+        def selected_move(position: Position) -> bool:
+            mac = selected_mac()
+            return control.move(mac, position) if mac else False
+
+        def selected_goto(index: int, speed: int) -> bool:
+            mac = selected_mac()
+            return control.goto_preset(mac, index, speed) if mac else False
+
+        def selected_set(name: str, index: int | None) -> int | None:
+            mac = selected_mac()
+            return control.set_preset(mac, name, index) if mac else None
+
+        def selected_remove(index: int) -> bool:
+            mac = selected_mac()
+            return control.remove_preset(mac, index) if mac else False
+
+        def selected_refresh() -> bool:
+            mac = selected_mac()
+            return control.poll_position(mac) if mac else False
+
+        def selected_snapshot() -> bytes | None:
+            mac = selected_mac()
+            if mac is None:
+                return None
+            fresh = control.snapshot(mac, timeout=SNAPSHOT_WAIT_SEC)
+            return fresh if fresh is not None else images.latest.get(mac)
+
+        def selected_encoder(token: str, codec: str) -> bool:
+            mac = selected_mac()
+            if mac is None:
+                return False
+            try:
+                return control.set_codec(mac, token, Codec(codec))
+            except ValueError:
+                return False
+
+        def selected_refusal() -> str:
+            camera = selected()
+            if camera is None:
+                return "no camera"
+            if not camera.motion.available:
+                return "PTZ channel unavailable"
+            if camera.motion.activity != 0:
+                return "the camera is already moving"
+            return "the camera is not accepting movement"
+
+        return onvif.Backend(
+            camera=selected,
+            stream_uri=lambda token: f"rtsp://{options.host}:{stream.port}/{token}",
+            snapshot_uri=lambda token: f"http://{options.host}:{north.port}{onvif.SNAPSHOT_PATH}{token}",
+            snapshot=selected_snapshot,
+            move_absolute=selected_move,
+            move_relative=selected_move,
+            goto_preset=selected_goto,
+            set_preset=selected_set,
+            remove_preset=selected_remove,
+            refresh_position=selected_refresh,
+            move_refusal=selected_refusal,
+            set_encoder=selected_encoder,
+            telemetry=hub.stats,
+        )
+
+    backend = backend_for(None)
+    registry = onvif.CameraRegistry()
+    read_only_registry = onvif.CameraRegistry()
     services = onvif.Services(backend, host=options.host, port=options.onvif_port,
                                auth=onvif.AdminAuth.from_environment(),
                                onvif_auth=onvif.OnvifAuth.from_environment())
-    north = onvif.OnvifServer(services, port=options.onvif_port)
+    north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry)
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
+    read_only_north: onvif.OnvifServer | None = None
+    if options.onvif_read_only_port is not None:
+        read_only_services = onvif.Services(
+            backend,
+            host=options.host,
+            port=options.onvif_read_only_port,
+            onvif_auth=services.onvif_auth,
+            read_only=True,
+        )
+        read_only_north = onvif.OnvifServer(
+            read_only_services, port=options.onvif_read_only_port,
+            registry=read_only_registry,
+        )
+        read_only_services.port = read_only_north.port
     movement_gate = MovementGate()
 
     def mqtt_result(status: HTTPStatus, result: dict[str, object]) -> dict[str, object]:
@@ -363,6 +474,21 @@ def build(options: Options) -> Stack:
     )
 
     def adopted(camera: Camera) -> None:
+        # Register a camera-pinned service as soon as adoption completes. The
+        # primary unscoped service remains for backwards-compatible single-camera
+        # clients; multi-camera clients use /cameras/{id}/ routes.
+        if registry.get(onvif.canonical_camera_id(camera)) is None:
+            camera_services = onvif.Services(
+                backend_for(camera.mac), host=options.host, port=north.port,
+                auth=services.auth, onvif_auth=services.onvif_auth,
+            )
+            registry.register(camera_services)
+        if read_only_north is not None and read_only_registry.get(onvif.canonical_camera_id(camera)) is None:
+            read_only_services = onvif.Services(
+                backend_for(camera.mac), host=options.host, port=read_only_north.port,
+                auth=services.auth, onvif_auth=services.onvif_auth, read_only=True,
+            )
+            read_only_registry.register(read_only_services)
         log.info(
             "camera ready: %s model=%s ptz=%s pan=%s..%s tilt=%s..%s",
             camera.mac, camera.model or "?", camera.is_ptz,
@@ -412,6 +538,7 @@ def build(options: Options) -> Stack:
         north=north,
         mqtt=mqtt_runtime,
         finder=finder,
+        read_only_north=read_only_north,
     )
 
 
@@ -427,6 +554,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--snapshot-port", type=int, default=None)
     parser.add_argument("--rtsp-port", type=int, default=None)
     parser.add_argument("--onvif-port", type=int, default=None)
+    parser.add_argument(
+        "--onvif-read-only-port", type=int, default=None,
+        help="optional second ONVIF port advertising media without PTZ",
+    )
     parser.add_argument("--discovery-port", type=int, default=None)
     parser.add_argument("--cert", type=Path, default=None)
     parser.add_argument(
@@ -456,11 +587,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # Configure the deployment's stderr/journal first, then attach the bounded
+    # redacted tail used by the authenticated operator console.  ``basicConfig``
+    # is a no-op when handlers already exist, so this order is intentional.
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
         stream=sys.stderr,
     )
+    logbuffer.install()
 
     options = resolve_options(args)
     stack = build(options)

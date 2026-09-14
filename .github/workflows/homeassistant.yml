@@ -1,0 +1,105 @@
+name: Home Assistant add-on images
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Image tag to build (for example, v0.2.0)
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  IMAGE_NAME: osprey-addon
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare architecture matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+      - name: Resolve image version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          raw_version="${RELEASE_VERSION:-${MANUAL_VERSION:-}}"
+          version="${raw_version#v}"
+          if [ -z "$version" ]; then
+            echo "A release tag or workflow_dispatch version is required" >&2
+            exit 1
+          fi
+          case "$version" in
+            *[!A-Za-z0-9._+-]*) echo "Invalid image version: $raw_version" >&2; exit 1 ;;
+          esac
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*|[0-9]*.[0-9]*.[0-9]*-*) ;;
+            *) echo "Invalid image version: $raw_version" >&2; exit 1 ;;
+          esac
+          manifest_version=$(grep '^version:' homeassistant/addon/osprey/config.yaml | cut -d: -f2- | tr -d ' "' | sed -n '1p')
+          if [ "$manifest_version" != "$version" ]; then
+            echo "Home Assistant manifest version ($manifest_version) must match release version ($version)" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build and publish ${{ matrix.arch }} image
+        uses: home-assistant/builder/actions/build-image@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          context: .
+          file: homeassistant/addon/osprey/Dockerfile
+          image: ${{ matrix.image }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          push: "true"
+          version: ${{ needs.prepare.outputs.version }}
+
+  manifest:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Publish multi-architecture manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}

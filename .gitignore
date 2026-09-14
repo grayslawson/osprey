@@ -1,4 +1,4 @@
-# Private, user-supplied camera fixtures. Keep them local to this lab.
+# Private, user-supplied camera fixtures. Keep them local; never publish them.
 fixtures/*.local.h265
 fixtures/*.local.mp4
 .env

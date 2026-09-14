@@ -37,6 +37,7 @@ from model import Camera, Codec, Preset
 CONTROL_PORT: Final = 7442
 READ_SIZE: Final = 65536
 SELECT_TIMEOUT_SEC: Final = 0.5
+CONTROL_SUBPROTOCOLS: Final = frozenset({"secure_transfer", ptz.PTZ_SUBPROTOCOL})
 
 # The camera opens its dedicated ptz1 socket only in answer to EnablePtzControl,
 # and it does not reliably re-dial after a drop — a stale socket from a previous
@@ -221,6 +222,14 @@ class Controller:
             sock.settimeout(10.0)
             request = sock.recv(READ_SIZE)
             upgrade = ws.parse_upgrade(request)
+            if upgrade.path != ws.CONTROL_PATH:
+                raise ws.ProtocolError("unexpected websocket path")
+            if upgrade.subprotocol not in CONTROL_SUBPROTOCOLS:
+                raise ws.ProtocolError("unsupported camera websocket subprotocol")
+            try:
+                camera_mac = normalise_mac(upgrade.camera_mac)
+            except ValueError as exc:
+                raise ws.ProtocolError("camera-mac header is required and must be a MAC") from exc
             if (
                 self.expected_camera_ip is not None
                 and peer[0] != self.expected_camera_ip
@@ -249,11 +258,7 @@ class Controller:
             raw.close()
             return
 
-        mac = (
-            normalise_mac(upgrade.camera_mac)
-            if upgrade.camera_mac
-            else f"unknown-{peer[0]}"
-        )
+        mac = camera_mac
         if self.configured_cameras and mac not in self.configured_cameras:
             log.warning("rejected unregistered camera: mac=%s model=%s", mac, upgrade.camera_model)
             sock.close()

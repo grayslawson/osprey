@@ -11,8 +11,8 @@ at it.
 Everything camera-facing was measured off a real controller and a real camera, not
 invented. No SSH, no shelling into the camera, no patched firmware.
 
-> It has a mirror image: [`finch`](https://github.com/rjmotion/finch), a camera
-> that isn't there. Run the two against each other and the whole protocol is
+> It is the camera-facing controller and standard ONVIF/RTSP server for a
+> physical UVC G5 PTZ.
 > exercised with no UniFi hardware at all.
 
 ## Verified against real hardware
@@ -25,8 +25,8 @@ accord, and mixed codecs work too — pin a channel to `h265` and it streams
 alongside the H.264 ones.) Its ONVIF face was checked by **Home Assistant's own
 client**
 (`python-onvif-zeep`), which walked the full onboarding — profiles, stream URI,
-snapshot, the complete PTZ move-and-preset set — against both the real camera and
-finch. See [`harness/`](harness).
+snapshot, the complete PTZ move-and-preset set — against a fake peer and a real
+camera. See [`harness/`](harness).
 
 ## What it does
 
@@ -56,11 +56,13 @@ finch. See [`harness/`](harness).
 | WS-Discovery `:3702` | `discovery.py` | done |
 | Taking custody of a camera (`/api/1.2/manage`, resident-controller API) | `manage.py`, `custody.py` | done |
 | Assembly | `main.py` | done |
-| Talkback, MJPEG `:7551`, Imaging writes, ONVIF auth | — | to do |
+| Talkback (AAC out), MJPEG `:7551`, Imaging writes, wire-level preset delete | — | not implemented |
+| ONVIF UsernameToken authentication | `onvif.py` | opt-in; test Frigate compatibility first |
 
 The wire itself — the message envelope, WebSocket framing, the `extendedFlv`
 container, the HEVC/AAC bitstream — lives in
-[`pyunifiwire`](https://github.com/rjmotion/pyunifiwire), shared with finch.
+[`pyunifiwire`](https://github.com/rjmotion/pyunifiwire), the protocol library
+used by Osprey.
 
 ## Requirements
 
@@ -79,7 +81,7 @@ container, the HEVC/AAC bitstream — lives in
 
 ```sh
 ./test.sh                            # mypy --strict, then pytest. No camera, no network beyond loopback.
-./run.sh --host 192.168.1.10         # --host must be routable from the camera and clients — not loopback
+./run.sh --host 192.0.2.10         # --host must be routable from the camera and clients — not loopback
 ```
 
 `--host` is written into the stream destinations, the snapshot upload URL, the PTZ
@@ -97,9 +99,9 @@ missing file just means defaults + flags. So the same run is expressible either 
 ```jsonc
 // cuckoo.json
 {
-  "host": "192.168.1.10",
+  "host": "192.0.2.10",
   "cameras": [
-    { "mac": "AABBCCDDEEFF", "name": "Driveway", "ip": "192.168.1.109" },
+    { "mac": "AABBCCDDEEFF", "name": "Driveway", "ip": "192.0.2.109" },
     { "mac": "112233445566", "name": "Back yard" }
   ],
   "tracks": { "video1": "h264", "video2": "h265", "video3": "h264" },
@@ -245,7 +247,9 @@ the header of `handoff.sh` for the full set of `CUCKOO_*` overrides.
   failure is silent and total, and invisible to a self-written probe (which
   round-trips against its own wrong namespace) — only a real client catches it.
   See the `discovery.py` docstring and `tests/test_discovery.py`.
-- **No ONVIF authentication yet.** Requests are served unauthenticated. Don't
+- **ONVIF authentication is opt-in.** Requests are served unauthenticated by
+  default for Frigate compatibility; test UsernameToken support before enabling
+  it in a deployment.
   expose the ONVIF port to an untrusted network.
 
 The full protocol write-up, with captures, is in the

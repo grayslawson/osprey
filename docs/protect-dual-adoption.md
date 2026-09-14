@@ -1,73 +1,73 @@
-# UniFi Protect and Osprey: custody versus re-share
+# UniFi Protect and Osprey: custody versus re-sharing
 
-This note describes the supported architecture for a G5 PTZ that is already
-adopted by Osprey. It is intentionally conservative: no production controller
-or camera is contacted by the tests in this repository.
+This note explains what can and cannot be shared when a G5 PTZ is controlled
+by Osprey. It is intentionally conservative and does not require a production
+camera or controller for validation.
 
-## Conclusion
+## Native adoption is exclusive
 
-The physical G5 has one native UniFi controller relationship. Its native
-connection is a TLS WebSocket (`secure_transfer`) to Protect on port 7442; the
-PTZ channel (`ptz1`), settings acknowledgements, and camera-originated media
-all belong to that controller session. Adoption is not a second read-only
-subscription. Osprey's custody code also records the observed behavior that
-stealing the socket does not transfer ownership: an already-adopted camera
-ignores unsolicited controller introductions and returns `Unauthorized` to
-settings until it is explicitly released and adopted elsewhere.
+The physical G5 has one native UniFi controller relationship. Its private TLS
+WebSocket (`secure_transfer`), PTZ channel (`ptz1`), settings acknowledgements,
+and camera-originated media belong to that controller session. A second native
+controller cannot subscribe to the same session.
 
-Therefore the same physical G5 cannot be natively adopted by Osprey and
-simultaneously natively adopted by Protect. Releasing, unadopting, resetting,
-or moving the camera to test this is outside the supported production
-procedure.
+Therefore a physical G5 cannot be natively adopted by Osprey and Protect at
+the same time. Releasing, unmanaging, resetting, or re-adopting a camera is an
+operational action outside routine software validation.
 
-## What can work: a media-only persona
+## Media-only re-sharing
 
-Osprey can remain the sole native controller and re-publish the camera's
-already-ingested tracks as ordinary RTSP and ONVIF. The existing server does
-this at the configured ONVIF (default `8000`) and RTSP (default `8554`) ports.
-An independent NVR may consume that persona, for example Frigate. This does
-not create a second G5 controller and does not grant the consumer native
-Protect custody.
+Osprey can remain the sole native controller and re-publish the media it
+already receives as standard RTSP and ONVIF. Frigate uses the normal Osprey
+ONVIF endpoint (port `8000` by default) for PTZ and the RTSP endpoint (port
+`8554`) for video. This does not create a second G5 controller and does not
+give another consumer native custody of the physical camera.
 
-Protect's recent releases include third-party ONVIF camera adoption, but
-Ubiquiti's exact firmware/version and profile requirements are not stable
-enough for Osprey to promise compatibility from protocol inference alone. A
-Protect controller could potentially adopt Osprey's ONVIF persona as a
-*separate generic camera*; that is a Protect-to-Osprey interoperability test,
-not dual adoption of the G5. Protect must not be pointed at the G5's native IP
-expecting ONVIF, because the G5's native protocol is not ONVIF/RTSP.
+Protect may be able to adopt a separate, generic ONVIF camera backed by this
+re-published media. Protect's exact firmware and profile requirements vary, so
+this remains an interoperability experiment rather than a compatibility claim.
 
-There is currently no `read-only` ONVIF profile switch: the same endpoint that
-serves media also advertises PTZ and implements PTZ writes for Frigate. This is
-an intentional compatibility boundary, not an assertion that Protect PTZ
-interop works. Until Protect's exact behavior is tested in a disposable lab,
-use a firewall/ACL to permit only the RTSP port to a Protect host (or do not
-add it to Protect). A future read-only persona would need to omit PTZ from
-WS-Discovery/capabilities and return a standards-compliant fault to every PTZ
-write; simply hiding the UI would not be sufficient.
+## Read-only ONVIF persona
 
-If Protect is used as a consumer, keep PTZ writes disabled until an explicit,
-supervised compatibility test proves what it does with the proxy's ONVIF PTZ
-surface. Osprey's normal arbitration and authentication boundaries still
-apply. Never expose these ports beyond a trusted LAN.
+The optional read-only ONVIF persona serves the same ingested media while
+omitting PTZ from capabilities, services, and media profiles. It returns a
+standards-compliant fault for every PTZ read/write. Enable it on a separate
+port, for example:
 
-## Evidence in this repository
+```json
+{
+  "host": "192.0.2.10",
+  "ports": {"onvif": 8000, "onvif_read_only": 8001, "rtsp": 8554}
+}
+```
 
-* [`pyunifiwire/SPEC.md`](../pyunifiwire/SPEC.md) records the measured 7442
-  WebSocket, second `ptz1` channel, camera-pushed 7550 media, and 7444 snapshot
-  paths.
-* [`cuckoo/ARCHITECTURE.md`](../cuckoo/ARCHITECTURE.md) documents exclusive
-  custody and the ONVIF/RTSP northbound re-share.
-* [`cuckoo/tests/test_stack.py`](../cuckoo/tests/test_stack.py) exercises the
-  fake-camera-to-Osprey session and then reads the ONVIF and RTSP faces without
-  hardware.
+Add the Osprey host and port `8001` as a **generic ONVIF camera** in Protect;
+Protect is adopting Osprey's media-only persona, not the physical G5. Use the
+normal `8000` endpoint in Frigate so Frigate retains PTZ control. WS-Discovery
+advertises the primary endpoint only, so enter the read-only host/port
+manually if Protect does not offer a port field. Protect may reject the persona
+or require additional profiles. Until tested on the exact Protect release,
+firewall the read-only ONVIF and shared RTSP ports to the Protect host and
+never expose them outside the trusted LAN.
 
 ## Safe validation
 
-Run `cuckoo/test.sh` (or `pytest -q cuckoo/tests`) and use the fake stack tests;
-`pytest -q cuckoo/tests/test_stack.py cuckoo/tests/test_onvif.py` specifically
-proves the local ONVIF and RTSP faces without hardware.
-For a real deployment, validate only by reading Osprey's operator status and
-connecting a disposable RTSP/ONVIF client to Osprey's advertised endpoints.
-Do not run `custody.py release`, `restore`, adoption, reset, or PTZ commands on
-the production camera for this question.
+Run the fake-camera stack tests before trying a real NVR:
+
+```sh
+./cuckoo/test.sh
+```
+
+For a disposable client, verify that the normal endpoint exposes PTZ and the
+read-only endpoint exposes media but faults on PTZ calls. Do not run custody,
+reset, unmanage, or re-adoption commands against a production camera as part
+of this compatibility test.
+
+## Evidence in this repository
+
+- [`pyunifiwire/SPEC.md`](../pyunifiwire/SPEC.md) records the measured camera
+  control and media channels.
+- [`cuckoo/ARCHITECTURE.md`](../cuckoo/ARCHITECTURE.md) documents the custody
+  and northbound ONVIF/RTSP boundary.
+- [`cuckoo/tests/test_stack.py`](../cuckoo/tests/test_stack.py) exercises the
+  fake-camera session and ONVIF/RTSP faces without hardware.

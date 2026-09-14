@@ -1,0 +1,15 @@
+# Optional read-only ONVIF persona for a second NVR (for example Protect).
+# Frigate should continue using the primary ONVIF port from compose.release.yaml.
+services:
+  osprey:
+    command:
+      - python3
+      - main.py
+      - --host
+      - "${OSPREY_HOST:?Set OSPREY_HOST to the host/LAN address}"
+      - --cert
+      - /state/osprey.pem
+      - --onvif-read-only-port
+      - "8001"
+    ports:
+      - "${OSPREY_BIND:-127.0.0.1}:${OSPREY_ONVIF_READ_ONLY_PORT:-8001}:8001"

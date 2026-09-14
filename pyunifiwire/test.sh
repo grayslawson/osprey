@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # The package's own checks. Needs nothing installed and no network.
 set -euo pipefail
 cd "$(dirname "$0")"

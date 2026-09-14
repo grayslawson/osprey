@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the physical G5 PTZ lab and release its LAN listeners.
+# Stop a physical G5 PTZ deployment and release its LAN listeners.
 #
 # Stopping Osprey releases only this host's listeners; it does not reset,
 # unmanage, or re-adopt the camera.
@@ -14,18 +14,18 @@ compose=(
   --env-file "$ENV_FILE"
   -f compose.yaml
   -f compose.physical.yaml
-  -p cuckoo-physical-lab
+  -p osprey-physical
 )
 
 # The bridge subnet has to be read while the project still exists.
-lab_subnet=$(docker network inspect cuckoo-physical-lab_lab \
+deployment_subnet=$(docker network inspect osprey-physical_default \
   --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null | head -n1 || true)
 
 "${compose[@]}" down --remove-orphans
 
 close_firewall() {
-  # Removes exactly the accepts physical_start.sh adds: the four lab ports plus the
-  # ONVIF/RTSP accepts scoped to the lab subnet. None of them are in this host's
+  # Removes exactly the accepts physical_start.sh adds: the camera ports plus the
+  # ONVIF/RTSP accepts scoped to the deployment subnet. None are in this host's
   # baseline allowlist, so this cannot drop a pre-existing rule.
   if ! sudo iptables -S nixos-fw >/dev/null 2>&1; then
     return 0
@@ -37,11 +37,11 @@ close_firewall() {
       printf 'firewall: closed tcp/%s\n' "$port"
     done
   done
-  [[ -n $lab_subnet ]] || return 0
+  [[ -n $deployment_subnet ]] || return 0
   for port in 8000 8554; do
-    while sudo iptables -C nixos-fw -s "$lab_subnet" -p tcp --dport "$port" -j nixos-fw-accept 2>/dev/null; do
-      sudo iptables -D nixos-fw -s "$lab_subnet" -p tcp --dport "$port" -j nixos-fw-accept
-      printf 'firewall: closed %s -> tcp/%s\n' "$lab_subnet" "$port"
+    while sudo iptables -C nixos-fw -s "$deployment_subnet" -p tcp --dport "$port" -j nixos-fw-accept 2>/dev/null; do
+      sudo iptables -D nixos-fw -s "$deployment_subnet" -p tcp --dport "$port" -j nixos-fw-accept
+      printf 'firewall: closed %s -> tcp/%s\n' "$deployment_subnet" "$port"
     done
   done
 }
