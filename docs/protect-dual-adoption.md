@@ -60,4 +60,3 @@ For a real deployment, validate only by reading Osprey's operator status and
 connecting a disposable RTSP/ONVIF client to Osprey's advertised endpoints.
 Do not run `custody.py release`, `restore`, adoption, reset, or PTZ commands on
 the production camera for this question.
-
