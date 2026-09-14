@@ -141,6 +141,7 @@ class OnvifAuth:
 
     @classmethod
     def from_environment(cls) -> "OnvifAuth":
+        username = os.environ.get("OSPREY_ONVIF_USERNAME")
         password = os.environ.get("OSPREY_ONVIF_PASSWORD")
         path = os.environ.get("OSPREY_ONVIF_PASSWORD_FILE")
         if password is None and path:
@@ -148,7 +149,16 @@ class OnvifAuth:
                 password = Path(path).read_text(encoding="utf-8").strip()
             except OSError as exc:
                 raise RuntimeError(f"cannot read OSPREY_ONVIF_PASSWORD_FILE: {exc}") from exc
-        return cls(os.environ.get("OSPREY_ONVIF_USERNAME"), password)
+        if bool(username) != bool(password):
+            raise RuntimeError(
+                "OSPREY_ONVIF_USERNAME and OSPREY_ONVIF_PASSWORD(_FILE) must be configured together"
+            )
+        return cls(username or None, password or None)
+
+    @property
+    def configured(self) -> bool:
+        """Whether an incomplete or complete authentication configuration exists."""
+        return self.username is not None or self.password is not None
 
     @property
     def enabled(self) -> bool:
@@ -156,7 +166,9 @@ class OnvifAuth:
 
     def valid(self, payload: bytes) -> bool:
         if not self.enabled:
-            return True
+            # Anonymous mode is only valid when authentication is completely
+            # unset. A manually constructed partial config must fail closed.
+            return not self.configured
         try:
             root = ElementTree.fromstring(payload)
             token = next((e for e in root.iter() if local_name(e.tag) == "UsernameToken"), None)
