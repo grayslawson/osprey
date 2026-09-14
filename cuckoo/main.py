@@ -316,7 +316,8 @@ def build(options: Options) -> Stack:
         telemetry=hub.stats,
     )
     services = onvif.Services(backend, host=options.host, port=options.onvif_port,
-                               auth=onvif.AdminAuth.from_environment())
+                               auth=onvif.AdminAuth.from_environment(),
+                               onvif_auth=onvif.OnvifAuth.from_environment())
     north = onvif.OnvifServer(services, port=options.onvif_port)
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
