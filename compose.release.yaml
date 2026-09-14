@@ -1,0 +1,22 @@
+name: osprey
+services:
+  osprey:
+    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:latest}
+    pull_policy: always
+    working_dir: /workspace/cuckoo
+    command: ["python3", "main.py", "--host", "${OSPREY_HOST:?Set OSPREY_HOST to the host/LAN address}", "--cert", "/state/osprey.pem"]
+    environment:
+      PYTHONPATH: /workspace/pyunifiwire/src
+    volumes:
+      - osprey-state:/state
+    ports:
+      - "${OSPREY_ONVIF_PORT:-8000}:8000"
+      - "${OSPREY_RTSP_PORT:-8554}:8554"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp:mode=1777]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  osprey-state:
