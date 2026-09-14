@@ -37,6 +37,15 @@ Protect controller could potentially adopt Osprey's ONVIF persona as a
 not dual adoption of the G5. Protect must not be pointed at the G5's native IP
 expecting ONVIF, because the G5's native protocol is not ONVIF/RTSP.
 
+There is currently no `read-only` ONVIF profile switch: the same endpoint that
+serves media also advertises PTZ and implements PTZ writes for Frigate. This is
+an intentional compatibility boundary, not an assertion that Protect PTZ
+interop works. Until Protect's exact behavior is tested in a disposable lab,
+use a firewall/ACL to permit only the RTSP port to a Protect host (or do not
+add it to Protect). A future read-only persona would need to omit PTZ from
+WS-Discovery/capabilities and return a standards-compliant fault to every PTZ
+write; simply hiding the UI would not be sufficient.
+
 If Protect is used as a consumer, keep PTZ writes disabled until an explicit,
 supervised compatibility test proves what it does with the proxy's ONVIF PTZ
 surface. Osprey's normal arbitration and authentication boundaries still
@@ -55,7 +64,9 @@ apply. Never expose these ports beyond a trusted LAN.
 
 ## Safe validation
 
-Run `cuckoo/test.sh` (or `pytest -q cuckoo/tests`) and use the fake stack tests.
+Run `cuckoo/test.sh` (or `pytest -q cuckoo/tests`) and use the fake stack tests;
+`pytest -q cuckoo/tests/test_stack.py cuckoo/tests/test_onvif.py` specifically
+proves the local ONVIF and RTSP faces without hardware.
 For a real deployment, validate only by reading Osprey's operator status and
 connecting a disposable RTSP/ONVIF client to Osprey's advertised endpoints.
 Do not run `custody.py release`, `restore`, adoption, reset, or PTZ commands on
