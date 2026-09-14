@@ -23,9 +23,10 @@ CPU abuse. Frigate URL metadata rejects credentials, queries and fragments; it
 is not fetched by Osprey and must still be treated as operator-supplied data.
 
 Optional ONVIF WS-Security UsernameToken authentication is enabled only when
-both `OSPREY_ONVIF_USERNAME` and `OSPREY_ONVIF_PASSWORD` are set. It requires a
-PasswordDigest on every SOAP request; there is no anonymous fallback. Leave
-both unset for the existing Frigate empty-credential compatibility mode. Use
+`OSPREY_ONVIF_USERNAME` and either `OSPREY_ONVIF_PASSWORD` or
+`OSPREY_ONVIF_PASSWORD_FILE` are set. It requires a PasswordDigest on every SOAP
+request; there is no anonymous fallback. Leave the username unset for the
+existing Frigate empty-credential compatibility mode. Use
 `OSPREY_ONVIF_PASSWORD_FILE` instead of the password variable when possible;
 the file should be root-readable and contain only the password. Digests expire
 after five minutes and each nonce is accepted only once.
