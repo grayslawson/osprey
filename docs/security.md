@@ -22,6 +22,11 @@ SOAP request bodies are capped at 256 KiB before XML parsing to limit memory and
 CPU abuse. Frigate URL metadata rejects credentials, queries and fragments; it
 is not fetched by Osprey and must still be treated as operator-supplied data.
 
+Optional ONVIF WS-Security UsernameToken authentication is enabled only when
+both `OSPREY_ONVIF_USERNAME` and `OSPREY_ONVIF_PASSWORD` are set. It requires a
+PasswordDigest on every SOAP request; there is no anonymous fallback. Leave
+both unset for the existing Frigate empty-credential compatibility mode.
+
 If authenticated ONVIF becomes necessary, deploy an authenticating reverse
 proxy restricted to the Frigate host and configure Frigate with those proxy
 credentials. Do not expose a proxy to the camera callback path without testing
