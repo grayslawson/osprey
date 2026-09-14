@@ -51,6 +51,10 @@ The helper validates amd64/arm64 and refuses to overwrite an existing state file
 
 An alpha add-on scaffold is in [`homeassistant/addon/osprey`](../homeassistant/addon/osprey/README.md). It is not in the official store: per-architecture images must be published and tested with the Home Assistant add-on builder first. HA still uses an external Frigate instance.
 
+## Updates and rollback
+
+Prefer approved, pinned releases rather than `latest`. Inspect first with `scripts/osprey-update.sh --file /var/lib/osprey/compose.yaml --image ghcr.io/grayslawson/osprey:vX.Y.Z`; add `--apply` only after review. Rollback uses the same command with the previous pinned image. Scheduled updates should be operator-owned and never follow `latest` automatically.
+
 ## Other package formats
 
 npm, Homebrew, Chocolatey, and generic binaries are intentionally not shipped: Osprey is a network service, not a desktop CLI. A Nix package/module can be added when a maintainer owns service sandboxing and ffmpeg/ONVIF dependency updates.
