@@ -91,20 +91,15 @@ Osprey can run from the published GHCR image; see [installation and distribution
 ```bash
 git clone https://github.com/grayslawson/osprey.git
 cd osprey
-docker compose build osprey
-docker compose up -d --wait --wait-timeout 120 osprey
+export OSPREY_HOST=192.0.2.10
+export OSPREY_BIND=192.0.2.10
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:vX.Y.Z
+docker compose -f compose.release.yaml up -d --wait
 ```
 
-When the verification step completes, open the local operator page:
-
-```text
-http://127.0.0.1:18000/
-```
-
-The supported path today is Linux amd64 with Docker Compose. Rootless Podman
-works for the local development path. Windows with Docker Desktop is supported
-for local development; physical camera networking needs the Windows relay path.
-Apple Silicon and other architectures have not been validated yet.
+The operator page is served on the ONVIF port (8000 by default). See
+[installation and distribution](docs/installation.md) for Podman, Proxmox,
+Home Assistant, multi-camera configuration, and the development build path.
 
 ## Connect your Frigate installation
 
