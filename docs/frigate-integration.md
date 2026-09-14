@@ -58,3 +58,7 @@ networks.
 Osprey reports its own endpoint and controller health. A healthy Osprey link is
 not proof that Frigate detection or tracking is correctly configured; inspect
 Frigate's own logs and events for that part of the pipeline.
+
+For the related UniFi Protect custody limitation and the distinction between
+native adoption and a media-only ONVIF/RTSP persona, see
+[Protect and Osprey: custody versus re-share](protect-dual-adoption.md).
