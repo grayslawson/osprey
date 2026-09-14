@@ -14,6 +14,7 @@ import secrets
 import ssl
 import threading
 import time
+import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -118,6 +119,10 @@ class _Handler(BaseHTTPRequestHandler):
         if body is None:
             self._respond(HTTPStatus.BAD_REQUEST)
             return
+        body = _extract_upload(body, self.headers.get("Content-Type", ""))
+        if body is None:
+            self._respond(HTTPStatus.BAD_REQUEST)
+            return
         if not self.store.claim(token, body):
             log.warning("upload for unknown or expired token")
             self._respond(HTTPStatus.NOT_FOUND)
@@ -136,28 +141,75 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         if length <= 0 or length > MAX_UPLOAD_BYTES:
             return None
-        return self.rfile.read(length)
+        body = self.rfile.read(length)
+        return body if len(body) == length else None
 
     def _read_chunked(self) -> bytes | None:
         body = bytearray()
         while True:
-            line = self.rfile.readline(64).strip()
+            line = self.rfile.readline(65)
+            if not line.endswith(b"\r\n") or len(line) > 64:
+                return None
             try:
-                size = int(line.split(b";", 1)[0], 16)
+                size_text = line[:-2].split(b";", 1)[0]
+                if not size_text:
+                    return None
+                size = int(size_text, 16)
             except ValueError:
                 return None
             if size == 0:
-                self.rfile.readline(8)  # trailing CRLF
-                return bytes(body)
+                while True:
+                    trailer = self.rfile.readline(65)
+                    if not trailer.endswith(b"\r\n") or len(trailer) > 64:
+                        return None
+                    if trailer == b"\r\n":
+                        return bytes(body)
+                    if b":" not in trailer[:-2]:
+                        return None
             if len(body) + size > MAX_UPLOAD_BYTES:
                 return None
-            body += self.rfile.read(size)
-            self.rfile.readline(8)
+            chunk = self.rfile.read(size)
+            if len(chunk) != size or self.rfile.read(2) != b"\r\n":
+                return None
+            body += chunk
 
     def _respond(self, status: HTTPStatus) -> None:
         self.send_response(status)
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+
+def _extract_upload(body: bytes, content_type: str) -> bytes | None:
+    """Return the JPEG from a raw or camera multipart upload, bounded already."""
+    if content_type.lower().split(";", 1)[0].strip() != "multipart/form-data":
+        return body if body.startswith(b"\xff\xd8") else None
+    match = re.search(r"(?:^|;)\s*boundary=(?:\"([^\"]+)\"|([^;\s]+))", content_type, re.I)
+    if not match:
+        return None
+    try:
+        boundary = (match.group(1) or match.group(2)).encode("ascii", "strict")
+    except UnicodeEncodeError:
+        return None
+    marker = b"--" + boundary
+    opening = marker + b"\r\n"
+    if not body.startswith(opening):
+        return None
+    header_end = body.find(b"\r\n\r\n", len(opening))
+    if header_end < 0:
+        return None
+    header_block = body[len(opening) : header_end]
+    headers = header_block.lower().split(b"\r\n")
+    if not any(line.startswith(b"content-disposition:") for line in headers):
+        return None
+    payload_start = header_end + 4
+    payload_end = body.find(b"\r\n" + marker, payload_start)
+    if payload_end < 0:
+        return None
+    image = body[payload_start:payload_end]
+    suffix = body[payload_end + 2 + len(marker) :]
+    if suffix not in (b"--", b"--\r\n"):
+        return None
+    return image if image.startswith(b"\xff\xd8") and image.endswith(b"\xff\xd9") else None
 
 
 class SnapshotServer(ThreadingHTTPServer):

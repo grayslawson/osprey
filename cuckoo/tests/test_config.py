@@ -118,3 +118,12 @@ def test_a_named_config_that_is_missing_is_an_error() -> None:
 
 def test_a_bare_track_name_defaults_to_h264() -> None:
     assert main.spec_to_tracks("video1,video2:h265") == {"video1": "h264", "video2": "h265"}
+
+def test_camera_registry_normalises_mac_and_preserves_settings() -> None:
+    cameras = config.validate_cameras([{"mac": "aa:bb:cc:dd:ee:ff", "name": "Driveway", "ip": "192.0.2.10"}])
+    assert cameras == [{"mac": "AABBCCDDEEFF", "name": "Driveway", "ip": "192.0.2.10"}]
+
+@pytest.mark.parametrize("value", ["not-a-list", [{"name": "missing mac"}], [{"mac": "AA:AA:AA:AA:AA:AA"}, {"mac": "aaaaaaaaaaaa"}]])
+def test_camera_registry_rejects_invalid_entries(value: object) -> None:
+    with pytest.raises(ValueError):
+        config.validate_cameras(value)

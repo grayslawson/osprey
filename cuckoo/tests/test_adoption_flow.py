@@ -7,6 +7,9 @@ rather than described.
 from __future__ import annotations
 
 import threading
+import selectors
+import time
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -244,6 +247,92 @@ def test_position_reply_recovers_motion_state_after_ptz_reconnect() -> None:
     assert seen == [session.camera]
 
 
+def test_ptz_socket_loss_rearms_once_and_marks_motion_unavailable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A lost ptz1 socket is recovered through its still-live management socket."""
+    caplog.set_level(logging.INFO, logger="cuckoo.control")
+    ctl, control, wire = _harness()
+    adoption.apply_hello(control.camera, HELLO_PAYLOAD)
+    control.camera.adopted = True
+    control.camera.motion.connect()
+    ptz_wire = Wire()
+    ptz_session = controller.Session(
+        sock=ptz_wire,  # type: ignore[arg-type]
+        upgrade=_upgrade(ptz.PTZ_SUBPROTOCOL),
+        camera=control.camera,
+    )
+    ctl._sessions[ptz_wire] = ptz_session  # type: ignore[index]
+
+    selector = selectors.DefaultSelector()
+    ctl._drop(ptz_wire, selector)  # type: ignore[arg-type]
+    now = time.monotonic()
+    ctl._recover_ptz(now)
+
+    assert control.camera.motion.status == "UNKNOWN"
+    assert wire.names() == [ptz.DISABLE_PTZ, ptz.ENABLE_PTZ]
+    # The state machine, not each selector tick, owns this recovery attempt.
+    ctl._recover_ptz(now + 0.1)
+    assert wire.names() == [ptz.DISABLE_PTZ, ptz.ENABLE_PTZ]
+    assert "PTZ channel unavailable" in caplog.text
+    assert "PTZ recovery waiting for callback" in caplog.text
+
+
+def test_ptz_recovery_clears_when_the_callback_returns() -> None:
+    ctl, control, _ = _harness()
+    adoption.apply_hello(control.camera, HELLO_PAYLOAD)
+    control.camera.adopted = True
+    now = time.monotonic()
+    ctl._request_ptz_recovery(control, now)
+    ctl._recover_ptz(now)
+
+    ptz_wire = Wire()
+    ptz_session = controller.Session(
+        sock=ptz_wire,  # type: ignore[arg-type]
+        upgrade=_upgrade(ptz.PTZ_SUBPROTOCOL),
+        camera=control.camera,
+    )
+    control.camera.motion.open_channel()
+    ctl._sessions[ptz_wire] = ptz_session  # type: ignore[index]
+    ctl._recover_ptz(now + 0.1)
+
+    assert control.camera.mac not in ctl._ptz_recovery
+    assert control.camera.motion.status == "IDLE"
+
+
+def test_ptz_recovery_retries_with_backoff_then_stops(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(controller, "PTZ_RECOVERY_CALLBACK_TIMEOUT_SEC", 1.0)
+    monkeypatch.setattr(controller, "PTZ_RECOVERY_INITIAL_BACKOFF_SEC", 1.0)
+    monkeypatch.setattr(controller, "PTZ_RECOVERY_MAX_ATTEMPTS", 2)
+    ctl, control, wire = _harness()
+    adoption.apply_hello(control.camera, HELLO_PAYLOAD)
+    control.camera.adopted = True
+    now = time.monotonic()
+    ctl._request_ptz_recovery(control, now)
+
+    ctl._recover_ptz(now)  # first Disable -> Enable
+    ctl._recover_ptz(now + 1.1)  # callback timeout, then back off
+    recovery = ctl._ptz_recovery[control.camera.mac]
+    retry_at = recovery.next_attempt_at
+    ctl._recover_ptz(retry_at)  # second Disable -> Enable
+    ctl._recover_ptz(retry_at + 1.1)  # second callback timeout
+    recovery = ctl._ptz_recovery[control.camera.mac]
+    ctl._recover_ptz(recovery.next_attempt_at)  # bounded terminal timeout
+
+    assert wire.names() == [
+        ptz.DISABLE_PTZ,
+        ptz.ENABLE_PTZ,
+        ptz.DISABLE_PTZ,
+        ptz.ENABLE_PTZ,
+    ]
+    assert ctl._ptz_recovery[control.camera.mac].exhausted
+    assert "PTZ recovery callback timed out" in caplog.text
+    assert "PTZ recovery timed out" in caplog.text
+
+
 def test_unacked_step_is_stepped_past() -> None:
     ctl, session, wire = _harness()
     ctl._dispatch(session, _from_camera(envelope.HELLO, HELLO_PAYLOAD, 1))
@@ -268,6 +357,38 @@ def test_move_writes_a_scratch_preset_then_goes() -> None:
     assert session.camera.motion.status == "MOVING", "an older idle event must not settle this move"
     session.camera.motion.update(target, activity=0)
     assert session.camera.motion.status == "IDLE"
+
+
+def test_ignored_motor_activity_at_target_releases_the_next_calibration_move() -> None:
+    """G5 ignores a stale activity word after a tightly adjacent zoom step."""
+    ctl, session, _ = _ptz_harness()
+    target = Position(pan=19635, tilt=12334, zoom=730, focus=109)
+    assert ctl.move("AABBCCDDEEFF", target)
+
+    ctl._dispatch(
+        session,
+        _from_camera(
+            ptz.EVENT_MOTOR_STATE,
+            {
+                "ignoreActivity": True,
+                "state": {
+                    "activity": 16,
+                    "position": {
+                        "pan": 19635,
+                        "tilt": 12334,
+                        "zoom": 730,
+                        "focus": 115,
+                    },
+                },
+            },
+            7,
+        ),
+    )
+
+    assert session.camera.motion.status == "IDLE"
+    assert ctl.move(
+        "AABBCCDDEEFF", Position(pan=19635, tilt=12334, zoom=723, focus=115)
+    )
 
 
 def test_move_is_not_misrouted_to_the_management_channel() -> None:
@@ -380,8 +501,8 @@ def test_the_controller_does_not_speak_first() -> None:
 
 
 def test_camera_mac_normalisation_accepts_common_display_forms() -> None:
-    assert controller.normalise_mac("28:70:4e:1b:a6:67") == "28704E1BA667"
-    assert controller.normalise_mac("28-70-4E-1B-A6-67") == "28704E1BA667"
+    assert controller.normalise_mac("aa:bb:cc:dd:ee:ff") == "AABBCCDDEEFF"
+    assert controller.normalise_mac("AA-BB-CC-DD-EE-FF") == "AABBCCDDEEFF"
 
 
 def test_invalid_camera_mac_is_rejected() -> None:
