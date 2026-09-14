@@ -54,3 +54,45 @@ architecture and verify ingress, `/data` persistence, upgrade, and reinstall.
 
 Built on [Cuckoo](https://github.com/rjmotion/cuckoo), originally published by
 rjmotion and contributors.
+
+## How the pieces connect
+
+Osprey is the camera-facing adapter; Frigate remains the recorder and detector. They may
+both be Supervisor add-ons, or Frigate may run in Docker on another host. Enter the Frigate
+HTTP/API URL in the Osprey operator console; it does not need to share a Docker network.
+
+```mermaid
+flowchart LR
+  C[Ubiquiti G5 PTZ] -->|ONVIF + RTSP| O[Osprey add-on]
+  O -->|RTSP stream| F[Frigate\nHA add-on or external container]
+  U[HA user] -->|Ingress| O
+  F -->|events/detection| O
+```
+
+### Frigate setup
+
+Create the camera in Frigate using the RTSP URL and credentials shown by Osprey. For an HA
+add-on use its Supervisor hostname/port (or host LAN address); for an external container
+use its LAN DNS name/address. Do not use `localhost` unless both share a network namespace.
+Keep retention, recording, detectors and zones configured in Frigate.
+
+### Options, networking and security
+
+`advertised_host` is mandatory: the HA host/LAN address used by camera callbacks and RTSP.
+`camera_ip` and `camera_mac` are optional identity guards. `onvif_port` and `rtsp_port` must
+be unused and reachable from the camera VLAN. The console is port 8000 through HA ingress;
+host networking also publishes declared ports. Keep 7442/7444/7550 on the trusted LAN.
+
+Ingress authenticates the console with Home Assistant, but direct host-network endpoints
+are not independently authenticated. Firewall them to camera/Frigate VLANs, never
+port-forward them, use a least-privilege HA account, and rotate camera credentials. A
+deployment outside HA needs TLS and independent authentication.
+
+### Release and validation
+
+The repository root is the add-on repository (`repository.json` plus `addon/osprey/`). The
+Dockerfile builds from root to copy `cuckoo/` and `pyunifiwire/`. Publish immutable
+per-architecture GHCR images, update `version`, run `homeassistant/validate.sh` and the
+Home Assistant Add-on Builder for every declared architecture. Test clean install/upgrade,
+ingress, `/data` persistence, discovery, Frigate ingest, PTZ actions, tracking and safe-stop.
+`docker build -f homeassistant/addon/osprey/Dockerfile .` is only a local smoke test.
