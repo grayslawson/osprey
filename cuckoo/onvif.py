@@ -20,9 +20,11 @@ import hmac
 import os
 import secrets
 import base64
+from datetime import datetime, timezone
 import subprocess
 import threading
 import time
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 from collections import deque
 from dataclasses import dataclass, field
@@ -133,10 +135,20 @@ class OnvifAuth:
     """
     username: str | None = None
     password: str | None = None
+    max_skew_seconds: int = 300
+    _replay: dict[bytes, float] = field(default_factory=dict, compare=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
 
     @classmethod
     def from_environment(cls) -> "OnvifAuth":
-        return cls(os.environ.get("OSPREY_ONVIF_USERNAME"), os.environ.get("OSPREY_ONVIF_PASSWORD"))
+        password = os.environ.get("OSPREY_ONVIF_PASSWORD")
+        path = os.environ.get("OSPREY_ONVIF_PASSWORD_FILE")
+        if password is None and path:
+            try:
+                password = Path(path).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise RuntimeError(f"cannot read OSPREY_ONVIF_PASSWORD_FILE: {exc}") from exc
+        return cls(os.environ.get("OSPREY_ONVIF_USERNAME"), password)
 
     @property
     def enabled(self) -> bool:
@@ -154,9 +166,26 @@ class OnvifAuth:
             nonce = base64.b64decode(values.get("Nonce", ""), validate=True)
             created = values.get("Created", "")
             digest = base64.b64decode(values.get("Password", ""), validate=True)
-            return hmac.compare_digest(values.get("Username", ""), self.username or "") and hmac.compare_digest(
-                digest, hashlib.sha1(nonce + created.encode() + (self.password or "").encode()).digest())
-        except (ElementTree.ParseError, ValueError, TypeError):
+            if not 16 <= len(nonce) <= 64 or len(digest) != 20 or not created:
+                return False
+            parsed = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+            now = time.time()
+            if abs(now - parsed.timestamp()) > self.max_skew_seconds:
+                return False
+            key = hashlib.sha256(nonce + created.encode() + values.get("Username", "").encode()).digest()
+            with self._lock:
+                for old, when in list(self._replay.items()):
+                    if now - when > self.max_skew_seconds:
+                        del self._replay[old]
+                if key in self._replay:
+                    return False
+                identity_ok = hmac.compare_digest(values.get("Username", ""), self.username or "")
+                expected = hashlib.sha1(nonce + created.encode() + (self.password or "").encode()).digest()
+                valid = identity_ok and hmac.compare_digest(digest, expected)
+                if valid:
+                    self._replay[key] = now
+                return valid
+        except (ElementTree.ParseError, ValueError, TypeError, OverflowError):
             return False
 
 SOAP: Final = "http://www.w3.org/2003/05/soap-envelope"
