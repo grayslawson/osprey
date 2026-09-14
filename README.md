@@ -64,17 +64,17 @@ storage, updates, and Frigate configuration.
   camera.
 - **Home Assistant direction** — an alpha add-on scaffold is included for
   contributors and early testers.
-- **Multi-camera and MQTT** — controller-scoped camera registration plus
-  configurable MQTT commands and camera-control events are in active work.
+- **Multi-camera and MQTT** — register multiple cameras with isolated control
+  state, then automate them with optional broker-backed MQTT commands and
+  non-retained control events.
 
 ## What we are finishing next
 
 | In progress | Why it matters |
 | --- | --- |
-| Fast-vehicle acceptance | A camera should not chase where a car used to be. Osprey is validating timing before claiming that result. |
+| G4 PTZ Industrial validation | Its 22× optical zoom and control protocol need a separate hardware validation path before support can be claimed. |
 | Sentry patrol | Rotate through saved views only while tracking is idle, without competing with a tracked subject. |
 | Home Assistant release | Publish and validate add-on images before asking anyone to install from the add-on store. |
-| Authentication and roles | Required before Osprey can safely become a shared or remotely reachable service. |
 
 ## Get started
 
