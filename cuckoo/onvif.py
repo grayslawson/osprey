@@ -40,6 +40,7 @@ MEDIA_PATH: Final = "/onvif/media_service"
 PTZ_PATH: Final = "/onvif/ptz_service"
 IMAGING_PATH: Final = "/onvif/imaging_service"
 EVENTS_PATH: Final = "/onvif/events_service"
+MAX_SOAP_REQUEST_BYTES: Final = 256 * 1024
 SNAPSHOT_PATH: Final = "/snapshot/"
 PREVIEW_PATH: Final = "/preview/"
 CONTROL_STEP_PATH: Final = "/control/step"
@@ -1629,6 +1630,13 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
+        # SOAP is XML and is parsed synchronously.  Bound the body before
+        # reading it so an unauthenticated endpoint cannot be used for memory
+        # exhaustion (and reject malformed negative lengths).
+        if length < 0 or length > MAX_SOAP_REQUEST_BYTES:
+            self.close_connection = True
+            self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, b"request too large", "text/plain")
+            return
         payload = self.rfile.read(length) if length else b""
         call = parse_call(payload)
         if call is None:
