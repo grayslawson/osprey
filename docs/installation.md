@@ -4,15 +4,36 @@ Osprey is a Python controller for a camera already managed on the LAN. It does n
 
 ## Docker or rootless Podman
 
-Set `OSPREY_HOST` to the host address reachable by the camera, then run:
+Set `OSPREY_HOST` to the address the camera can reach and `OSPREY_BIND` to the
+local interface on which Frigate should connect. The release image accepts a
+single camera without a config file; mount a `cuckoo.json` file when you want
+an explicit camera allow-list or multiple cameras:
 
 ```sh
+export OSPREY_HOST=192.0.2.10
+export OSPREY_BIND=192.0.2.10
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:vX.Y.Z
 docker compose -f compose.release.yaml up -d
 # rootless Podman:
 podman compose -f compose.release.yaml up -d
 ```
 
-Set `OSPREY_IMAGE=ghcr.io/grayslawson/osprey:vX.Y.Z` to pin a release. Images target `linux/amd64` and `linux/arm64`; keep camera-facing ports on a trusted LAN. Rootless Podman may require host networking or explicit port permissions for a camera VLAN.
+Images target `linux/amd64` and `linux/arm64`; keep camera-facing ports on a
+trusted LAN. Rootless Podman may require host networking or explicit port
+permissions for a camera VLAN. For multiple cameras, create `cuckoo.json` using
+the [multi-camera schema](multi-camera.md), then add this bind mount under the
+service in a local Compose override:
+
+```yaml
+services:
+  osprey:
+    volumes:
+      - ./cuckoo.json:/workspace/cuckoo/cuckoo.json:ro
+```
+
+The operator console is served on the ONVIF port (8000 by default). Put it
+behind HTTPS and configure admin authentication before exposing it beyond the
+trusted LAN.
 
 ## Proxmox
 
