@@ -17,8 +17,9 @@ RUN apt-get update \
 
 RUN python -m pip install --no-cache-dir \
         mypy==1.18.2 \
-        onvif-zeep==0.2.12 \
-        pytest==8.4.2 \
+  onvif-zeep==0.2.12 \
+  paho-mqtt==2.1.0 \
+  pytest==8.4.2 \
         uiprotect==16.10.0
 
 RUN groupadd --gid "${LAB_GID}" lab \

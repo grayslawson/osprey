@@ -68,6 +68,8 @@ storage, updates, and Frigate configuration.
   state, then automate them with optional broker-backed MQTT commands and
   non-retained control events.
 
+See [multi-camera setup](docs/multi-camera.md) and the [MQTT topic contract](docs/mqtt.md).
+
 ## What we are finishing next
 
 | In progress | Why it matters |
@@ -108,6 +110,9 @@ convenient operator links; it never starts, upgrades, or rewrites Frigate.
 Then add Osprey as the camera's ONVIF/RTSP source in your own Frigate config
 and enable Frigate autotracking. Your detector, object, zone, recording,
 zoom-mode, and retention choices remain entirely in Frigate.
+
+See the [existing-Frigate integration guide](docs/frigate-integration.md) for
+the network contract and a supervised verification path.
 
 ```yaml
 # Your existing Frigate configuration — illustrative only.

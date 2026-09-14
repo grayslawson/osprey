@@ -37,8 +37,44 @@ from __future__ import annotations
 
 import json
 from typing import Any, Final
+import re
 
 DEFAULT_CONFIG_PATH: Final = "cuckoo.json"
+
+
+def validate_cameras(value: Any) -> list[dict[str, Any]]:
+    """Validate the optional explicit camera registry.
+
+    A registry is deliberately keyed by MAC: IP addresses can change, while a
+    camera's Protect identity should not.  Keeping validation here gives users a
+    useful startup error before any listeners are opened.
+    """
+    if value in (None, []):
+        return []
+    if not isinstance(value, list):
+        raise ValueError('"cameras" must be an array of objects')
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f'cameras[{index}] must be an object')
+        mac = str(item.get("mac", "")).replace(":", "").replace("-", "").upper()
+        if re.fullmatch(r"[0-9A-F]{12}", mac) is None:
+            raise ValueError(f'cameras[{index}].mac must be a 12-digit hexadecimal MAC')
+        if mac in seen:
+            raise ValueError(f'cameras[{index}].mac duplicates another camera')
+        seen.add(mac)
+        name = item.get("name", mac)
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f'cameras[{index}].name must be a non-empty string')
+        ip = item.get("ip")
+        if ip is not None and (not isinstance(ip, str) or not ip.strip()):
+            raise ValueError(f'cameras[{index}].ip must be a non-empty string')
+        tracks = item.get("tracks")
+        if tracks is not None and not isinstance(tracks, dict):
+            raise ValueError(f'cameras[{index}].tracks must be an object')
+        result.append({**item, "mac": mac, "name": name.strip()})
+    return result
 
 # Every value cuckoo reads has a default here, so a config built from {} answers
 # everything. Ports mirror the module constants (asserted by the tests).
@@ -47,9 +83,14 @@ DEFAULTS: Final[dict[str, Any]] = {
     "name": "cuckoo",  # controller identity shown to the camera and in discovery
     "cert": "cuckoo.pem",
     "announce": True,  # multicast WS-Discovery Hello, or only answer probes
+    # Optional allow-list. Empty keeps backwards-compatible discovery of any
+    # compatible camera. Each entry requires a stable Protect MAC identity.
+    "cameras": [],
     # channel -> codec. Default H.264 everywhere so an ONVIF client (Home
     # Assistant) always finds a profile it can decode; set any to "h265".
     "tracks": {"video1": "h264", "video2": "h264", "video3": "h264"},
+    # Optional operator integration; remains inert unless explicitly enabled.
+    "mqtt": {"enabled": False},
     "ports": {
         "control": 7442,
         "ingest": 7550,
