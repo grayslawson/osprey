@@ -18,7 +18,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install test dependencies
-        run: python -m pip install --upgrade pytest mypy types-paho-mqtt paho-mqtt
+        run: python -m pip install --upgrade pytest mypy types-paho-mqtt paho-mqtt -e pyunifiwire
       - name: Run tests
         env:
           PYTHONPATH: ${{ forgejo.workspace }}/cuckoo:${{ forgejo.workspace }}/pyunifiwire/src
