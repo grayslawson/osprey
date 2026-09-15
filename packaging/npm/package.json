@@ -13,6 +13,9 @@
   "bugs": {
     "url": "https://github.com/grayslawson/osprey/issues"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": { "node": ">=18" },
   "license": "MIT"
 }
