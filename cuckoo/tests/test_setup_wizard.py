@@ -70,6 +70,28 @@ def test_setup_http_route_requires_token_and_returns_credentials(tmp_path: Path)
         response = client.getresponse()
         assert response.status == 400
         assert "setup token" in response.read().decode().lower()
+
+        manager.save(
+            {
+                "host": "127.0.0.1",
+                "bind": "127.0.0.1",
+                "name": "Driveway",
+                "mac": "AA:BB:CC:DD:EE:FF",
+                "ip": "192.0.2.20",
+                "frigate_url": "http://frigate.example.test:5000",
+                "admin_password": "correct horse battery staple",
+            },
+            "setup-token",
+        )
+        client.request("GET", "/setup")
+        response = client.getresponse()
+        assert response.status == 404
+        response.read()
+
+        client.request("POST", "/api/setup", "{}", {"Content-Type": "application/json"})
+        response = client.getresponse()
+        assert response.status == 404
+        response.read()
     finally:
         server.stop()
 
