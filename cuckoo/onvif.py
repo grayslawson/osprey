@@ -1741,7 +1741,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         root = selected_root
         if root == SETUP_PATH:
-            if self.services.read_only or self.services.setup is None:
+            if (
+                self.services.read_only
+                or self.services.setup is None
+                or not self.services.setup.pending
+            ):
                 self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
                 return
             self._setup_page()
@@ -1891,7 +1895,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         root = selected_root
         if root == SETUP_API_PATH:
-            if self.services.read_only or self.services.setup is None:
+            if (
+                self.services.read_only
+                or self.services.setup is None
+                or not self.services.setup.pending
+            ):
                 self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
                 return
             self._setup_submit()
@@ -1979,7 +1987,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _setup_page(self, error: str = "") -> None:
         """Render the unauthenticated, token-gated first-run wizard."""
         setup = self.services.setup
-        if setup is None:
+        if setup is None or not setup.pending:
             self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
             return
         message = f"<p class='error'>{html.escape(error)}</p>" if error else ""
@@ -2014,7 +2022,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _setup_submit(self) -> None:
         setup = self.services.setup
-        if setup is None:
+        if setup is None or not setup.pending:
             self._send(HTTPStatus.NOT_FOUND, b'{"error":"setup is unavailable"}', "application/json")
             return
         try:
