@@ -372,3 +372,21 @@ def test_describe_before_the_camera_sends_parameter_sets_is_honest() -> None:
         if client is not None:
             client.close()
         server.stop()
+
+
+def test_rtsp_server_challenges_clients_when_digest_auth_is_configured() -> None:
+    hub = media.Hub()
+    server = rtsp.RtspServer(
+        hub, advertise_host="127.0.0.1", port=0, auth=rtsp.RtspAuth("frigate", "secret")
+    )
+    server.start()
+    client: Client | None = None
+    try:
+        client = Client(server.port)
+        response = client.send("OPTIONS", "/video1")
+        assert "401 Unauthorized" in response
+        assert "WWW-Authenticate: Digest" in response
+    finally:
+        if client is not None:
+            client.close()
+        server.stop()
