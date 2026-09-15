@@ -53,6 +53,19 @@ project's release channels. Use the repository's `compose.release.yaml` for
 the actual controller deployment and pin its `OSPREY_IMAGE` to a release tag
 or digest.
 
+From a checkout, the local package forms are:
+
+```sh
+npm install -g ./packaging/npm
+brew install --formula ./packaging/homebrew/osprey.rb
+choco pack packaging/chocolatey/osprey.nuspec
+choco install osprey --source . --version 0.1.0
+```
+
+These install the `osprey doctor` launcher (and the Chocolatey Compose shim);
+they do not silently start a controller. Use the first-run wizard above to
+create state and secrets before starting a release image.
+
 Set `OSPREY_HOST` to an address reachable by the camera and
 `OSPREY_BIND` to the interface where Frigate should connect. Pin a release
 tag or digest instead of using `latest`:
