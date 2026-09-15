@@ -7,8 +7,8 @@ on:
 
 jobs:
   test:
-    # The Forgejo Runner must be registered with a `docker` label.
-    runs-on: docker
+    # Match the idle Forgejo runner registered for this repository.
+    runs-on: linux
     steps:
       - name: Check out source
         uses: https://code.forgejo.org/actions/checkout@v4
