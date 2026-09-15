@@ -57,10 +57,19 @@ class RtspAuth:
     password: str
     nonce_ttl: int = 300
     _nonces: dict[str, float] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    MAX_NONCES: Final[int] = 1024
 
     def challenge(self) -> str:
         nonce = secrets.token_urlsafe(24)
-        self._nonces[nonce] = time.monotonic() + self.nonce_ttl
+        now = time.monotonic()
+        with self._lock:
+            for old in [key for key, expiry in self._nonces.items() if expiry <= now]:
+                self._nonces.pop(old, None)
+            if len(self._nonces) >= self.MAX_NONCES:
+                oldest = min(self._nonces, key=lambda key: self._nonces[key])
+                self._nonces.pop(oldest, None)
+            self._nonces[nonce] = now + self.nonce_ttl
         return f'Digest realm="Osprey RTSP", nonce="{nonce}", algorithm=MD5, qop="auth"'
 
     def valid(self, header: str, method: str, uri: str) -> bool:
@@ -69,10 +78,11 @@ class RtspAuth:
         values = dict((k.strip(), v.strip().strip('"')) for k, _, v in
                       (part.partition("=") for part in header[7:].split(",")) if k)
         nonce = values.get("nonce", "")
-        expiry = self._nonces.get(nonce, 0)
-        if expiry < time.monotonic():
-            self._nonces.pop(nonce, None)
-            return False
+        with self._lock:
+            expiry = self._nonces.get(nonce, 0)
+            if expiry < time.monotonic():
+                self._nonces.pop(nonce, None)
+                return False
         if values.get("username") != self.username or values.get("uri") != uri:
             return False
         ha1 = hashlib.md5(f"{self.username}:Osprey RTSP:{self.password}".encode()).hexdigest()
