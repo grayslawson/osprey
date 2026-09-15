@@ -41,3 +41,12 @@ has been deliberately promoted and validated. Never use `handoff.sh` against a
 production camera as part of routine validation. ONVIF authentication is
 opt-in; leave it disabled only when the Frigate client is known to require
 anonymous ONVIF, and test interoperability before changing it.
+
+## First-run recovery
+
+The wizard validates and stages the runtime JSON, Frigate metadata, and generated secret
+files together. If the process exits during a save, restart Osprey and check setup status
+before submitting again. A failed save leaves setup pending; do not copy temporary files.
+If the one-time setup token is lost, restart Osprey and read the new token from the service
+log. After setup completes, use the documented configuration-edit and restart procedure
+instead of reopening the wizard.

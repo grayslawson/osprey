@@ -3,6 +3,9 @@
 # or Frigate state.
 set -u
 
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+controller_dir=$(CDPATH='' cd -- "$script_dir/../cuckoo" && pwd)
+
 usage() {
     cat <<'EOF'
 Usage: osprey doctor [options]
@@ -10,6 +13,7 @@ Usage: osprey doctor [options]
 Options:
   --host ADDRESS       Osprey advertised host (or OSPREY_HOST)
   --camera ADDRESS     camera address to route-test
+  --callback URL        callback URL that must be reachable (or OSPREY_CALLBACK_URL)
   --frigate URL        existing Frigate URL to health-check
   --config PATH        JSON config to validate (default: cuckoo.json)
   --ports LIST         comma-separated ports (default: 7442,7444,7550,8000,8554)
@@ -19,6 +23,7 @@ EOF
 
 host=${OSPREY_HOST:-}
 camera=${OSPREY_CAMERA_IP:-}
+callback=${OSPREY_CALLBACK_URL:-}
 frigate=${OSPREY_FRIGATE_URL:-}
 config_file=cuckoo.json
 ports=7442,7444,7550,8000,8554
@@ -30,10 +35,10 @@ fail() { printf 'ERROR   %s\n' "$*"; errors=$((errors + 1)); }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --host|--camera|--frigate|--config|--ports)
+        --host|--camera|--callback|--frigate|--config|--ports)
             [ "$#" -gt 1 ] || { usage >&2; exit 2; }
             case "$1" in
-                --host) host=$2 ;; --camera) camera=$2 ;; --frigate) frigate=$2
+                --host) host=$2 ;; --camera) camera=$2 ;; --callback) callback=$2 ;; --frigate) frigate=$2
                 ;; --config) config_file=$2 ;; --ports) ports=$2 ;;
             esac
             shift 2 ;;
@@ -62,7 +67,7 @@ else
 fi
 
 if [ -f "$config_file" ]; then
-    if command -v python3 >/dev/null 2>&1 && PYTHONPATH="${PYTHONPATH:-}cuckoo" python3 - "$config_file" <<'PY'
+    if command -v python3 >/dev/null 2>&1 && PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$controller_dir" python3 - "$config_file" <<'PY'
 import sys
 import config
 try:
@@ -105,6 +110,22 @@ if [ -n "$camera" ]; then
         ok "camera has a kernel route: $camera"
     else
         fail "camera has no kernel route: $camera"
+    fi
+fi
+
+if [ -n "$callback" ]; then
+    case "$callback" in
+        http://*|https://*) ;;
+        *) fail 'callback URL must start with http:// or https://' ;;
+    esac
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsS --connect-timeout 3 --max-time 5 "$callback" >/dev/null 2>&1; then
+            ok "callback URL responded: $callback"
+        else
+            fail "callback URL did not respond: $callback"
+        fi
+    else
+        fail 'curl is unavailable; cannot check callback reachability'
     fi
 fi
 
