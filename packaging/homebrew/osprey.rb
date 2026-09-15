@@ -1,8 +1,9 @@
 class Osprey < Formula
   desc "Ubiquiti PTZ controller for an existing Frigate installation"
   homepage "https://github.com/grayslawson/osprey"
-  url "https://github.com/grayslawson/osprey/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "REPLACE_WITH_RELEASE_SHA256"
+  version "0.1.0"
+  url "https://github.com/grayslawson/osprey/archive/refs/tags/v#{version}.tar.gz"
+  # A Homebrew tap should add the SHA-256 for each published release archive.
   license "MIT"
 
   def install
