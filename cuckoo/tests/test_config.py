@@ -26,6 +26,7 @@ def test_defaults_answer_everything() -> None:
     assert merged["name"] == "cuckoo"
     assert merged["announce"] is True
     assert merged["ports"]["onvif"] == 8000
+    assert merged["bind"] == "0.0.0.0"
 
 
 def test_the_default_codec_is_h264_on_every_channel() -> None:
@@ -111,6 +112,15 @@ def test_no_host_anywhere_is_an_error(tmp_path: Path) -> None:
         main.resolve_options(_args(config=str(empty)))
 
 
+def test_setup_mode_allows_a_missing_host_and_config(tmp_path: Path) -> None:
+    options = main.resolve_options(
+        _args(config=str(tmp_path / "cuckoo.json"), setup=True, bind="127.0.0.1")
+    )
+    assert options.setup_mode is True
+    assert options.host == "127.0.0.1"
+    assert options.bind_host == "127.0.0.1"
+
+
 def test_a_named_config_that_is_missing_is_an_error() -> None:
     with pytest.raises(SystemExit):
         main.resolve_options(_args(config="/no/such/file.json", host="1.2.3.4"))
@@ -135,6 +145,7 @@ def test_camera_registry_rejects_invalid_entries(value: object) -> None:
         {"tracks": {}},
         {"tracks": {"video1": "vp9"}},
         {"ports": {"control": 7442, "ingest": 7442}},
+        {"bind": "not an address"},
         {"name": ""},
     ],
 )

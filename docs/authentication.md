@@ -17,6 +17,10 @@ Put the resulting value in a root-only environment file outside the repository:
 OSPREY_ADMIN_PASSWORD_HASH=pbkdf2_sha256$310000$...
 ```
 
+The first-run wizard creates this file as `/state/osprey-secrets.env` and Osprey
+loads it automatically on the next restart. Set `OSPREY_SECRETS_FILE` when the
+file lives elsewhere. Generated files must remain mode `0600`.
+
 Alternatively, set `OSPREY_ADMIN_PASSWORD_FILE` to a root-readable file that
 contains one password. Configure exactly one of these methods in a release
 deployment. If neither is set, authentication is disabled for local

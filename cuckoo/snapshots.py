@@ -229,10 +229,11 @@ class SnapshotServer(ThreadingHTTPServer):
         cert: Path | None,
         port: int = SNAPSHOT_PORT,
         allowed_peers: set[str] | frozenset[str] | None = None,
+        bind_host: str = "0.0.0.0",
     ) -> None:
         self.store = store
         self.allowed_peers = frozenset(allowed_peers or ())
-        super().__init__(("0.0.0.0", port), _Handler, bind_and_activate=False)
+        super().__init__((bind_host, port), _Handler, bind_and_activate=False)
         if cert is not None:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(str(cert))

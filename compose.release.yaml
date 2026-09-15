@@ -6,7 +6,7 @@ services:
     image: ${OSPREY_IMAGE:?Set OSPREY_IMAGE to an immutable release tag or digest}
     pull_policy: always
     working_dir: /workspace/cuckoo
-    command: ["python3", "main.py", "--host", "${OSPREY_HOST:?Set OSPREY_HOST to the host/LAN address}", "--cert", "/state/osprey.pem"]
+    command: ["python3", "main.py", "--config", "/state/cuckoo.json", "--setup", "--cert", "/state/osprey.pem"]
     environment:
       PYTHONPATH: /workspace/pyunifiwire/src
     volumes:
