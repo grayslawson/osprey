@@ -7,4 +7,7 @@
     <description>Ubiquiti PTZ controller for an existing Frigate installation. Requires Docker or Podman.</description>
     <tags>ptz camera frigate onvif rtsp</tags>
   </metadata>
+  <files>
+    <file src="..\..\compose.release.yaml" target="tools" />
+  </files>
 </package>

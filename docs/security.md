@@ -44,8 +44,12 @@ events, and issue PTZ operations (including moves and preset changes). The
 ONVIF port does not grant the browser admin session, MQTT credentials, or the
 camera's private control-channel credentials, but network access should still
 be treated as control-plane access. Osprey's RTSP service is a separate local
-media service and currently has no RTSP user/password gate, so ONVIF
-authentication alone does not hide the video stream.
+media service. Set `OSPREY_RTSP_USERNAME` together with `OSPREY_RTSP_PASSWORD`
+or `OSPREY_RTSP_PASSWORD_FILE` to require expiring-nonce RTSP Digest
+authentication; when unset, RTSP remains anonymous for compatibility. Digest
+authenticates the client but does not encrypt video, so use network ACLs or a
+TLS-terminating tunnel when crossing an untrusted network. ONVIF authentication
+does not automatically protect RTSP.
 
 When authentication is enabled, clients must send an ONVIF WS-Security
 UsernameToken using `PasswordDigest`; anonymous SOAP calls are rejected. Frigate
@@ -63,8 +67,7 @@ will make an authenticated Osprey endpoint reject the requests.
 network while validating a deployment. For a shared or untrusted LAN, create a
 dedicated Osprey ONVIF account, configure the matching Frigate credentials,
 test discovery, presets, movement, events, and autotracking, then enable
-`OSPREY_ONVIF_USERNAME`/`OSPREY_ONVIF_PASSWORD_FILE`. Restrict RTSP separately
-with network ACLs or a trusted proxy until RTSP authentication is available.
+`OSPREY_ONVIF_USERNAME`/`OSPREY_ONVIF_PASSWORD_FILE`.
 
 Implementation references: Frigate's [ONVIF camera configuration](https://github.com/blakeblackshear/frigate/blob/dev/frigate/config/camera/onvif.py),
 [ONVIF controller](https://github.com/blakeblackshear/frigate/blob/dev/frigate/ptz/onvif.py),

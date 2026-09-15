@@ -339,12 +339,13 @@ class IngestServer(socketserver.ThreadingTCPServer):
         port: int = INGEST_PORT,
         fallback_name: str = "video1",
         allowed_peers: set[str] | frozenset[str] | None = None,
+        bind_host: str = "0.0.0.0",
     ) -> None:
         self.hub = hub
         self.fallback_name = fallback_name
         self.allowed_peers = frozenset(allowed_peers or ())
         self.closing = threading.Event()
-        super().__init__(("0.0.0.0", port), _Handler)
+        super().__init__((bind_host, port), _Handler)
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:

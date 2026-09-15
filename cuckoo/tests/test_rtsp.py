@@ -9,12 +9,33 @@ from __future__ import annotations
 
 import socket
 import time
+import hashlib
+import re
 
 from unifiwire import flv
 from unifiwire import hevc
 import media
 import rtsp
 import videofmt
+
+
+def test_digest_auth_accepts_valid_header_and_rejects_wrong_uri() -> None:
+    auth = rtsp.RtspAuth("frigate", "secret")
+    challenge = auth.challenge()
+    nonce_match = re.search(r'nonce="([^"]+)"', challenge)
+    assert nonce_match is not None
+    nonce = nonce_match.group(1)
+    method = "DESCRIBE"
+    uri = "rtsp://camera/video1"
+    ha1 = hashlib.md5(b"frigate:Osprey RTSP:secret").hexdigest()
+    ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
+    response = hashlib.md5(f"{ha1}:{nonce}:00000001:abc123:auth:{ha2}".encode()).hexdigest()
+    header = (
+        f'Digest username="frigate", realm="Osprey RTSP", nonce="{nonce}", '
+        f'uri="{uri}", qop=auth, nc=00000001, cnonce="abc123", response="{response}"'
+    )
+    assert auth.valid(header, method, uri)
+    assert not auth.valid(header, method, uri + "?wrong")
 from test_media import (
     AAC_ASC,
     AAC_FRAME,

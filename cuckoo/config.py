@@ -20,7 +20,9 @@ design:
   outside the repo (see ``handoff.sh`` and ``CUCKOO_SECRETS``), not here.
 * ``rtsp.profiles`` (``main``/``medium``/``low``) — became **``tracks``**, the three
   encoder channels ``video1``/``video2``/``video3``, each now naming its **codec**.
-* ``ports`` — kept, same idea (``control``/``ingest``/``snapshot``/``rtsp``/
+* ``bind`` controls the local HTTP/ONVIF bind address; ``host`` remains the
+  advertised address camera and clients use. ``ports`` — kept, same idea
+  (``control``/``ingest``/``snapshot``/``rtsp``/
   ``onvif``/``discovery``).
 * ``controller.uuid`` — no longer needed: this cuckoo adopts with a null
   ``controllerUuid`` and ``overrideUuid: true`` rather than persisting one.
@@ -92,6 +94,14 @@ def validate_runtime(value: dict[str, Any]) -> None:
         or re.fullmatch(r"[A-Za-z0-9_.:\[\]-]+", host.strip()) is None
     ):
         raise ValueError('"host" must be a hostname or IP address')
+    bind = value.get("bind", "0.0.0.0")
+    if not isinstance(bind, str) or not bind.strip() or len(bind.strip()) > 255:
+        raise ValueError('"bind" must be an IP address')
+    try:
+        import ipaddress
+        ipaddress.ip_address(bind.strip("[]"))
+    except (ValueError, TypeError):
+        raise ValueError('"bind" must be an IP address')
     if not isinstance(value.get("name"), str) or not value["name"].strip():
         raise ValueError('"name" must be a non-empty string')
     if not isinstance(value.get("announce"), bool):
@@ -124,7 +134,9 @@ def validate_runtime(value: dict[str, Any]) -> None:
 # everything. Ports mirror the module constants (asserted by the tests).
 DEFAULTS: Final[dict[str, Any]] = {
     "host": None,  # the address the camera and clients reach us on; required
+    "bind": "0.0.0.0",  # local interface for HTTP/ONVIF listeners
     "name": "cuckoo",  # controller identity shown to the camera and in discovery
+    "frigate": {"url": None},  # optional external Frigate base URL metadata
     "cert": "cuckoo.pem",
     "announce": True,  # multicast WS-Discovery Hello, or only answer probes
     # Optional allow-list. Empty keeps backwards-compatible discovery of any

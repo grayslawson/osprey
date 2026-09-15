@@ -36,10 +36,12 @@ import onvif
 import logbuffer
 import rtsp
 import snapshots
+import setup_wizard
 from controller import CONTROL_PORT, Controller, normalise_mac
 from unifiwire.envelope import Envelope
 from model import Camera, Codec, Position
 from sentry_runtime import MovementGate
+from frigate_config import validate_url
 
 DEFAULT_CERT: Final = "cuckoo.pem"
 SNAPSHOT_WAIT_SEC: Final = 10.0
@@ -52,6 +54,7 @@ class Options:
     """Everything the stack needs to know. Ports are settable so tests can bind 0."""
 
     host: str
+    bind_host: str = "0.0.0.0"
     cert: Path = Path(DEFAULT_CERT)
     name: str = "cuckoo"
     tracks: tuple[str, ...] = ("video1",)
@@ -71,6 +74,9 @@ class Options:
     expected_camera_mac: str | None = None
     cameras: tuple[dict[str, object], ...] = ()
     mqtt: mqtt_bridge.MqttConfig = field(default_factory=mqtt_bridge.MqttConfig)
+    config_path: Path = Path(config.DEFAULT_CONFIG_PATH)
+    setup_mode: bool = False
+    frigate_url: str | None = None
 
 
 @dataclass
@@ -157,13 +163,22 @@ def resolve_options(args: argparse.Namespace) -> Options:
     not override the file; a flag given always wins. A missing default config file
     is fine, but a `--config PATH` that does not exist is an error.
     """
-    path = args.config or config.DEFAULT_CONFIG_PATH
-    if args.config and not os.path.exists(path):
+    path = args.config or os.environ.get("OSPREY_CONFIG_FILE") or config.DEFAULT_CONFIG_PATH
+    setup_wizard.load_environment(
+        os.environ.get("OSPREY_SECRETS_FILE") or str(Path(path).parent / "osprey-secrets.env")
+    )
+    setup_mode = bool(getattr(args, "setup", False)) or os.environ.get("OSPREY_SETUP") == "1"
+    if args.config and not os.path.exists(path) and not setup_mode:
         raise SystemExit(f"config file not found: {path}")
     effective = config.merged(config.load(path))
+    config_had_host = bool(effective.get("host"))
 
     if args.host is not None:
         effective["host"] = args.host
+    if getattr(args, "bind", None) is not None:
+        effective["bind"] = args.bind
+    elif os.environ.get("OSPREY_BIND"):
+        effective["bind"] = os.environ["OSPREY_BIND"]
     if args.name is not None:
         effective["name"] = args.name
     if args.cert is not None:
@@ -183,19 +198,31 @@ def resolve_options(args: argparse.Namespace) -> Options:
         if flag is not None:
             ports[key] = flag
 
+    if not config_had_host and setup_mode:
+        effective["host"] = args.host or os.environ.get("OSPREY_HOST") or "127.0.0.1"
     try:
         config.validate_runtime(effective)
     except ValueError as exc:
         raise SystemExit(f"invalid runtime configuration: {exc}") from exc
-    if not effective["host"]:
+    if not effective["host"] and not setup_mode:
         raise SystemExit('no host set — pass --host or set "host" in the config file')
     try:
         registered = tuple(config.validate_cameras(effective.get("cameras", [])))
     except ValueError as exc:
         raise SystemExit(f"invalid camera registry: {exc}") from exc
     names, codecs = tracks_to_model(effective["tracks"])
+    frigate_url: str | None = None
+    frigate_config = effective.get("frigate")
+    if isinstance(frigate_config, dict) and frigate_config.get("url") is not None:
+        if not isinstance(frigate_config.get("url"), str):
+            raise SystemExit('invalid runtime configuration: "frigate.url" must be a URL')
+        try:
+            frigate_url = validate_url(frigate_config["url"])
+        except ValueError as exc:
+            raise SystemExit(f"invalid runtime configuration: {exc}") from exc
     return Options(
         host=effective["host"],
+        bind_host=str(effective.get("bind") or os.environ.get("OSPREY_BIND") or "0.0.0.0"),
         cert=Path(effective["cert"]),
         name=effective["name"],
         tracks=names,
@@ -217,6 +244,9 @@ def resolve_options(args: argparse.Namespace) -> Options:
         ),
         cameras=registered,
         mqtt=mqtt_bridge.MqttConfig.from_mapping(effective.get("mqtt")),
+        config_path=Path(path),
+        setup_mode=setup_mode and not config_had_host,
+        frigate_url=frigate_url,
     )
 
 
@@ -245,12 +275,14 @@ def build(options: Options) -> Stack:
         port=options.ingest_port,
         fallback_name=options.tracks[0] if options.tracks else "video1",
         allowed_peers=allowed_camera_peers,
+        bind_host=options.bind_host,
     )
     ingest_port = int(ingest.server_address[1])
     images = snapshots.Store("https://placeholder")  # rewritten below, once bound
     uploads = snapshots.SnapshotServer(
         images, cert=options.cert, port=options.snapshot_port,
         allowed_peers=allowed_camera_peers,
+        bind_host=options.bind_host,
     )
     snapshot_port = int(uploads.server_address[1])
     images.base_url = f"https://{options.host}:{snapshot_port}"
@@ -265,7 +297,7 @@ def build(options: Options) -> Stack:
     if bool(rtsp_user) != bool(rtsp_password):
         raise ValueError("OSPREY_RTSP_USERNAME and RTSP password must be configured together")
     rtsp_auth = rtsp.RtspAuth(rtsp_user, rtsp_password) if rtsp_user else None
-    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth)
+    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth, bind_host=options.bind_host)
 
     control = Controller(
         cert=options.cert,
@@ -280,6 +312,7 @@ def build(options: Options) -> Stack:
         expected_camera_ip=options.expected_camera_ip,
         expected_camera_mac=options.expected_camera_mac,
         configured_cameras={str(item["mac"]): item for item in options.cameras},
+        bind_host=options.bind_host,
     )
 
     def current() -> Camera | None:
@@ -423,12 +456,25 @@ def build(options: Options) -> Stack:
     backend = backend_for(None)
     registry = onvif.CameraRegistry()
     read_only_registry = onvif.CameraRegistry()
-    services = onvif.Services(backend, host=options.host, port=options.onvif_port,
-                               auth=onvif.AdminAuth.from_environment(),
-                               onvif_auth=onvif.OnvifAuth.from_environment())
-    north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry)
+    setup = setup_wizard.SetupManager(
+        options.config_path,
+        secrets_path=os.environ.get("OSPREY_SECRETS_FILE"),
+        frigate_path=os.environ.get("OSPREY_FRIGATE_CONFIG_FILE"),
+    ) if options.setup_mode else None
+    services = onvif.Services(
+        backend, host=options.host, port=options.onvif_port,
+        auth=onvif.AdminAuth.from_environment(),
+        onvif_auth=onvif.OnvifAuth.from_environment(), setup=setup,
+        frigate_url=options.frigate_url,
+    )
+    north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry, bind_host=options.bind_host)
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
+    if setup is not None:
+        log.warning(
+            "first-run setup pending; open http://%s:%d/setup and use setup token: %s",
+            options.host, north.port, setup.token,
+        )
     read_only_north: onvif.OnvifServer | None = None
     if options.onvif_read_only_port is not None:
         read_only_services = onvif.Services(
@@ -441,6 +487,7 @@ def build(options: Options) -> Stack:
         read_only_north = onvif.OnvifServer(
             read_only_services, port=options.onvif_read_only_port,
             registry=read_only_registry,
+            bind_host=options.bind_host,
         )
         read_only_services.port = read_only_north.port
     movement_gate = MovementGate()
@@ -559,7 +606,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # flag is omitted; a flag that is given always wins. See resolve_options().
     parser.add_argument("--config", default=None,
                         help=f"JSON config file (default {config.DEFAULT_CONFIG_PATH} if present)")
-    parser.add_argument("--host", default=None, help="address the camera and clients reach us on")
+    parser.add_argument("--host", default=None, help="advertised address camera clients reach us on")
+    parser.add_argument("--bind", default=None, help="local interface for HTTP/ONVIF listeners (default: 0.0.0.0)")
+    parser.add_argument("--setup", action="store_true", help="start the browser first-run setup wizard")
     parser.add_argument("--control-port", type=int, default=None)
     parser.add_argument("--ingest-port", type=int, default=None)
     parser.add_argument("--snapshot-port", type=int, default=None)

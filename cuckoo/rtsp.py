@@ -500,12 +500,12 @@ class RtspServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
     def __init__(self, hub: media.Hub, advertise_host: str, port: int = RTSP_PORT,
-                 auth: RtspAuth | None = None) -> None:
+                 auth: RtspAuth | None = None, bind_host: str = "0.0.0.0") -> None:
         self.hub = hub
         self.advertise_host = advertise_host
         self.auth = auth
         self.closing = threading.Event()
-        super().__init__(("0.0.0.0", port), _Handler)
+        super().__init__((bind_host, port), _Handler)
         self._thread: threading.Thread | None = None
 
     @property

@@ -79,6 +79,12 @@ export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:vX.Y.Z
 docker compose -f compose.release.yaml up -d
 ```
 
+On a new state volume, open `http://<osprey-host>:8000/setup` and enter the
+one-time token shown by `docker compose ... logs osprey`. The wizard writes the
+runtime configuration and 0600 deployment secrets; restart the service after
+saving. Full installation and upgrade paths are in
+[`docs/installation.md`](docs/installation.md).
+
 The ONVIF/operator endpoint uses port `8000`; RTSP uses `8554`. Configure the
 camera identity and any additional cameras in `cuckoo.json` as described in
 [`docs/multi-camera.md`](docs/multi-camera.md). Keep credentials in a secret
@@ -129,8 +135,10 @@ add-on or a service on another host.
 - ONVIF UsernameToken authentication is opt-in while Frigate interoperability
   is being validated. Anonymous ONVIF allows reachable clients to issue PTZ
   commands, so use a firewall or VLAN when it is enabled.
-- RTSP currently has no application-level password. Restrict it with bind
-  addresses, firewall rules, or a trusted proxy.
+- RTSP supports optional expiring-nonce Digest authentication via
+  `OSPREY_RTSP_USERNAME` plus `OSPREY_RTSP_PASSWORD` (or a password file).
+  Authentication does not encrypt video; keep RTSP on a trusted network or
+  behind a TLS tunnel.
 - Keep camera, Protect, MQTT, admin, and Frigate credentials out of Git and
   issue reports. See [`docs/security.md`](docs/security.md).
 

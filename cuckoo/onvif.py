@@ -37,6 +37,7 @@ from media import BANDWIDTH_WINDOW
 from model import PAN, TILT, ZOOM, Camera, Position
 from frigate_config import Store
 from logbuffer import BUFFER, LogBuffer
+from setup_wizard import SetupError, SetupManager
 
 ONVIF_PORT: Final = 8000
 DEVICE_PATH: Final = "/onvif/device_service"
@@ -55,6 +56,8 @@ MANUAL_STEP_FRACTION: Final = 0.04
 LOGIN_PATH: Final = "/login"
 FRIGATE_API_PATH: Final = "/api/frigate"
 LOGS_API_PATH: Final = "/api/logs"
+SETUP_PATH: Final = "/setup"
+SETUP_API_PATH: Final = "/api/setup"
 SESSION_COOKIE: Final = "osprey_session"
 CSRF_FIELD: Final = "csrf"
 
@@ -583,7 +586,9 @@ class Services:
 
     def __init__(self, backend: Backend, host: str, port: int = ONVIF_PORT,
                  auth: AdminAuth | None = None, onvif_auth: OnvifAuth | None = None,
-                 read_only: bool = False, logs: LogBuffer | None = None) -> None:
+        read_only: bool = False, logs: LogBuffer | None = None,
+        setup: SetupManager | None = None,
+        frigate_url: str | None = None) -> None:
         self.backend = backend
         self.host = host
         self.port = port
@@ -593,8 +598,9 @@ class Services:
         self.onvif_auth = onvif_auth or OnvifAuth()
         self.read_only = read_only
         self.logs = logs or BUFFER
+        self.setup = setup
         self.frigate_store = Store.from_environment()
-        self.frigate_url = self.frigate_store.load()
+        self.frigate_url = self.frigate_store.load() or frigate_url
 
     def frigate_settings(self) -> dict[str, object]:
         return {"base_url": self.frigate_url, "configured": self.frigate_url is not None}
@@ -1726,6 +1732,12 @@ class _Handler(BaseHTTPRequestHandler):
         if selected_root is None:
             return
         root = selected_root
+        if root == SETUP_PATH:
+            if self.services.read_only or self.services.setup is None:
+                self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
+                return
+            self._setup_page()
+            return
         if root == LOGIN_PATH:
             self._login_page()
             return
@@ -1747,6 +1759,12 @@ class _Handler(BaseHTTPRequestHandler):
         if root in ("/", "/status", "/status/"):
             if self.services.read_only:
                 self._send(HTTPStatus.NOT_FOUND, b"operator console is disabled on this endpoint", "text/plain")
+                return
+            if self.services.setup is not None and self.services.setup.pending:
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", SETUP_PATH)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return
             if not self._require_admin():
                 return
@@ -1864,6 +1882,12 @@ class _Handler(BaseHTTPRequestHandler):
         if selected_root is None:
             return
         root = selected_root
+        if root == SETUP_API_PATH:
+            if self.services.read_only or self.services.setup is None:
+                self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
+                return
+            self._setup_submit()
+            return
         if root == LOGIN_PATH:
             self._login()
             return
@@ -1943,6 +1967,63 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(HTTPStatus.FORBIDDEN, b'{"error":"invalid csrf token"}', "application/json")
                 return False
         return True
+
+    def _setup_page(self, error: str = "") -> None:
+        """Render the unauthenticated, token-gated first-run wizard."""
+        setup = self.services.setup
+        if setup is None:
+            self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
+            return
+        message = f"<p class='error'>{html.escape(error)}</p>" if error else ""
+        body = ("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Set up Osprey</title><style>body{font:16px system-ui;max-width:48rem;margin:5vh auto;padding:1.5rem;background:#101820;color:#eef}"
+                "fieldset{border:1px solid #38505e;border-radius:10px;margin:1rem 0;padding:1rem}label{display:block;margin:.7rem 0}"
+                "input,button{font:inherit;padding:.65rem;width:100%;box-sizing:border-box}input{background:#182631;color:#fff;border:1px solid #536b78;border-radius:5px}"
+                "button{background:#6ee7b7;border:0;border-radius:5px;font-weight:700;cursor:pointer}.error{color:#fca5a5}.hint{color:#a7bac5;font-size:.88rem}"
+                ".credentials{white-space:pre-wrap;background:#0b1118;padding:1rem;border-radius:6px;display:none}</style>"
+                "<h1>Set up Osprey</h1><p class='hint'>This one-time wizard creates the controller configuration and deployment secrets."
+                " Copy the setup token from the Osprey startup log before submitting.</p>"
+                f"{message}<form id='setup-form'><fieldset><legend>Network</legend>"
+                "<label>Advertised host <input name='host' required placeholder='osprey.example.lan'></label>"
+                "<label>Bind address <input name='bind' value='0.0.0.0' required></label></fieldset>"
+                "<fieldset><legend>Camera</legend>"
+                "<label>Name <input name='name' required placeholder='Driveway PTZ'></label>"
+                "<label>Protect MAC address <input name='mac' required placeholder='AA:BB:CC:DD:EE:FF'></label>"
+                "<label>Camera IP address <input name='ip' required placeholder='192.0.2.20'></label></fieldset>"
+                "<fieldset><legend>Frigate and access</legend>"
+                "<label>Frigate URL <input name='frigate_url' type='url' required placeholder='http://frigate:5000'></label>"
+                "<label>Admin password <input name='admin_password' type='password' minlength='8' required autocomplete='new-password'></label>"
+                "<label>Setup token <input name='setup_token' type='password' required autocomplete='off'></label></fieldset>"
+                "<button type='submit'>Save configuration</button></form><p id='result' class='hint'></p>"
+                "<pre id='credentials' class='credentials'></pre><script>"
+                "const form=document.getElementById('setup-form'),result=document.getElementById('result'),out=document.getElementById('credentials');"
+                "form.onsubmit=async e=>{e.preventDefault();result.textContent='Saving…';const data=Object.fromEntries(new FormData(form));"
+                "try{const r=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});"
+                "const j=await r.json();if(!r.ok)throw Error(j.error||'setup failed');result.textContent='Saved. Restart Osprey to apply the configuration.';"
+                "out.textContent='Save these generated credentials now; they are shown only once.\\n\\n'+Object.entries(j.generated_credentials||{}).map(([k,v])=>k+'='+v).join('\\n');out.style.display='block';form.querySelector('button').disabled=true;"
+                "}catch(err){result.textContent=err.message}};</script>")
+        self._send(HTTPStatus.OK, body.encode(), "text/html; charset=utf-8")
+
+    def _setup_submit(self) -> None:
+        setup = self.services.setup
+        if setup is None:
+            self._send(HTTPStatus.NOT_FOUND, b'{"error":"setup is unavailable"}', "application/json")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 1 or length > 16 * 1024:
+                raise SetupError("invalid request size")
+            if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                raise SetupError("Content-Type must be application/json")
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise SetupError("setup payload must be an object")
+            token = self.headers.get("X-Setup-Token", "") or str(payload.pop("setup_token", ""))
+            result = setup.save(payload, token)
+        except (SetupError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._send(HTTPStatus.BAD_REQUEST, json.dumps({"error": str(exc)}).encode(), "application/json")
+            return
+        self._send(HTTPStatus.OK, json.dumps(result).encode(), "application/json")
 
     def _login_page(self, error: str = "") -> None:
         if not self.services.auth.enabled:
@@ -2030,7 +2111,8 @@ class OnvifServer(ThreadingHTTPServer):
 
     def __init__(self, services: Services, port: int = ONVIF_PORT,
                  auth: AdminAuth | None = None,
-                 registry: CameraRegistry | None = None) -> None:
+                 registry: CameraRegistry | None = None,
+                 bind_host: str = "0.0.0.0") -> None:
         self.services = services
         if auth is not None:
             self.services.auth = auth
@@ -2039,7 +2121,7 @@ class OnvifServer(ThreadingHTTPServer):
         self._preview_locks: dict[str | None, threading.Lock] = {None: threading.Lock()}
         # Compatibility for integrations/tests that inspect the single-camera lock.
         self._preview_lock = self._preview_locks[None]
-        super().__init__(("0.0.0.0", port), _Handler)
+        super().__init__((bind_host, port), _Handler)
         self._thread: threading.Thread | None = None
 
     @property

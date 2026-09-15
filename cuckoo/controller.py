@@ -142,6 +142,7 @@ class Controller:
         expected_camera_ip: str | None = None,
         expected_camera_mac: str | None = None,
         configured_cameras: dict[str, dict[str, object]] | None = None,
+        bind_host: str = "0.0.0.0",
     ) -> None:
         self.cert = cert
         self.ingest_host = ingest_host
@@ -156,6 +157,7 @@ class Controller:
         self.expected_camera_mac = (
             normalise_mac(expected_camera_mac) if expected_camera_mac else None
         )
+        self.bind_host = bind_host
         self.configured_cameras = configured_cameras or {}
         self.cameras: dict[str, Camera] = {}
         self._sessions: dict[socket.socket, Session] = {}
@@ -180,7 +182,7 @@ class Controller:
         context.load_cert_chain(str(self.cert))
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("0.0.0.0", self.control_port))
+        listener.bind((self.bind_host, self.control_port))
         listener.listen(8)
         self._listener = listener
         log.info("control channel listening on :%d", self.control_port)

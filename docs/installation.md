@@ -9,6 +9,40 @@ The supported release image is `ghcr.io/grayslawson/osprey`, published for
 
 ## Docker or rootless Podman
 
+### Browser first-run setup
+
+For a new deployment, start the release Compose file with the ONVIF port
+reachable from your LAN:
+
+```sh
+export OSPREY_BIND=192.0.2.10       # interface clients should use
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:vX.Y.Z  # replace with a release tag or digest
+docker compose -f compose.release.yaml up -d
+docker compose -f compose.release.yaml logs osprey | grep 'setup token'
+```
+
+Keep `OSPREY_BIND` set to the same LAN interface you enter in the wizard; it
+controls the host-side port publication while the generated `bind` value
+controls Osprey's listeners inside the container.
+
+Open `http://<osprey-host>:8000/setup` and enter the setup token printed in
+the container log. The wizard collects the advertised host, bind address,
+camera identity, Frigate URL, and operator password. It atomically writes
+`/state/cuckoo.json`, `/state/osprey-secrets.env`, and the generated password
+files with mode `0600`. Generated RTSP/ONVIF credentials are shown once; save
+them before restarting the container. ONVIF credentials are commented out in
+the generated environment file so Frigate remains compatible by default.
+
+Restart after saving:
+
+```sh
+docker compose -f compose.release.yaml restart osprey
+```
+
+The setup token is per process and is never persisted. If the token is lost,
+restart Osprey and read the new token from the logs. Keep the setup port on a
+trusted LAN while the wizard is pending.
+
 ### Package-manager helpers
 
 Osprey is an OCI container, so package-manager integrations install a small
