@@ -13,7 +13,7 @@ done
 # These identifiers belong to private/development environments and must not
 # leak into public artifacts. `git grep` skips binary fixtures automatically;
 # neutral RFC1918 addresses in protocol tests are intentionally allowed.
-if git grep -nEI 'pd[-_ ]?nixos|(^|[^[:alnum:]])finch([^[:alnum:]]|$)' -- .; then
+if git grep -nEI 'pd[-_ ]?nixos|(^|[^[:alnum:]])finch([^[:alnum:]]|$)' -- . ':(exclude)scripts/validate-repo.sh'; then
 	echo 'private or development-only identifiers found in tracked text' >&2
 	exit 1
 fi

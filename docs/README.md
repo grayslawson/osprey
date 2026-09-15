@@ -30,6 +30,8 @@ matches the task.
 
 - [Harnesses](../cuckoo/harness/README.md) — opt-in hardware and client acceptance
   checks.
+- [Repository sync](repository-sync.md) — Forgejo ownership, GitHub mirroring, and
+  GHCR release responsibilities.
 - [NixOS](nixos.md) — declarative package and module usage.
 - [Tests](../cuckoo/tests/README.md) — test layout and focused commands.
 - [Quality map](quality.md) — domain-by-domain evidence and known limits.

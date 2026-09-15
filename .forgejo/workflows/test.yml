@@ -1,0 +1,37 @@
+name: Forgejo tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: docker
+    steps:
+      - name: Check out source
+        uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: https://code.forgejo.org/actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pytest mypy types-paho-mqtt paho-mqtt
+      - name: Run tests
+        env:
+          PYTHONPATH: ${{ forgejo.workspace }}/cuckoo:${{ forgejo.workspace }}/pyunifiwire/src
+        run: |
+          python -m pytest -q cuckoo/tests
+          python -m pytest -q pyunifiwire/tests
+      - name: Run type checks and compile sources
+        run: |
+          python -m mypy --config-file cuckoo/mypy.ini cuckoo
+          (cd pyunifiwire && python -m mypy .)
+          python -m compileall -q cuckoo pyunifiwire/src
+      - name: Validate repository policy
+        run: ./scripts/validate-repo.sh
