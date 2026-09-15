@@ -36,6 +36,24 @@ def test_digest_auth_accepts_valid_header_and_rejects_wrong_uri() -> None:
     )
     assert auth.valid(header, method, uri)
     assert not auth.valid(header, method, uri + "?wrong")
+
+
+def test_digest_auth_rejects_expired_nonce_and_unsupported_qop() -> None:
+    auth = rtsp.RtspAuth("frigate", "secret", nonce_ttl=0)
+    challenge = auth.challenge()
+    nonce = re.search(r'nonce="([^"]+)"', challenge).group(1)
+    header = (
+        f'Digest username="frigate", realm="Osprey RTSP", nonce="{nonce}", '
+        'uri="rtsp://camera/video1", qop=auth-int, nc=00000001, '
+        'cnonce="abc123", response="anything"'
+    )
+    assert not auth.valid(header, "DESCRIBE", "rtsp://camera/video1")
+
+
+def test_digest_auth_rejects_missing_digest_fields() -> None:
+    auth = rtsp.RtspAuth("frigate", "secret")
+    assert not auth.valid("Basic abc", "OPTIONS", "rtsp://camera/video1")
+    assert not auth.valid('Digest username="frigate"', "OPTIONS", "rtsp://camera/video1")
 from test_media import (
     AAC_ASC,
     AAC_FRAME,
