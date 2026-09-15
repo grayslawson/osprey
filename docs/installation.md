@@ -47,9 +47,9 @@ trusted LAN while the wizard is pending.
 
 Osprey is an OCI container, so package-manager integrations install a small
 launcher and still require Docker or Podman. They do not install a native
-daemon. The npm package can be installed with `npm install -g
-@osprey-ptz/cli`; Homebrew and Chocolatey packages are provided from the
-project's release channels. Use the repository's `compose.release.yaml` for
+daemon. The npm, Homebrew, and Chocolatey manifests live under `packaging/`;
+publish them to the registry or tap appropriate for your environment, or
+install the local forms below. Use the repository's `compose.release.yaml` for
 the actual controller deployment and pin its `OSPREY_IMAGE` to a release tag
 or digest.
 
