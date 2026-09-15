@@ -254,7 +254,18 @@ def build(options: Options) -> Stack:
     )
     snapshot_port = int(uploads.server_address[1])
     images.base_url = f"https://{options.host}:{snapshot_port}"
-    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port)
+    rtsp_user = os.environ.get("OSPREY_RTSP_USERNAME", "").strip()
+    rtsp_password = os.environ.get("OSPREY_RTSP_PASSWORD", "")
+    rtsp_password_file = os.environ.get("OSPREY_RTSP_PASSWORD_FILE", "")
+    if rtsp_password_file:
+        try:
+            rtsp_password = Path(rtsp_password_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ValueError(f"cannot read OSPREY_RTSP_PASSWORD_FILE: {exc}") from exc
+    if bool(rtsp_user) != bool(rtsp_password):
+        raise ValueError("OSPREY_RTSP_USERNAME and RTSP password must be configured together")
+    rtsp_auth = rtsp.RtspAuth(rtsp_user, rtsp_password) if rtsp_user else None
+    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth)
 
     control = Controller(
         cert=options.cert,

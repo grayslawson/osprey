@@ -21,12 +21,16 @@ a busy network and what `-rtsp_transport tcp` selects.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import random
 import socket
 import socketserver
 import struct
 import threading
+import time
+import secrets
 from dataclasses import dataclass, field
 from typing import Final, Iterator
 
@@ -43,6 +47,41 @@ VIDEO_TRACK: Final = 0
 AUDIO_TRACK: Final = 1
 
 log = logging.getLogger("cuckoo.rtsp")
+
+
+@dataclass
+class RtspAuth:
+    """Optional RTSP Digest authentication (RFC 7616)."""
+
+    username: str
+    password: str
+    nonce_ttl: int = 300
+    _nonces: dict[str, float] = field(default_factory=dict)
+
+    def challenge(self) -> str:
+        nonce = secrets.token_urlsafe(24)
+        self._nonces[nonce] = time.monotonic() + self.nonce_ttl
+        return f'Digest realm="Osprey RTSP", nonce="{nonce}", algorithm=MD5, qop="auth"'
+
+    def valid(self, header: str, method: str, uri: str) -> bool:
+        if not header.lower().startswith("digest "):
+            return False
+        values = dict((k.strip(), v.strip().strip('"')) for k, _, v in
+                      (part.partition("=") for part in header[7:].split(",")) if k)
+        nonce = values.get("nonce", "")
+        expiry = self._nonces.get(nonce, 0)
+        if expiry < time.monotonic():
+            self._nonces.pop(nonce, None)
+            return False
+        if values.get("username") != self.username or values.get("uri") != uri:
+            return False
+        ha1 = hashlib.md5(f"{self.username}:Osprey RTSP:{self.password}".encode()).hexdigest()
+        ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
+        if values.get("qop"):
+            expected = hashlib.md5(f"{ha1}:{nonce}:{values.get('nc','')}:{values.get('cnonce','')}:{values['qop']}:{ha2}".encode()).hexdigest()
+        else:
+            expected = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+        return secrets.compare_digest(expected, values.get("response", ""))
 
 
 def sdp(host: str, name: str, stream: media.Stream) -> str:
@@ -320,6 +359,13 @@ class _Handler(socketserver.BaseRequestHandler):
     # ------------------------------------------------------------------- methods
 
     def _respond(self, server: RtspServer, sock: socket.socket, request: Request) -> None:
+        if server.auth is not None and not server.auth.valid(
+            request.headers.get("authorization", ""), request.method, request.uri
+        ):
+            self._send(sock, response("401 Unauthorized", request.cseq, {
+                "WWW-Authenticate": server.auth.challenge(),
+            }))
+            return
         methods = "OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER"
         if request.method == "OPTIONS":
             self._send(sock, response("200 OK", request.cseq, {"Public": methods}))
@@ -453,9 +499,11 @@ class RtspServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self, hub: media.Hub, advertise_host: str, port: int = RTSP_PORT) -> None:
+    def __init__(self, hub: media.Hub, advertise_host: str, port: int = RTSP_PORT,
+                 auth: RtspAuth | None = None) -> None:
         self.hub = hub
         self.advertise_host = advertise_host
+        self.auth = auth
         self.closing = threading.Event()
         super().__init__(("0.0.0.0", port), _Handler)
         self._thread: threading.Thread | None = None

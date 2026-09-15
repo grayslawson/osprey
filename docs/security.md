@@ -69,3 +69,11 @@ with network ACLs or a trusted proxy until RTSP authentication is available.
 Implementation references: Frigate's [ONVIF camera configuration](https://github.com/blakeblackshear/frigate/blob/dev/frigate/config/camera/onvif.py),
 [ONVIF controller](https://github.com/blakeblackshear/frigate/blob/dev/frigate/ptz/onvif.py),
 and the [ONVIF Core Specification](https://www.onvif.org/specs/core/ONVIF-Core-Specification.html).
+
+### RTSP authentication
+
+Set `OSPREY_RTSP_USERNAME` together with `OSPREY_RTSP_PASSWORD`, or use
+`OSPREY_RTSP_PASSWORD_FILE` for a file-backed secret. Osprey uses RTSP Digest
+authentication. When unset, RTSP remains anonymous for compatibility. This is
+independent of ONVIF authentication and does not encrypt video; use network
+ACLs or a TLS-terminating tunnel as well.
