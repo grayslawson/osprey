@@ -83,11 +83,21 @@ class RtspAuth:
             if expiry < time.monotonic():
                 self._nonces.pop(nonce, None)
                 return False
-        if values.get("username") != self.username or values.get("uri") != uri:
+        if (
+            values.get("username") != self.username
+            or values.get("uri") != uri
+            or values.get("realm") != "Osprey RTSP"
+            or values.get("algorithm", "MD5").upper() != "MD5"
+        ):
             return False
         ha1 = hashlib.md5(f"{self.username}:Osprey RTSP:{self.password}".encode()).hexdigest()
         ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
-        if values.get("qop"):
+        qop = values.get("qop", "")
+        if qop and qop != "auth":
+            return False
+        if qop:
+            if not values.get("nc") or not values.get("cnonce"):
+                return False
             expected = hashlib.md5(f"{ha1}:{nonce}:{values.get('nc','')}:{values.get('cnonce','')}:{values['qop']}:{ha2}".encode()).hexdigest()
         else:
             expected = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
