@@ -16,6 +16,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Create release with generated notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -24,6 +27,19 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Osprey $TAG" \
-            --generate-notes \
-            --verify-tag
+          --title "Osprey $TAG" \
+          --generate-notes \
+          --verify-tag
+      - name: Build package-manager release assets
+        working-directory: packaging/npm
+        run: |
+          set -euo pipefail
+          mkdir -p ../../dist
+          npm pack --pack-destination ../../dist
+          cp ../homebrew/osprey.rb ../../dist/osprey.rb
+          cp ../chocolatey/osprey.nuspec ../../dist/osprey.nuspec
+      - name: Upload package-manager release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
