@@ -35,7 +35,7 @@ jobs:
         run: python -m compileall -q cuckoo pyunifiwire/src
       - name: Check shell scripts
         run: |
-          find . -path './.git' -prune -o -name '*.sh' -type f -print0 \
+          find . -path './.git' -prune -o -path './.specify' -prune -o -name '*.sh' -type f -print0 \
             | xargs -0 shellcheck
       - name: Validate repository policy
         run: ./scripts/validate-repo.sh
