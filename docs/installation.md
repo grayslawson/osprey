@@ -208,3 +208,21 @@ socket-wide auto-updater or restart a deployment on its own.
 For contributors, `compose.yaml` builds from the checkout and mounts the source
 trees. Run `./cuckoo/test.sh` before starting it. The development Compose file
 is not a production upgrade path.
+
+## Verify a deployment
+
+After starting Osprey, run the read-only doctor command from the repository or package
+installation. Supply the advertised address, camera address, callback URL, and existing
+Frigate URL when those checks are applicable:
+
+```sh
+osprey doctor \
+  --host 192.0.2.10 \
+  --camera 192.0.2.20 \
+  --callback http://192.0.2.10:8000/health \
+  --frigate http://frigate.example.invalid:5000
+```
+
+`OK`, `WARNING`, and `ERROR` results are independent. A required error returns exit status
+`1`; warnings do not. The command never changes camera, firewall, Compose, Frigate, or
+Osprey configuration.

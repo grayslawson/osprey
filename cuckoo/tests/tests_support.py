@@ -3,9 +3,33 @@ same camera and a drift in one place shows up everywhere.
 """
 
 from __future__ import annotations
+import os
+import stat
+from pathlib import Path
 
 import adoption
 from model import AxisRange, Camera, Position
+
+
+def assert_no_secret(text: str, *secrets: str) -> None:
+    """Assert that operator-visible output does not contain credential values."""
+    for secret in secrets:
+        assert secret and secret not in text
+
+
+def doctor_fixture_environment(tmp_path: Path, *, curl_ok: bool = True) -> dict[str, str]:
+    """Return a deterministic PATH containing the host tools doctor inspects."""
+    tools = tmp_path / "doctor-tools"
+    tools.mkdir()
+    (tools / "docker").write_text("#!/bin/sh\n[ \"$1 $2\" = 'compose version' ]\n", encoding="utf-8")
+    (tools / "ip").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tools / "ss").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tools / "curl").write_text(
+        f"#!/bin/sh\n{'exit 0' if curl_ok else 'exit 1'}\n", encoding="utf-8"
+    )
+    for tool in tools.iterdir():
+        tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    return {"PATH": f"{tools}:{os.environ.get('PATH', '')}"}
 
 PAN_RANGE = AxisRange(500, 35500)
 TILT_RANGE = AxisRange(8000, 18000)

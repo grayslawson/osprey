@@ -7,6 +7,6 @@ cd "$(dirname "$0")"
 wire_path="$(cd ../pyunifiwire/src && pwd)"
 export PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}${wire_path}"
 echo "== mypy =="
-python3 -m mypy . 2>&1 | tail -20
+python3 -m mypy .
 echo "== pytest =="
-python3 -m pytest 2>&1 | tail -20
+python3 -m pytest
