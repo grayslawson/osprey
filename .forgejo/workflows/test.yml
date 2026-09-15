@@ -5,11 +5,9 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
-
 jobs:
   test:
+    # The Forgejo Runner must be registered with a `docker` label.
     runs-on: docker
     steps:
       - name: Check out source
