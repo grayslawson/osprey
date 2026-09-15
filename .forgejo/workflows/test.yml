@@ -9,15 +9,14 @@ jobs:
   test:
     # Match the idle Forgejo runner registered for this repository.
     runs-on: linux
+    # This image provides CPython 3.13 and Node.js 20 for JavaScript actions.
+    container:
+      image: docker.io/nikolaik/python-nodejs:python3.13-nodejs20-bookworm@sha256:6994af43c16cbc6667b36a932cdb49a4f25d991279b589d898e0113f385bbffa
     steps:
       - name: Check out source
         uses: https://code.forgejo.org/actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Set up Python
-        uses: https://code.forgejo.org/actions/setup-python@v5
-        with:
-          python-version: '3.13'
       - name: Install test dependencies
         run: python -m pip install --upgrade pytest mypy types-paho-mqtt paho-mqtt
       - name: Run tests
