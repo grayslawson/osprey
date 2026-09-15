@@ -1,0 +1,21 @@
+name: Package validation
+on:
+  pull_request:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {persist-credentials: false}
+      - name: Validate npm package metadata
+        run: npm pkg get name version --prefix packaging/npm
+      - name: Validate package scripts
+        run: shellcheck scripts/osprey scripts/osprey-doctor.sh
+      - name: Validate Chocolatey manifest
+        run: xmllint --noout packaging/chocolatey/osprey.nuspec
+      - name: Validate Homebrew formula syntax
+        run: ruby -c packaging/homebrew/osprey.rb

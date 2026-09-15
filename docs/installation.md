@@ -9,6 +9,16 @@ The supported release image is `ghcr.io/grayslawson/osprey`, published for
 
 ## Docker or rootless Podman
 
+### Package-manager helpers
+
+Osprey is an OCI container, so package-manager integrations install a small
+launcher and still require Docker or Podman. They do not install a native
+daemon. The npm package can be installed with `npm install -g
+@osprey-ptz/cli`; Homebrew and Chocolatey packages are provided from the
+project's release channels. Use the repository's `compose.release.yaml` for
+the actual controller deployment and pin its `OSPREY_IMAGE` to a release tag
+or digest.
+
 Set `OSPREY_HOST` to an address reachable by the camera and
 `OSPREY_BIND` to the interface where Frigate should connect. Pin a release
 tag or digest instead of using `latest`:

@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>osprey</id><version>0.1.0</version><title>Osprey</title>
+    <authors>Osprey contributors</authors><license type="expression">MIT</license>
+    <projectUrl>https://github.com/grayslawson/osprey</projectUrl>
+    <description>Ubiquiti PTZ controller for an existing Frigate installation. Requires Docker or Podman.</description>
+    <tags>ptz camera frigate onvif rtsp</tags>
+  </metadata>
+</package>
