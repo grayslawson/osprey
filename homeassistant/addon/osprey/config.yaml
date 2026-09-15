@@ -1,5 +1,5 @@
 name: Osprey
-version: "0.1.0-alpha.1"
+version: "0.1.0"
 slug: osprey
 description: Osprey PTZ operator and Frigate camera bridge
 url: https://github.com/grayslawson/osprey
