@@ -30,7 +30,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Final
+from typing import Callable, ClassVar, Final
 from xml.etree import ElementTree
 
 from media import BANDWIDTH_WINDOW
@@ -169,6 +169,11 @@ class OnvifAuth:
     _replay: dict[bytes, float] = field(default_factory=dict, compare=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
 
+    # A client can submit a fresh nonce on every request. Keep replay
+    # protection bounded so authenticated-but-untrusted clients cannot grow
+    # this in-memory set without limit.
+    MAX_REPLAY: ClassVar[int] = 4096
+
     @classmethod
     def from_environment(cls) -> "OnvifAuth":
         username = os.environ.get("OSPREY_ONVIF_USERNAME")
@@ -229,14 +234,17 @@ class OnvifAuth:
                 for old, when in list(self._replay.items()):
                     if now - when > self.max_skew_seconds:
                         del self._replay[old]
-                if key in self._replay:
-                    return False
-                identity_ok = hmac.compare_digest(values.get("Username", ""), self.username or "")
-                expected = hashlib.sha1(nonce + created.encode() + (self.password or "").encode()).digest()
-                valid = identity_ok and hmac.compare_digest(digest, expected)
-                if valid:
-                    self._replay[key] = now
-                return valid
+            if key in self._replay:
+                return False
+            identity_ok = hmac.compare_digest(values.get("Username", ""), self.username or "")
+            expected = hashlib.sha1(nonce + created.encode() + (self.password or "").encode()).digest()
+            valid = identity_ok and hmac.compare_digest(digest, expected)
+            if valid:
+                if len(self._replay) >= self.MAX_REPLAY:
+                    oldest = min(self._replay, key=lambda candidate: self._replay[candidate])
+                    self._replay.pop(oldest, None)
+                self._replay[key] = now
+            return valid
         except (ElementTree.ParseError, ValueError, TypeError, OverflowError):
             return False
 
