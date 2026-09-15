@@ -32,7 +32,9 @@ described in [security](security.md). Put a TLS reverse proxy in front of the
 console when it is reachable from an untrusted network.
 
 The browser password protects only the operator console and its JSON control
-endpoints. It does not authenticate ONVIF or RTSP. To protect ONVIF PTZ and
+endpoints; it does not authenticate ONVIF or RTSP. Configure RTSP Digest
+credentials separately with `OSPREY_RTSP_USERNAME` and
+`OSPREY_RTSP_PASSWORD_FILE`. To protect ONVIF PTZ and
 metadata requests, configure the separate WS-Security credentials described in
 [the security guide](security.md); configure those same credentials in
 Frigate's camera `onvif.user` and `onvif.password` fields.
