@@ -41,7 +41,9 @@ def test_digest_auth_accepts_valid_header_and_rejects_wrong_uri() -> None:
 def test_digest_auth_rejects_expired_nonce_and_unsupported_qop() -> None:
     auth = rtsp.RtspAuth("frigate", "secret", nonce_ttl=0)
     challenge = auth.challenge()
-    nonce = re.search(r'nonce="([^"]+)"', challenge).group(1)
+    nonce_match = re.search(r'nonce="([^"]+)"', challenge)
+    assert nonce_match is not None
+    nonce = nonce_match.group(1)
     header = (
         f'Digest username="frigate", realm="Osprey RTSP", nonce="{nonce}", '
         'uri="rtsp://camera/video1", qop=auth-int, nc=00000001, '

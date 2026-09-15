@@ -1,23 +1,30 @@
 name: Package validation
+
 on:
   pull_request:
   push:
     tags: ['v*.*.*']
+
 permissions:
   contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Validate npm metadata and JavaScript
-        run: npm install --ignore-scripts --package-lock=false && node --check bin/osprey.js
         working-directory: packaging/npm
+        run: |
+          npm install --ignore-scripts --package-lock=false
+          node --check bin/osprey.js
+          node bin/osprey.js --help
+          npm pack --dry-run
       - name: Validate shell launchers
         run: shellcheck scripts/osprey scripts/osprey-doctor.sh
-      - name: Validate manifests
+      - name: Validate Chocolatey manifest
         run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('packaging/chocolatey/osprey.nuspec')"
       - name: Validate Homebrew formula syntax
         run: ruby -c packaging/homebrew/osprey.rb
