@@ -51,7 +51,12 @@ daemon. The npm, Homebrew, and Chocolatey manifests live under `packaging/`;
 publish them to the registry or tap appropriate for your environment, or
 install the local forms below. Use the repository's `compose.release.yaml` for
 the actual controller deployment and pin its `OSPREY_IMAGE` to a release tag
-or digest.
+  or digest.
+
+Each GitHub release also attaches the npm tarball, Homebrew formula, and
+Chocolatey manifest so an organization can mirror those assets without
+granting Osprey access to its package registries. The release workflow does
+not publish to third-party registries automatically.
 
 From a checkout, the local package forms are:
 
