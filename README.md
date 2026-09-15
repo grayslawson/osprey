@@ -165,6 +165,11 @@ model, Frigate version, and a redacted reproducible log. Never include
 credentials, private addresses, MAC addresses, or video from someone else’s
 property.
 
+Contributors and coding agents should start with [`AGENTS.md`](AGENTS.md), use
+the [`docs/` map](docs/README.md) for repository context, and run `make check`
+before review. The full contribution contract is in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## License
 
 Osprey is available under the [MIT License](LICENSE). Upstream components keep

@@ -47,6 +47,51 @@ def _atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
             pass
 
 
+def _atomic_write_set(artifacts: dict[Path, bytes], mode: int = 0o600) -> None:
+    """Commit related files together and roll back if a replacement fails.
+
+    A setup submission creates several files that must describe the same deployment.  The
+    filesystem cannot atomically replace multiple paths, so retain old contents in memory and
+    restore every path already replaced when a later replacement fails.
+    """
+
+    staged: dict[Path, Path] = {}
+    previous: dict[Path, bytes | None] = {}
+    replaced: list[Path] = []
+    try:
+        for path, data in artifacts.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            previous[path] = path.read_bytes() if path.exists() else None
+            fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+            os.fchmod(fd, mode)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            staged[path] = Path(temporary_name)
+        for path, temporary_path in staged.items():
+            os.replace(temporary_path, path)
+            os.chmod(path, mode)
+            replaced.append(path)
+    except BaseException:
+        for path in reversed(replaced):
+            old = previous[path]
+            if old is None:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                _atomic_write(path, old, mode)
+        raise
+    finally:
+        for temporary_path in staged.values():
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def _password_hash(password: str) -> str:
     """Return the same PBKDF2 format used by :class:`onvif.AdminAuth`."""
 
@@ -208,11 +253,15 @@ class SetupManager:
             f"# OSPREY_ONVIF_PASSWORD_FILE={self.secrets_path.parent / 'onvif-password'}",
         ]
         with self._lock:
-            _atomic_write(self.config_path, json.dumps(runtime, indent=2).encode() + b"\n")
-            _atomic_write(self.frigate_path, frigate_data)
-            _atomic_write(self.secrets_path, ("\n".join(secrets_lines) + "\n").encode())
-            _atomic_write(self.secrets_path.parent / "rtsp-password", (rtsp_password + "\n").encode())
-            _atomic_write(self.secrets_path.parent / "onvif-password", (onvif_password + "\n").encode())
+            _atomic_write_set(
+                {
+                    self.config_path: json.dumps(runtime, indent=2).encode() + b"\n",
+                    self.frigate_path: frigate_data,
+                    self.secrets_path: ("\n".join(secrets_lines) + "\n").encode(),
+                    self.secrets_path.parent / "rtsp-password": (rtsp_password + "\n").encode(),
+                    self.secrets_path.parent / "onvif-password": (onvif_password + "\n").encode(),
+                }
+            )
             self.completed = True
         # Passwords are returned exactly once to the browser response; callers
         # should not log this object.

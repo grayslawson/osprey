@@ -11,7 +11,7 @@ from typing import cast
 import onvif
 import pytest
 from setup_wizard import SetupError, SetupManager, load_environment
-from tests_support import a_camera
+from tests_support import a_camera, assert_no_secret
 
 
 def test_setup_manager_generates_config_secrets_without_plaintext_admin(tmp_path: Path) -> None:
@@ -34,7 +34,7 @@ def test_setup_manager_generates_config_secrets_without_plaintext_admin(tmp_path
         "rtsp_username", "rtsp_password", "onvif_username", "onvif_password",
     }
     config_text = (tmp_path / "cuckoo.json").read_text()
-    assert "correct horse" not in config_text
+    assert_no_secret(config_text, "correct horse battery staple", "correct horse")
     assert json.loads(config_text)["cameras"][0]["mac"] == "AABBCCDDEEFF"
     assert (tmp_path / "osprey-secrets.env").stat().st_mode & 0o077 == 0
     assert (tmp_path / "rtsp-password").stat().st_mode & 0o077 == 0
@@ -112,3 +112,38 @@ def test_generated_environment_is_loaded_without_overriding_explicit_values(
     path.chmod(0o644)
     load_environment(path)
     assert "OSPREY_ADMIN_PASSWORD_HASH" not in os.environ
+
+
+def test_setup_commit_rolls_back_all_artifacts_when_replacement_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = SetupManager(tmp_path / "cuckoo.json", token="setup-token")
+    original_replace = os.replace
+    calls = 0
+
+    def fail_once(
+        source: str | bytes | os.PathLike[str], target: str | bytes | os.PathLike[str]
+    ) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated interrupted commit")
+        original_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail_once)
+    with pytest.raises(OSError, match="simulated interrupted commit"):
+        manager.save(
+            {
+                "host": "osprey.example.test",
+                "bind": "0.0.0.0",
+                "name": "Driveway PTZ",
+                "mac": "AA:BB:CC:DD:EE:FF",
+                "ip": "192.0.2.20",
+                "frigate_url": "http://frigate.example.test:5000",
+                "admin_password": "correct horse battery staple",
+            },
+            "setup-token",
+        )
+
+    assert manager.pending
+    assert not list(tmp_path.glob("*"))

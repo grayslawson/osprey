@@ -24,12 +24,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          set -euo pipefail
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-          --title "Osprey $TAG" \
-          --generate-notes \
-          --verify-tag
+            --title "Osprey $TAG" \
+            --generate-notes \
+            --verify-tag
       - name: Build package-manager release assets
         working-directory: packaging/npm
         run: |

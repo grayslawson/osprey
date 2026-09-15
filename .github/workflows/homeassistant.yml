@@ -44,23 +44,17 @@ jobs:
           raw_version="${RELEASE_VERSION:-${MANUAL_VERSION:-}}"
           version="${raw_version#v}"
           if [ -z "$version" ]; then
-            echo "A release tag or workflow_dispatch version is required" >&2
+            echo 'A release tag or workflow_dispatch version is required' >&2
             exit 1
           fi
           case "$version" in
-            *[!A-Za-z0-9._+-]*)
-              echo "Invalid image version: $raw_version" >&2
-              exit 1
-              ;;
+            *[!A-Za-z0-9._+-]*) echo "Invalid image version: $raw_version" >&2; exit 1 ;;
           esac
           case "$version" in
-            [0-9]*.[0-9]*.[0-9]*|[0-9]*.[0-9]*.[0-9]*-*) ;;
-            *)
-              echo "Invalid image version: $raw_version" >&2
-              exit 1
-              ;;
+            [0-9]*.[0-9]*.[0-9]*|[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Version must be semver-like: $raw_version" >&2; exit 1 ;;
           esac
-          manifest_version="$(grep '^version:' homeassistant/addon/osprey/config.yaml | cut -d: -f2- | tr -d ' "' | sed -n '1p')"
+          manifest_version="$(sed -n 's/^version:[[:space:]]*["'"']\{0,1\}\([^"'"']*\)["'"']\{0,1\}/\1/p' homeassistant/addon/osprey/config.yaml | head -n1)"
           if [ "$manifest_version" != "$version" ]; then
             echo "Home Assistant manifest version ($manifest_version) must match release version ($version)" >&2
             exit 1
