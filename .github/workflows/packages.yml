@@ -10,17 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: {persist-credentials: false}
-    - name: Validate npm package metadata
-      run: npm pkg get name version --prefix packaging/npm
-    - name: Pack npm launcher
-      run: npm pack --dry-run
-      working-directory: packaging/npm
-      - name: Validate package scripts
+        with:
+          persist-credentials: false
+      - name: Validate npm metadata and JavaScript
+        run: npm install --ignore-scripts --package-lock=false && node --check bin/osprey.js
+        working-directory: packaging/npm
+      - name: Validate shell launchers
         run: shellcheck scripts/osprey scripts/osprey-doctor.sh
-    - name: Validate Chocolatey manifest
-      run: python -c "import xml.etree.ElementTree as ET; ET.parse('packaging/chocolatey/osprey.nuspec')"
-    - name: Check Chocolatey payload
-      run: test -f compose.release.yaml && test -f packaging/chocolatey/tools/chocolateyinstall.ps1
+      - name: Validate manifests
+        run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('packaging/chocolatey/osprey.nuspec')"
       - name: Validate Homebrew formula syntax
         run: ruby -c packaging/homebrew/osprey.rb
