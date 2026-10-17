@@ -52,6 +52,10 @@ CONTROL_STEP_PATH: Final = "/control/step"
 CONTROL_HOME_PATH: Final = "/control/home"
 CONTROL_PRESET_PATH: Final = "/control/preset"
 CONTROL_ZOOM_PATH: Final = "/control/zoom"
+CONTROL_RECOVER_PATH: Final = "/control/ptz/recover"
+# Unauthenticated, read-only liveness for monitoring. It carries PTZ state and
+# counters only: no MAC, address, preset name, or credential.
+HEALTH_PATH: Final = "/healthz"
 MANUAL_STEP_FRACTION: Final = 0.04
 LOGIN_PATH: Final = "/login"
 FRIGATE_API_PATH: Final = "/api/frigate"
@@ -406,6 +410,10 @@ class Backend:
     # Per-track runtime telemetry keyed by track name (see media.Hub.stats): the
     # windowed byte-rate + series, lifetime bytes, frames, subscribers, playable.
     telemetry: Callable[[], dict[str, dict[str, object]]] = dict
+    # Recycle the PTZ channel through the controller's bounded recovery.
+    recover_ptz: Callable[[], bool] = lambda: False
+    # Machine-readable PTZ liveness (see Controller.ptz_health).
+    ptz_health: Callable[[], dict[str, object]] = dict
 
 
 # ------------------------------------------------------------------------ events
@@ -734,6 +742,36 @@ class Services:
             return HTTPStatus.CONFLICT, {"error": self.backend.move_refusal()}
         return HTTPStatus.OK, {"ok": True, "action": action, "name": existing.name, "token": existing.index}
 
+    def control_recover(self) -> tuple[HTTPStatus, dict[str, object]]:
+        camera = self.backend.camera()
+        if camera is None or not camera.is_ptz:
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no PTZ camera"}
+        if not self.backend.recover_ptz():
+            return HTTPStatus.CONFLICT, {"error": "the camera management channel is not connected"}
+        return HTTPStatus.ACCEPTED, {
+            "ok": True,
+            "message": "PTZ recovery started; state returns once the camera answers",
+        }
+
+    def health(self) -> tuple[HTTPStatus, dict[str, object]]:
+        """Liveness for monitoring: 200 when usable, 503 when PTZ is degraded."""
+        camera = self.backend.camera()
+        if camera is None:
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "waiting", "camera": False}
+        body: dict[str, object] = {
+            "status": "ok",
+            "camera": True,
+            "adopted": camera.adopted,
+            "uptime_sec": int(time.time() - self.started_at),
+        }
+        if camera.is_ptz and not self.read_only:
+            ptz_state = self.backend.ptz_health()
+            body["ptz"] = ptz_state
+            if not ptz_state.get("healthy"):
+                body["status"] = "degraded"
+                return HTTPStatus.SERVICE_UNAVAILABLE, body
+        return HTTPStatus.OK, body
+
     def control_codec(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
         if not isinstance(data, dict) or set(data) != {"track", "codec"}:
             return HTTPStatus.BAD_REQUEST, {"error": "expected track and codec"}
@@ -813,7 +851,9 @@ class Services:
                 ("Model", esc(camera.model or "—")),
                 ("Firmware", esc(camera.firmware or "—")),
                 ("PTZ", "yes" if camera.is_ptz else "no"),
-                ("Motion", "moving" if not camera.motion.settled else "idle"),
+                ("Motion", esc(camera.motion.status.lower()) + (
+                    f" · <span class='alert-danger'>{esc(camera.motion.error)}</span>"
+                    if camera.motion.error else "")),
                 ("Audio", esc(", ".join(c.value for c in camera.audio_codecs) or "—")),
             )
             if camera.is_ptz:
@@ -831,9 +871,15 @@ class Services:
             playable_count = sum(1 for stat in tele.values() if bool(stat.get("playable")))
             total_rate = sum(num(stat, "rate_bps") for stat in tele.values())
             total_frames = sum(num(stat, "frames") for stat in tele.values())
+            # The headline must be the ONVIF state Frigate sees, never a
+            # derived "idle" that hides UNKNOWN (channel lost, motor timeout).
+            ptz_state = camera.motion.status
+            ptz_error = camera.motion.error
+            ptz_detail = ptz_error or ("ready" if ptz_state == "IDLE" else "in motion")
+            ptz_class = " class='alert-danger'" if ptz_state == "UNKNOWN" else ""
             metric_cards = (
                 f"<div class='metric-grid'>"
-                f"<div class='metric'><span>PTZ state</span><strong>{'MOVING' if not camera.motion.settled else 'IDLE'}</strong><small>{esc(camera.motion.status)}</small></div>"
+                f"<div class='metric' id='ptz-state-card'><span>PTZ state</span><strong{ptz_class}>{esc(ptz_state)}</strong><small id='ptz-error'>{esc(ptz_detail)}</small></div>"
                 f"<div class='metric'><span>Position</span><strong>{pan:+.2f} / {tilt:+.2f}</strong><small>pan / tilt · ONVIF units</small></div>"
                 f"<div class='metric'><span>Zoom</span><strong>{zoom_percent}%</strong><small>absolute target</small></div>"
                 f"<div class='metric'><span>Streams online</span><strong>{playable_count} / {len(camera.tracks)}</strong><small>{_fmt_rate(total_rate)} in · {int(total_frames)} frames</small></div>"
@@ -925,9 +971,11 @@ class Services:
                     "<button type='button' data-axis='pan' data-direction='1'>Pan →</button>"
                     "<label>Step <input id='step-size' type='range' min='1' max='20' value='4' aria-label='PTZ step size'> <output id='step-value'>4%</output></label>"
                     f"<label>Zoom <input id='zoom-level' type='range' min='0' max='100' value='{zoom_percent}' aria-label='Absolute zoom percentage'> <output id='zoom-value'>{zoom_percent}%</output></label>"
-                    "<button type='button' id='save-home'>Save current view as home</button></div>"
+                    "<button type='button' id='save-home'>Save current view as home</button>"
+                    "<button type='button' id='recover-ptz' class='danger'>Recover PTZ</button></div>"
                     "<p id='feedback' role='status' aria-live='polite'></p>"
-                    "<p class='muted'>Steps are 4% of the configured range. Saving creates or replaces Home.</p></section>")
+                    "<p class='muted'>Steps are 4% of the configured range. Saving creates or replaces Home. "
+                    "Recover PTZ recycles the camera's PTZ channel when the state is stuck at UNKNOWN.</p></section>")
             codec_controls = "".join(
                 f"<label>{esc(t.name)} codec <select data-track='{esc(t.name)}' aria-label='{esc(t.name)} codec'>"
                 + "".join(f"<option value='{c}' {'selected' if c == t.codec.value else ''}>{c}</option>" for c in ('h264', 'h265', 'mjpg'))
@@ -1024,7 +1072,7 @@ class Services:
             f"{self.subscriptions.count} event subscriber(s) · window {int(BANDWIDTH_WINDOW)}s</p>"
             f"<div class='grid'>{body}</div>"
             "<footer>Snapshot fallback refreshes every 5s · operator actions are sent to the local controller</footer>"
-            "<script>async function post(path,data){const e=document.getElementById('feedback');try{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(e)e.textContent=r.ok?(j.message||'Command completed'):(j.error||'Command failed');return{r:r,j:j}}catch(err){if(e)e.textContent='Controller unavailable — check the camera connection';return null}}const step=document.getElementById('step-size'),stepOut=document.getElementById('step-value');if(step)step.oninput=()=>stepOut.textContent=step.value+'%';document.querySelectorAll('[data-axis]').forEach(b=>b.onclick=()=>post('/control/step',{axis:b.dataset.axis,direction:Number(b.dataset.direction),step:Number(step?.value||4)}));const zoom=document.getElementById('zoom-level'),zoomOut=document.getElementById('zoom-value');if(zoom){let timer;zoom.oninput=()=>{zoomOut.textContent=zoom.value+'%';clearTimeout(timer);timer=setTimeout(()=>post('/control/zoom',{percent:Number(zoom.value)}),350)}}const home=document.getElementById('save-home');if(home)home.onclick=async()=>{home.disabled=true;home.textContent='Saving…';await post('/control/home',{});home.disabled=false;home.textContent='Save current view as Home'};const preset=document.getElementById('save-preset');if(preset)preset.onclick=()=>{const n=document.getElementById('preset-name');if(n.value.trim())post('/control/preset',{action:'save',name:n.value.trim()})};document.querySelectorAll('[data-goto-preset]').forEach(b=>b.onclick=()=>post('/control/preset',{action:'goto',name:b.dataset.gotoPreset}));document.querySelectorAll('[data-track]').forEach(s=>s.onchange=()=>post('/control/codec',{track:s.dataset.track,codec:s.value}));const sf=document.getElementById('snapshot-fallback');if(sf)setInterval(()=>{sf.src='/snapshot/?t='+Date.now()},5000);</script>"
+            "<script>async function post(path,data){const e=document.getElementById('feedback');try{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(e)e.textContent=r.ok?(j.message||'Command completed'):(j.error||'Command failed');return{r:r,j:j}}catch(err){if(e)e.textContent='Controller unavailable — check the camera connection';return null}}const step=document.getElementById('step-size'),stepOut=document.getElementById('step-value');if(step)step.oninput=()=>stepOut.textContent=step.value+'%';document.querySelectorAll('[data-axis]').forEach(b=>b.onclick=()=>post('/control/step',{axis:b.dataset.axis,direction:Number(b.dataset.direction),step:Number(step?.value||4)}));const zoom=document.getElementById('zoom-level'),zoomOut=document.getElementById('zoom-value');if(zoom){let timer;zoom.oninput=()=>{zoomOut.textContent=zoom.value+'%';clearTimeout(timer);timer=setTimeout(()=>post('/control/zoom',{percent:Number(zoom.value)}),350)}}const home=document.getElementById('save-home');if(home)home.onclick=async()=>{home.disabled=true;home.textContent='Saving…';await post('/control/home',{});home.disabled=false;home.textContent='Save current view as Home'};const recover=document.getElementById('recover-ptz');if(recover)recover.onclick=async()=>{recover.disabled=true;await post('/control/ptz/recover',{});setTimeout(()=>{recover.disabled=false},5000)};const preset=document.getElementById('save-preset');if(preset)preset.onclick=()=>{const n=document.getElementById('preset-name');if(n.value.trim())post('/control/preset',{action:'save',name:n.value.trim()})};document.querySelectorAll('[data-goto-preset]').forEach(b=>b.onclick=()=>post('/control/preset',{action:'goto',name:b.dataset.gotoPreset}));document.querySelectorAll('[data-track]').forEach(s=>s.onchange=()=>post('/control/codec',{track:s.dataset.track,codec:s.value}));const sf=document.getElementById('snapshot-fallback');if(sf)setInterval(()=>{sf.src='/snapshot/?t='+Date.now()},5000);</script>"
             "<script>const frigateForm=document.getElementById('frigate-form');if(frigateForm)frigateForm.onsubmit=async(e)=>{e.preventDefault();const out=document.getElementById('frigate-feedback');out.textContent='Saving…';const result=await post('/api/frigate',{base_url:document.getElementById('frigate-url').value});if(result)out.textContent=result.r.ok?'Frigate connection saved':'Save failed: '+(result.j.error||'invalid URL')};</script>"
             "<script>async function refreshLogs(){const out=document.getElementById('log-output');if(!out)return;const level=(document.getElementById('log-level')||{}).value||'INFO';try{const response=await fetch('/api/logs?limit=100&level='+encodeURIComponent(level));const data=await response.json();if(!response.ok)throw new Error(data.error||'request failed');out.textContent=data.entries.map(e=>`[${e.timestamp}] ${e.level} ${e.logger}: ${e.message}`).join('\\n')||'No records yet';const alert=document.getElementById('log-alert');if(alert){alert.textContent=`${data.errors} error(s), ${data.warnings} warning(s) in recent log`;alert.className=data.errors?'alert-danger':(data.warnings?'alert-warning':'alert-ok')}}catch(error){out.textContent='Unable to load logs: '+error}}document.getElementById('refresh-logs')?.addEventListener('click',refreshLogs);document.getElementById('log-level')?.addEventListener('change',refreshLogs);refreshLogs();setInterval(refreshLogs,5000);</script>"
             "</div></body></html>"
@@ -1304,7 +1352,7 @@ class Services:
             f'<{element} token="{PTZ_NODE}"><tt:Name>{PTZ_NODE}</tt:Name>'
             f"<tt:SupportedPTZSpaces>{spaces}</tt:SupportedPTZSpaces>"
             f"<tt:MaximumNumberOfPresets>{max(64, presets)}</tt:MaximumNumberOfPresets>"
-            "<tt:HomeSupported>false</tt:HomeSupported>"
+            f"<tt:HomeSupported>{'true' if self.ptz_enabled else 'false'}</tt:HomeSupported>"
             f"</{element}>"
         )
 
@@ -1510,6 +1558,28 @@ class Services:
             f'<tptz:SetPresetResponse><tptz:PresetToken>{assigned}</tptz:PresetToken>'
             "</tptz:SetPresetResponse>"
         )
+
+    def _goto_home_position(self, call: Call) -> str:
+        """Home is the preset named `home` (the Frigate return target)."""
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
+        camera = self.backend.camera()
+        home = next(
+            (p for p in camera.presets.values() if p.name.strip().casefold() == "home"), None
+        ) if camera else None
+        if home is None:
+            return fault("no home position; call SetHomePosition or save one in the console")
+        if not self.backend.goto_preset(home.index, 1000):
+            return fault(self.backend.move_refusal())
+        return envelope("<tptz:GotoHomePositionResponse/>")
+
+    def _set_home_position(self, call: Call) -> str:
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
+        status, result = self.control_home()
+        if status != HTTPStatus.OK:
+            return fault(str(result.get("error", "the camera is not accepting presets")))
+        return envelope("<tptz:SetHomePositionResponse/>")
 
     def _remove_preset(self, call: Call) -> str:
         if not self.ptz_enabled:
@@ -1753,6 +1823,10 @@ class _Handler(BaseHTTPRequestHandler):
         if root == LOGIN_PATH:
             self._login_page()
             return
+        if root == HEALTH_PATH:
+            status, health = self.services.health()
+            self._send(status, json.dumps(health, separators=(",", ":")).encode(), "application/json")
+            return
         if root == FRIGATE_API_PATH:
             if self.services.read_only:
                 self._send(HTTPStatus.NOT_FOUND, b"operator console is disabled on this endpoint", "text/plain")
@@ -1907,7 +1981,7 @@ class _Handler(BaseHTTPRequestHandler):
         if root == LOGIN_PATH:
             self._login()
             return
-        if root in (CONTROL_STEP_PATH, CONTROL_HOME_PATH, CONTROL_PRESET_PATH, CONTROL_ZOOM_PATH, "/control/codec", FRIGATE_API_PATH):
+        if root in (CONTROL_STEP_PATH, CONTROL_HOME_PATH, CONTROL_PRESET_PATH, CONTROL_ZOOM_PATH, CONTROL_RECOVER_PATH, "/control/codec", FRIGATE_API_PATH):
             if self.services.read_only:
                 self._send(HTTPStatus.FORBIDDEN, b"controls are disabled on this endpoint", "text/plain")
                 return
@@ -2098,6 +2172,8 @@ class _Handler(BaseHTTPRequestHandler):
             status, result = self.services.control_preset(value)
         elif root == CONTROL_ZOOM_PATH:
             status, result = self.services.control_zoom(value)
+        elif root == CONTROL_RECOVER_PATH:
+            status, result = self.services.control_recover()
         elif root == FRIGATE_API_PATH:
             status, result = self.services.set_frigate_url(value.get("base_url") if isinstance(value, dict) else None)
         else:
