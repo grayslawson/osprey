@@ -1187,9 +1187,31 @@ def test_soap_request_body_is_bounded_before_parsing() -> None:
     server.start()
     try:
         connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
-        # Send only the headers. The server rejects on Content-Length before it
-        # reads any body; sending the body too races the server's close and can
-        # surface as BrokenPipeError on the client.
+        body = b"<" * (onvif.MAX_SOAP_REQUEST_BYTES + 1)
+        connection.request(
+            "POST",
+            onvif.DEVICE_PATH,
+            body=body,
+            headers={"Content-Type": "application/soap+xml"},
+        )
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
+
+
+def test_oversized_request_from_a_stalled_client_still_gets_413(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client that announces a large body and never sends it is still answered."""
+    monkeypatch.setattr(onvif, "DISCARD_TIMEOUT_SEC", 0.2)
+    service, _ = services()
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
         connection.putrequest("POST", onvif.DEVICE_PATH)
         connection.putheader("Content-Type", "application/soap+xml")
         connection.putheader("Content-Length", str(onvif.MAX_SOAP_REQUEST_BYTES + 1))
