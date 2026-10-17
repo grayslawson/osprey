@@ -79,6 +79,40 @@ def validate_cameras(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+PTZ_LIMITS: Final[dict[str, tuple[float, float]]] = {
+    "reply_timeout_sec": (0.5, 300.0),
+    "max_unanswered": (1, 20),
+    "probe_interval_sec": (0.1, 60.0),
+    "idle_probe_sec": (0.0, 3600.0),
+}
+
+
+def validate_ptz(value: Any) -> dict[str, Any]:
+    """Validate the ``ptz`` block and return it with defaults applied."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError('"ptz" must be an object')
+    unknown = set(value) - set(DEFAULTS["ptz"])
+    if unknown:
+        raise ValueError(f'unknown ptz setting(s): {", ".join(sorted(unknown))}')
+    out = {**DEFAULTS["ptz"], **value}
+    if not isinstance(out["auto_home"], bool):
+        raise ValueError('"ptz.auto_home" must be a boolean')
+    for key, (low, high) in PTZ_LIMITS.items():
+        item = out[key]
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not low <= item <= high:
+            raise ValueError(f'"ptz.{key}" must be a number from {low:g} to {high:g}')
+    if not isinstance(out["max_unanswered"], int):
+        raise ValueError('"ptz.max_unanswered" must be an integer')
+    if 0 < out["idle_probe_sec"] < 5:
+        raise ValueError('"ptz.idle_probe_sec" must be 0 (disabled) or at least 5')
+    presets_file = out["presets_file"]
+    if presets_file is not None and (not isinstance(presets_file, str) or not presets_file.strip()):
+        raise ValueError('"ptz.presets_file" must be a path or null')
+    return out
+
+
 def validate_runtime(value: dict[str, Any]) -> None:
     """Validate scalar runtime settings before any socket is opened.
 
@@ -114,6 +148,7 @@ def validate_runtime(value: dict[str, Any]) -> None:
             raise ValueError("track names must contain only letters, digits, '.', '_' or '-'")
         if not isinstance(codec, str) or codec.lower() not in {"h264", "h265", "mjpg"}:
             raise ValueError(f'tracks[{name!r}] must be h264, h265, or mjpg')
+    validate_ptz(value.get("ptz"))
     ports = value.get("ports")
     if not isinstance(ports, dict):
         raise ValueError('"ports" must be an object')
@@ -147,6 +182,20 @@ DEFAULTS: Final[dict[str, Any]] = {
     "tracks": {"video1": "h264", "video2": "h264", "video3": "h264"},
     # Optional operator integration; remains inert unless explicitly enabled.
     "mqtt": {"enabled": False},
+    # PTZ liveness and preset behaviour. See docs/frigate-integration.md.
+    "ptz": {
+        # Save the first confirmed idle pose as preset "home" when none exists.
+        "auto_home": True,
+        # Watchdog: recycle the ptz1 socket after `max_unanswered` position
+        # requests have gone unanswered, or the oldest has been silent for
+        # `reply_timeout_sec`.
+        "reply_timeout_sec": 30.0,
+        "max_unanswered": 3,
+        "probe_interval_sec": 2.0,
+        "idle_probe_sec": 60.0,
+        # Where named positions persist; null = next to the TLS certificate.
+        "presets_file": None,
+    },
     "ports": {
         "control": 7442,
         "ingest": 7550,
