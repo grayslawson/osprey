@@ -10,8 +10,11 @@ network services, not Internet services.
   firewall or network segment.
 - Protect the browser operator console with `OSPREY_ADMIN_PASSWORD_HASH` or
   `OSPREY_ADMIN_PASSWORD_FILE`, and put it behind an HTTPS reverse proxy when
-  accessed remotely. UI sessions use CSRF protection; ONVIF/RTSP access does
-  not grant access to the console.
+  accessed remotely. Without a password the console is locked, not open.
+  Mutations need the `X-CSRF-Token` header, login is throttled, and every
+  browser response carries a strict Content-Security-Policy with
+  `X-Frame-Options` and `nosniff`. ONVIF/RTSP access does not grant access to
+  the console.
 - MQTT is disabled by default. When enabled, use TLS, certificate validation,
   broker authentication, and least-privilege ACLs. Osprey accepts only
   allow-listed command topics and ignores retained movement commands.
@@ -35,6 +38,14 @@ Leave the username unset for the anonymous compatibility mode, and test the
 Frigate client's behavior before changing a running installation. A TLS
 reverse proxy restricted to the Frigate host is another deployment option, but
 test camera/NVR interoperability before inserting it into the camera path.
+
+### Health endpoint
+
+`GET /healthz` on the ONVIF port is intentionally unauthenticated so monitoring
+can poll it. It returns PTZ state, error text, reply ages, and recovery counters
+only; it never includes MAC or IP addresses, preset names, or credentials. It
+cannot change state. Restrict the ONVIF port as described above if even that
+operational state should not be visible to the LAN.
 
 ### What anonymous ONVIF exposes
 

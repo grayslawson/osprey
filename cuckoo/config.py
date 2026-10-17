@@ -41,6 +41,8 @@ import json
 from typing import Any, Final
 import re
 
+import ptz
+
 DEFAULT_CONFIG_PATH: Final = "cuckoo.json"
 
 
@@ -79,6 +81,41 @@ def validate_cameras(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+PTZ_LIMITS: Final[dict[str, tuple[float, float]]] = {
+    "reply_timeout_sec": (0.5, 300.0),
+    "max_unanswered": (1, 20),
+    "probe_interval_sec": (0.1, 60.0),
+    "idle_probe_sec": (0.0, 3600.0),
+}
+
+
+def validate_ptz(value: Any) -> dict[str, Any]:
+    """Validate the ``ptz`` block and return it with defaults applied."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError('"ptz" must be an object')
+    unknown = set(value) - set(DEFAULTS["ptz"])
+    if unknown:
+        raise ValueError(f'unknown ptz setting(s): {", ".join(sorted(unknown))}')
+    out = {**DEFAULTS["ptz"], **value}
+    if not isinstance(out["auto_home"], bool):
+        raise ValueError('"ptz.auto_home" must be a boolean')
+    for key, (low, high) in PTZ_LIMITS.items():
+        item = out[key]
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not low <= item <= high:
+            raise ValueError(f'"ptz.{key}" must be a number from {low:g} to {high:g}')
+    if not isinstance(out["max_unanswered"], int):
+        raise ValueError('"ptz.max_unanswered" must be an integer')
+    ptz.validate_max_speed(out["max_speed"])
+    if 0 < out["idle_probe_sec"] < 5:
+        raise ValueError('"ptz.idle_probe_sec" must be 0 (disabled) or at least 5')
+    presets_file = out["presets_file"]
+    if presets_file is not None and (not isinstance(presets_file, str) or not presets_file.strip()):
+        raise ValueError('"ptz.presets_file" must be a path or null')
+    return out
+
+
 def validate_runtime(value: dict[str, Any]) -> None:
     """Validate scalar runtime settings before any socket is opened.
 
@@ -114,6 +151,7 @@ def validate_runtime(value: dict[str, Any]) -> None:
             raise ValueError("track names must contain only letters, digits, '.', '_' or '-'")
         if not isinstance(codec, str) or codec.lower() not in {"h264", "h265", "mjpg"}:
             raise ValueError(f'tracks[{name!r}] must be h264, h265, or mjpg')
+    validate_ptz(value.get("ptz"))
     ports = value.get("ports")
     if not isinstance(ports, dict):
         raise ValueError('"ports" must be an object')
@@ -129,6 +167,58 @@ def validate_runtime(value: dict[str, Any]) -> None:
             raise ValueError(f'ports.{key} duplicates ports.{seen[port]}')
         if port:
             seen[port] = key
+    validate_discovery(value.get("discovery", {}))
+    validate_onvif(value.get("onvif", {}))
+
+def validate_discovery(value: Any) -> None:
+    """``discovery``: which LAN interface WS-Discovery uses, Hello cadence, scopes."""
+    if not isinstance(value, dict):
+        raise ValueError('"discovery" must be an object')
+    unknown = set(value) - {"interface", "address", "hello_interval", "scopes"}
+    if unknown:
+        raise ValueError(f'"discovery" has unknown keys: {", ".join(sorted(unknown))}')
+    interface = value.get("interface")
+    if interface is not None and (
+        not isinstance(interface, str) or re.fullmatch(r"[A-Za-z0-9_.:@-]{1,15}", interface) is None
+    ):
+        raise ValueError("discovery.interface must be a network interface name")
+    address = value.get("address")
+    if address is not None:
+        import ipaddress
+        try:
+            parsed = ipaddress.IPv4Address(address)
+        except (ValueError, TypeError):
+            raise ValueError("discovery.address must be an IPv4 address") from None
+        if parsed.is_unspecified or parsed.is_multicast:
+            raise ValueError("discovery.address must be a unicast interface address")
+    interval = value.get("hello_interval", 300)
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or not (
+        interval == 0 or 30 <= interval <= 86400
+    ):
+        raise ValueError("discovery.hello_interval must be 0 (off) or 30-86400 seconds")
+    scopes = value.get("scopes", [])
+    if not isinstance(scopes, list) or len(scopes) > 16:
+        raise ValueError("discovery.scopes must be a list of at most 16 scope URIs")
+    import discovery
+    for scope in scopes:
+        discovery.validate_scope(scope)
+
+
+def validate_onvif(value: Any, cameras: list[dict[str, Any]] | None = None) -> None:
+    """``onvif``: the northbound device identity (never the camera's MAC)."""
+    if not isinstance(value, dict):
+        raise ValueError('"onvif" must be an object')
+    unknown = set(value) - {"identity"}
+    if unknown:
+        raise ValueError(f'"onvif" has unknown keys: {", ".join(sorted(unknown))}')
+    import identity
+    parsed = identity.IdentityConfig.from_mapping(value.get("identity"))
+    if parsed.mac is not None:
+        for item in cameras or []:
+            mac = str(item.get("mac", ""))
+            if len(mac) == 12 and identity.normalise_mac(mac) == parsed.mac:
+                raise ValueError("onvif.identity.mac must differ from every camera MAC")
+
 
 # Every value cuckoo reads has a default here, so a config built from {} answers
 # everything. Ports mirror the module constants (asserted by the tests).
@@ -147,6 +237,29 @@ DEFAULTS: Final[dict[str, Any]] = {
     "tracks": {"video1": "h264", "video2": "h264", "video3": "h264"},
     # Optional operator integration; remains inert unless explicitly enabled.
     "mqtt": {"enabled": False},
+    # PTZ liveness and preset behaviour. See docs/frigate-integration.md.
+    "ptz": {
+        # Save the first confirmed idle pose as preset "home" when none exists.
+        "auto_home": True,
+        # ONVIF speeds map linearly onto 1..max_speed on the G5 scale (1..10000).
+        # 1000 is what Protect sends; values above it are unverified on hardware.
+        "max_speed": ptz.DEFAULT_MAX_SPEED,
+        # Watchdog: recycle the ptz1 socket after `max_unanswered` position
+        # requests have gone unanswered, or the oldest has been silent for
+        # `reply_timeout_sec`.
+        "reply_timeout_sec": 30.0,
+        "max_unanswered": 3,
+        "probe_interval_sec": 2.0,
+        "idle_probe_sec": 60.0,
+        # Where named positions persist; null = next to the TLS certificate.
+        "presets_file": None,
+    },
+    # Northbound ONVIF identity overrides; unset values are derived and never
+    # equal the physical camera's MAC or serial (see identity.py).
+    "onvif": {"identity": {}},
+    # WS-Discovery: pin multicast to one LAN interface/address, repeat Hello
+    # every hello_interval seconds (0 = only at startup), add scopes.
+    "discovery": {"interface": None, "address": None, "hello_interval": 300, "scopes": []},
     "ports": {
         "control": 7442,
         "ingest": 7550,

@@ -1,4 +1,6 @@
-# Osprey deployment Compose. Frigate is external and is never managed here.
+# Osprey development Compose: builds the image locally and bind-mounts the
+# source tree. For deployments use compose.release.yaml. Frigate is external
+# and is never managed here.
 name: osprey
 services:
   osprey:
@@ -6,18 +8,19 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    working_dir: /workspace/cuckoo
-    command: ["python3", "main.py", "--host", "${OSPREY_HOST:-127.0.0.1}", "--cert", "/state/osprey.pem"]
     environment:
-      PYTHONPATH: /workspace/pyunifiwire/src
+      OSPREY_HOST: ${OSPREY_HOST:-127.0.0.1}
+      OSPREY_ANNOUNCE: ${OSPREY_ANNOUNCE:-false}
     volumes:
       - type: bind
         source: ./cuckoo
-        target: /workspace/cuckoo
+        target: /opt/osprey/cuckoo
+        read_only: true
       - type: bind
-        source: ./pyunifiwire
-        target: /workspace/pyunifiwire
-      - osprey-state:/state
+        source: ./pyunifiwire/src
+        target: /opt/osprey/pyunifiwire/src
+        read_only: true
+      - osprey-state:/var/lib/osprey
     ports:
       - name: onvif
         target: 8000
@@ -27,12 +30,13 @@ services:
         target: 8554
         published: "${OSPREY_RTSP_PORT:-8554}"
         host_ip: "${OSPREY_BIND:-127.0.0.1}"
+    user: "1000:1000"
     restart: unless-stopped
-    init: true
     read_only: true
     tmpfs: [/tmp:mode=1777]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    init: false
     stop_grace_period: 10s
 volumes:
   osprey-state:

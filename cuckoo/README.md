@@ -129,6 +129,18 @@ that names one channel re-codecs only it. The old cuckoo's SSH/credential fields
 gone (this cuckoo never touches the camera over SSH); see `config.py` for the full
 field map.
 
+### PTZ speed
+
+ONVIF `Speed` on `AbsoluteMove`, `RelativeMove`, and `GotoPreset` maps linearly
+onto the G5 speed scale: a GenericSpeedSpace value of 0 is the slowest step (1),
+and 1.0 is the ceiling set by `ptz.max_speed`. The largest pan/tilt or zoom
+component sets the single speed the camera accepts. A request with no `Speed`
+element runs at the ceiling. `ptz.max_speed` (default `1000`, the value Protect
+sends, and the only one measured on hardware) accepts 1 to 10000. Values above
+1000 are unverified: measure them on a real camera before relying on them. Set it
+in the file (`"ptz": { "max_speed": 1000 }`) or with `OSPREY_PTZ_MAX_SPEED`, which
+wins over the file. Rollback: remove the key or set it back to `1000`.
+
 ### Changing a codec at runtime
 
 A codec can also be flipped live over ONVIF `SetVideoEncoderConfiguration` — set a
@@ -237,6 +249,9 @@ the header of `handoff.sh` for the full set of `CUCKOO_*` overrides.
   continuous mode; a client holding an arrow key sends these repeatedly.
 - **`RemovePreset` forgets the slot locally.** No wire delete has been observed, so
   a preset cuckoo wrote persists on the camera even though the client sees it gone.
+- **The preset table is Osprey's own, persisted to `osprey-presets.json`.** The camera
+  cannot list its slots back, so the table is restored from disk on connect and
+  re-written to the camera once per start (see `docs/ptz-health.md`).
 - **ONVIF `Capabilities` order is load-bearing.** It is a strict schema sequence
   and a real client drops anything out of order — get it wrong and Home Assistant
   silently adds the camera with no event sensors.

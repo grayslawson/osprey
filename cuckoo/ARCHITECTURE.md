@@ -90,6 +90,13 @@ demands that hand-formed SOAP does not: XML element order matters (the ONVIF
 elements are silently dropped), and a media profile must embed a
 `PTZConfiguration` for PTZ to be offered at all.
 
+The RTSP side serves several clients at once without letting one of them hold up the
+rest. A track the camera is not pushing answers 503 and playing sessions on it end with
+an RTCP BYE after `STALL_TEARDOWN` seconds of silence. Each client has a bounded queue
+that falls back to the next keyframe instead of stalling ingest, and is dropped if a
+write stays blocked for `SEND_TIMEOUT`. New clients start on a keyframe with parameter
+sets in band, and each track sends RTCP sender reports every couple of seconds.
+
 ## Testing
 
 Each layer is tested without the one below it, and the assembled whole is tested

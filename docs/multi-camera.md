@@ -26,13 +26,16 @@ camera receives a stable ID derived from its MAC, such as
 Camera-scoped API routes are:
 
 ```text
-/cameras/{camera-id}/status
+/cameras/{camera-id}/                 (opens the app for that camera)
+/cameras/{camera-id}/legacy
 /cameras/{camera-id}/preview/{track}
+/cameras/{camera-id}/snapshot/
 /cameras/{camera-id}/control/step
 /cameras/{camera-id}/control/home
 /cameras/{camera-id}/control/preset
 /cameras/{camera-id}/control/zoom
 /cameras/{camera-id}/api/frigate
+/api/v1/cameras/{camera-id}/state    (see docs/operator-ui.md)
 ```
 
 Unknown or unadopted camera IDs return `404`; Osprey never falls back to a

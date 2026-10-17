@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import http.client
+import json
 import logging
 from logbuffer import LogBuffer, redact
 import subprocess
@@ -28,6 +29,7 @@ class Recorder:
     def __init__(self, camera: Camera | None) -> None:
         self.camera = camera
         self.absolute: list[Position] = []
+        self.speeds: list[int] = []
         self.presets_gone: list[int] = []
         self.preset_gotos: list[tuple[int, int]] = []
         self.image: bytes | None = b"\xff\xd8jpeg"
@@ -58,8 +60,9 @@ class Recorder:
             }
         }
 
-    def _move(self, position: Position) -> bool:
+    def _move(self, position: Position, speed: int) -> bool:
         self.absolute.append(position)
+        self.speeds.append(speed)
         return True
 
     def _goto(self, index: int, speed: int) -> bool:
@@ -77,15 +80,20 @@ class Recorder:
         return True
 
 
+def open_auth() -> onvif.AdminAuth:
+    """The explicit development opt-out; the default console is locked."""
+    return onvif.AdminAuth(allow_anonymous=True)
+
+
 def services(camera: Camera | None = None) -> tuple[onvif.Services, Recorder]:
     recorder = Recorder(camera if camera is not None else a_camera())
-    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000), recorder
+    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000, auth=open_auth()), recorder
 
 
 def services_before_adoption() -> tuple[onvif.Services, Recorder]:
     """No camera has connected yet — the front end still has to answer."""
     recorder = Recorder(None)
-    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000), recorder
+    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000, auth=open_auth()), recorder
 
 
 def request(
@@ -104,6 +112,12 @@ def request(
 
 def ask(service: onvif.Services, action: str, body: str = "") -> str:
     return service.handle(request(action, body))
+
+
+def subscription_id(body: str) -> str:
+    address = text_of(body, "Address")
+    assert address is not None and "?sub=" in address
+    return address.partition("?sub=")[2]
 
 
 def text_of(xml: str, local: str) -> str | None:
@@ -125,12 +139,15 @@ def attributes_of(xml: str, local: str) -> dict[str, str]:
 # ------------------------------------------------------------------------ device
 
 
-def test_device_information_comes_from_the_camera() -> None:
+def test_device_information_is_osprey_not_the_physical_camera() -> None:
     service, _ = services()
     body = ask(service, "GetDeviceInformation")
-    assert text_of(body, "Model") == "UVC G5 PTZ"
+    assert text_of(body, "Manufacturer") == "Osprey"
+    assert text_of(body, "Model") == "Osprey UVC G5 PTZ"
     assert text_of(body, "FirmwareVersion") == "5.3.95"
-    assert text_of(body, "SerialNumber") == "AABBCCDDEEFF"
+    serial = text_of(body, "SerialNumber")
+    assert serial is not None and serial.startswith("OSP")
+    assert "AABBCCDDEEFF" not in body, "the physical camera's MAC must never be our identity"
 
 
 def test_capabilities_point_at_our_own_services() -> None:
@@ -682,6 +699,17 @@ def test_goto_preset_reaches_the_controller() -> None:
     assert recorder.preset_gotos == [(4, 1000)]
 
 
+def test_goto_preset_honors_the_requested_speed() -> None:
+    service, recorder = services()
+    service.backend.max_speed = 500
+    body = "<PresetToken>4</PresetToken><Speed><PanTilt x=\"1.0\" y=\"0\"/></Speed>"
+    assert "GotoPresetResponse" in ask(service, "GotoPreset", body)
+    assert recorder.preset_gotos == [(4, 500)]
+    slow = "<PresetToken>4</PresetToken><Speed><Zoom x=\"0.0\"/></Speed>"
+    ask(service, "GotoPreset", slow)
+    assert recorder.preset_gotos[-1] == (4, 1)
+
+
 def test_non_numeric_preset_token_is_a_fault() -> None:
     service, _ = services()
     assert "s:Fault" in ask(service, "GotoPreset", "<PresetToken>front-door</PresetToken>")
@@ -706,19 +734,21 @@ def test_subscription_reference_carries_its_own_identifier() -> None:
     service, _ = services()
     body = ask(service, "CreatePullPointSubscription")
     address = text_of(body, "Address")
-    assert address is not None and "?sub=sub1" in address
+    assert address is not None and "?sub=" in address
+    identifier = address.partition("?sub=")[2]
+    assert len(identifier) >= 16, "subscription ids are unguessable"
     assert service.subscriptions.count == 1
 
 
 def test_motion_events_reach_a_subscriber_and_are_drained_once() -> None:
     service, _ = services()
-    ask(service, "CreatePullPointSubscription")
+    identifier = subscription_id(ask(service, "CreatePullPointSubscription"))
     camera = a_camera()
     service.subscriptions.publish(onvif.motion_event(camera, active=True))
-    body = service.pull_messages("sub1")
+    body = service.pull_messages(identifier)
     assert onvif.MOTION_TOPIC in body
     assert 'Value="true"' in body
-    assert "NotificationMessage" not in service.pull_messages("sub1"), "events are pulled once"
+    assert "NotificationMessage" not in service.pull_messages(identifier), "events are pulled once"
 
 
 def test_unsubscribe_forgets_the_subscription() -> None:
@@ -736,6 +766,7 @@ def test_event_properties_advertise_the_motion_topic() -> None:
 def test_a_slow_subscriber_backlog_is_bounded() -> None:
     subscriptions = onvif.Subscriptions()
     identifier = subscriptions.create()
+    assert identifier is not None
     camera = a_camera()
     for _ in range(onvif.Subscriptions.DEPTH * 2):
         subscriptions.publish(onvif.motion_event(camera, active=True))
@@ -747,6 +778,7 @@ def test_a_slow_subscriber_backlog_is_bounded() -> None:
 
 def test_a_real_client_can_talk_soap_to_us() -> None:
     service, recorder = services()
+    service.snapshots.min_interval = 0.0
     server = onvif.OnvifServer(service, port=0)
     server.start()
     try:
@@ -781,7 +813,7 @@ def test_pull_messages_uses_the_subscription_on_the_url() -> None:
     server = onvif.OnvifServer(service, port=0)
     server.start()
     try:
-        ask(service, "CreatePullPointSubscription")
+        identifier = subscription_id(ask(service, "CreatePullPointSubscription"))
         service.subscriptions.publish(onvif.motion_event(a_camera(), active=True))
         connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
         payload = onvif.envelope(
@@ -789,7 +821,7 @@ def test_pull_messages_uses_the_subscription_on_the_url() -> None:
             "<tev:Timeout>PT1S</tev:Timeout><tev:MessageLimit>10</tev:MessageLimit>"
             "</tev:PullMessages>"
         )
-        connection.request("POST", f"{onvif.EVENTS_PATH}?sub=sub1", body=payload.encode())
+        connection.request("POST", f"{onvif.EVENTS_PATH}?sub={identifier}", body=payload.encode())
         body = connection.getresponse().read().decode()
         assert onvif.MOTION_TOPIC in body
         connection.close()
@@ -848,7 +880,7 @@ def test_control_step_tilt_up_decreases_g5_raw_tilt() -> None:
 
 def test_control_step_reports_unavailable_or_busy_move() -> None:
     service, recorder = services()
-    service.backend.move_relative = lambda _position: False
+    service.backend.move_relative = lambda _position, _speed: False
     service.backend.move_refusal = lambda: "PTZ channel unavailable"
     status, result = service.control_step({"axis": "zoom", "direction": 1})
     assert status == HTTPStatus.CONFLICT
@@ -973,6 +1005,11 @@ def test_preview_streams_an_adopted_known_track_and_caps_clients(monkeypatch: py
         server.stop()
 
 
+def session_cookie_header(headers: list[tuple[str, str]]) -> str:
+    return next(value for name, value in headers
+                if name.lower() == "set-cookie" and value.startswith(f"{onvif.SESSION_COOKIE}="))
+
+
 def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
     recorder = Recorder(a_camera())
     auth = onvif.AdminAuth(onvif.AdminAuth.hash_password("correct horse"))
@@ -981,7 +1018,7 @@ def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
     server.start()
     try:
         connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
-        connection.request("GET", "/")
+        connection.request("GET", onvif.LEGACY_PATH)
         response = connection.getresponse()
         assert response.status == 303
         response.read()
@@ -1009,8 +1046,19 @@ def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
         response = connection.getresponse()
         assert response.status == 403
         response.read()
-        csrf = next(value.split("=", 1)[1].split(";", 1)[0] for name, value in cookies
-                    if name.lower() == "set-cookie" and value.startswith("osprey_csrf="))
+        assert not any(value.startswith("osprey_csrf=") for name, value in cookies
+                       if name.lower() == "set-cookie")
+        assert "HttpOnly" in session_cookie_header(cookies) and "SameSite=Strict" in session_cookie_header(cookies)
+        # A cookie alone is not a CSRF token: the header is mandatory.
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body='{"axis":"pan","direction":1}',
+                           headers={"Content-Type": "application/json",
+                                    "Cookie": f"{session_cookie}; osprey_csrf=whatever"})
+        response = connection.getresponse()
+        assert response.status == 403
+        response.read()
+        connection.request("GET", "/api/v1/session", headers={"Cookie": session_cookie})
+        response = connection.getresponse()
+        csrf = json.loads(response.read())["csrf"]
         connection.request("POST", onvif.CONTROL_STEP_PATH, body='{"axis":"pan","direction":1}',
                            headers={"Content-Type": "application/json", "Cookie": cookie,
                                     "X-CSRF-Token": csrf})
@@ -1155,11 +1203,20 @@ def test_control_http_requires_json_and_rejects_malformed_payload() -> None:
     server.start()
     try:
         connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
-        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{}", headers={"Content-Type": "text/plain"})
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{}", headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.FORBIDDEN  # no X-CSRF-Token, even without a password
+        response.read()
+        principal = service.auth.principal("")
+        assert principal is not None
+        token = principal[1]
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{}",
+                           headers={"Content-Type": "text/plain", "X-CSRF-Token": token})
         response = connection.getresponse()
         assert response.status == HTTPStatus.UNSUPPORTED_MEDIA_TYPE
         response.read()
-        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{bad", headers={"Content-Type": "application/json"})
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{bad",
+                           headers={"Content-Type": "application/json", "X-CSRF-Token": token})
         response = connection.getresponse()
         assert response.status == HTTPStatus.BAD_REQUEST
         response.read()
@@ -1187,3 +1244,149 @@ def test_soap_request_body_is_bounded_before_parsing() -> None:
         connection.close()
     finally:
         server.stop()
+
+
+def test_oversized_request_from_a_stalled_client_still_gets_413(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client that announces a large body and never sends it is still answered."""
+    monkeypatch.setattr(onvif, "DISCARD_TIMEOUT_SEC", 0.2)
+    service, _ = services()
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.putrequest("POST", onvif.DEVICE_PATH)
+        connection.putheader("Content-Type", "application/soap+xml")
+        connection.putheader("Content-Length", str(onvif.MAX_SOAP_REQUEST_BYTES + 1))
+        connection.endheaders()
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+        response.read()
+        connection.close()
+    finally:
+        server.stop()
+
+
+def test_normalised_mapping_is_linear_and_sign_correct_for_inverted_axis() -> None:
+    from model import AxisRange
+
+    plain = AxisRange(0, 1000)
+    inverted = AxisRange(0, 1000, invert=True)
+
+    # Linear across the span: the midpoint is zero and each 1/4 step is 0.5 units.
+    assert plain.from_normalised(0.0) == 500
+    assert plain.from_normalised(0.5) == 750
+    assert plain.from_normalised(-0.5) == 250
+    # Inverted axes flip the sign of the ONVIF vector, not the endpoints.
+    assert inverted.from_normalised(0.5) == 250
+    assert inverted.from_normalised(-1.0) == 1000
+
+    for value in (-1.0, -0.25, 0.0, 0.25, 1.0):
+        for axis in (plain, inverted):
+            motor = axis.from_normalised(value)
+            assert abs(axis.to_normalised(motor) - value) <= 1.0 / 1000 + 1e-9
+
+
+# ------------------------------------------------------------- ONVIF Speed
+
+
+def _absolute_with_speed(x: str, y: str = "0", zoom: str | None = None) -> str:
+    speed = f'<tt:PanTilt x="{x}" y="{y}"/>'
+    if zoom is not None:
+        speed += f'<tt:Zoom x="{zoom}"/>'
+    return f'<Position><PanTilt x="0" y="0"/></Position><Speed>{speed}</Speed>'
+
+
+def test_absolute_move_without_speed_runs_at_the_full_profile_speed() -> None:
+    service, recorder = services()
+    assert "AbsoluteMoveResponse" in ask(service, "AbsoluteMove", '<Position><PanTilt x="0" y="0"/></Position>')
+    assert recorder.speeds == [1000]
+
+
+def test_continuous_move_without_a_speed_element_runs_at_full_speed() -> None:
+    service, recorder = services()
+    service.backend.move_relative = recorder._move
+    body = '<Velocity><PanTilt x="0.5" y="0"/></Velocity>'
+    assert "ContinuousMoveResponse" in ask(service, "ContinuousMove", body)
+    assert recorder.speeds == [1000]
+
+
+def test_speed_maps_linearly_onto_the_configured_ceiling() -> None:
+    service, recorder = services()
+    service.backend.max_speed = 500
+    service.backend.move_absolute = recorder._move
+    # 1 + round(x * 499): the zero end is the slowest step and 1.0 is the ceiling.
+    for value, expected in (("0", 1), ("1.0", 500), ("0.5", 251)):
+        assert "AbsoluteMoveResponse" in ask(service, "AbsoluteMove", _absolute_with_speed(value))
+        assert recorder.speeds[-1] == expected
+
+
+def test_the_largest_speed_component_sets_the_single_camera_speed() -> None:
+    service, recorder = services()
+    service.backend.move_absolute = recorder._move
+    body = _absolute_with_speed("0.1", y="0.9", zoom="0.3")
+    ask(service, "AbsoluteMove", body)
+    assert recorder.speeds[-1] == 1 + round(0.9 * 999)
+
+
+def test_out_of_range_speed_is_clamped_to_the_scale() -> None:
+    service, recorder = services()
+    service.backend.move_absolute = recorder._move
+    ask(service, "AbsoluteMove", _absolute_with_speed("7.5"))
+    assert recorder.speeds[-1] == 1000
+    ask(service, "AbsoluteMove", _absolute_with_speed("-2.0"))
+    assert recorder.speeds[-1] == 1000
+    ask(service, "AbsoluteMove", _absolute_with_speed("-0.0"))
+    assert recorder.speeds[-1] == 1
+
+
+def test_relative_move_honors_speed() -> None:
+    service, recorder = services()
+    service.backend.move_relative = recorder._move
+    body = '<Translation><PanTilt x="0.2" y="0"/></Translation><Speed><PanTilt x="0.5" y="0"/></Speed>'
+    assert "RelativeMoveResponse" in ask(service, "RelativeMove", body)
+    assert recorder.speeds == [501]
+
+
+def test_non_numeric_speed_is_a_fault_and_moves_nothing() -> None:
+    service, recorder = services()
+    service.backend.move_absolute = recorder._move
+    assert "s:Fault" in ask(service, "AbsoluteMove", _absolute_with_speed("fast"))
+    assert recorder.absolute == [] and recorder.speeds == []
+
+
+def test_ui_steps_and_zoom_use_the_configured_ceiling() -> None:
+    service, recorder = services()
+    service.backend.max_speed = 600
+    service.backend.move_relative = recorder._move
+    service.backend.move_absolute = recorder._move
+    assert service.control_step({"axis": "pan", "direction": 1})[0] == HTTPStatus.OK
+    assert recorder.speeds[-1] == 600
+    assert service.control_zoom({"percent": 50})[0] == HTTPStatus.OK
+    assert recorder.speeds[-1] == 600
+
+
+def test_speed_space_is_advertised_as_the_generic_normalised_range() -> None:
+    # The advertised range stays 0..1 (ONVIF GenericSpeedSpace) and 1.0 is the
+    # configured ceiling, so the advertised space and the mapping agree.
+    service, _ = services()
+    body = ask(service, "GetConfigurationOptions")
+    assert (
+        "PanTiltSpaces/GenericSpeedSpace</tt:URI>"
+        "<tt:XRange><tt:Min>0.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>" in body
+    )
+
+
+
+def test_speed_mapping_helpers_bound_the_scale() -> None:
+    import ptz
+
+    assert ptz.speed_from_normalised(0.0, 1000) == 1
+    assert ptz.speed_from_normalised(1.0, 1000) == 1000
+    assert ptz.speed_from_normalised(2.0, 1000) == 1000
+    assert ptz.speed_from_normalised(-1.0, 1000) == 1
+    assert ptz.speed_from_normalised(1.0, 1) == 1
+    assert ptz.validate_max_speed(10000) == 10000
+    with pytest.raises(ValueError):
+        ptz.validate_max_speed(0)
