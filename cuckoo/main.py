@@ -514,7 +514,7 @@ def build(options: Options) -> Stack:
             set_encoder=selected_encoder,
             recover_ptz=selected_recover,
             ptz_health=selected_health,
-            telemetry=hub.stats,
+            telemetry=lambda: rtsp.telemetry(hub, stream),
         )
 
     backend = backend_for(None)

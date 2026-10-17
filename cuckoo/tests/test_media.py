@@ -215,13 +215,124 @@ def test_subscribers_receive_frames() -> None:
     assert stream.subscriber_count == 0
 
 
+def key(ts: int) -> media.VideoFrame:
+    return media.VideoFrame(timestamp=ts, units=[IDR], keyframe=True)
+
+
+def inter(ts: int) -> media.VideoFrame:
+    return media.VideoFrame(timestamp=ts, units=[SLICE], keyframe=False)
+
+
 def test_a_slow_subscriber_drops_rather_than_blocking() -> None:
+    """Overflow discards the backlog and resumes at the next keyframe, never mid-GOP."""
     subscriber = media.Subscriber(depth=2)
-    for n in range(5):
-        subscriber.offer(media.AudioFrame(timestamp=n, payload=b"x"))
-    assert subscriber.dropped == 3
+    for frame in (key(0), inter(1), inter(2), inter(3), key(4), inter(5)):
+        subscriber.offer(frame)  # never blocks
+    assert subscriber.overflows == 1
+    assert subscriber.dropped == 4, "the two queued, then two P-frames until the keyframe"
+    taken = [subscriber.take(timeout=0.1) for _ in range(2)]
+    assert [f.timestamp for f in taken if f is not None] == [4, 5]
+    assert subscriber.take(timeout=0.01) is None
+
+
+def test_overflow_on_a_keyframe_restarts_from_that_keyframe() -> None:
+    subscriber = media.Subscriber(depth=2)
+    for frame in (key(0), inter(1), key(2)):
+        subscriber.offer(frame)
     first = subscriber.take(timeout=0.1)
-    assert isinstance(first, media.AudioFrame) and first.timestamp == 3, "oldest is dropped"
+    assert first is not None and first.timestamp == 2 and not subscriber.waiting_for_keyframe
+
+
+def test_the_byte_budget_bounds_a_subscriber_too() -> None:
+    subscriber = media.Subscriber(depth=100, max_bytes=10)
+    subscriber.offer(key(0))
+    subscriber.offer(media.VideoFrame(timestamp=1, units=[bytes(20)], keyframe=False))
+    assert subscriber.overflows == 1 and subscriber.waiting_for_keyframe
+
+
+def test_a_new_rtsp_subscriber_starts_on_a_keyframe() -> None:
+    stream = media.Stream(name="video1")
+    watcher = stream.subscribe()
+    assert watcher.waiting_for_keyframe
+    stream.accept(flv.Tag(flv.TagType.VIDEO, 0, video_body(6, hevc.PACKET_SEQUENCE_HEADER, hvcc())))
+    stream.accept(flv.Tag(flv.TagType.AUDIO, 0, audio_body(hevc.AAC_SEQUENCE_HEADER, AAC_ASC)))
+    stream.accept(flv.Tag(flv.TagType.VIDEO, 40, video_body(flv.FrameType.INTER, hevc.PACKET_NALU, length_prefixed(SLICE))))
+    stream.accept(flv.Tag(flv.TagType.AUDIO, 45, audio_body(hevc.AAC_RAW, AAC_FRAME)))
+    stream.accept(flv.Tag(flv.TagType.VIDEO, 80, video_body(flv.FrameType.KEY, hevc.PACKET_NALU, length_prefixed(IDR))))
+    first = watcher.take(timeout=0.1)
+    assert isinstance(first, media.VideoFrame) and first.keyframe and first.timestamp == 80
+    assert watcher.dropped == 2
+
+
+# -------------------------------------------------------------- liveness/timeline
+
+
+def is_live(stream: media.Stream) -> bool:
+    return stream.live  # a call, so the checker does not narrow the property
+
+
+def test_a_track_is_live_only_while_frames_arrive() -> None:
+    stream = media.Stream(name="video1")
+    stream.accept(flv.Tag(flv.TagType.VIDEO, 0, video_body(6, hevc.PACKET_SEQUENCE_HEADER, hvcc())))
+    assert stream.ready and not is_live(stream), "parameter sets alone are not a live track"
+    stream.accept(flv.Tag(flv.TagType.VIDEO, 40, video_body(flv.FrameType.KEY, hevc.PACKET_NALU, length_prefixed(IDR))))
+    assert is_live(stream)
+    stream.last_frame_at -= media.STALE_AFTER + 1  # the camera stopped pushing
+    assert stream.ready and not is_live(stream)
+    age = stream.frame_age()
+    assert age is not None and age > media.STALE_AFTER
+
+
+def video_tag(ts: int, keyframe: bool = True) -> flv.Tag:
+    unit = IDR if keyframe else SLICE
+    kind = flv.FrameType.KEY if keyframe else flv.FrameType.INTER
+    return flv.Tag(flv.TagType.VIDEO, ts, video_body(kind, hevc.PACKET_NALU, length_prefixed(unit)))
+
+
+def test_timeline_is_continuous_when_the_camera_clock_restarts() -> None:
+    stream = media.Stream(name="video1")
+    stream.accept(flv.Tag(flv.TagType.VIDEO, 0, video_body(6, hevc.PACKET_SEQUENCE_HEADER, hvcc())))
+    out = []
+    for ts in (500_000, 500_040, 500_080):
+        frame = stream.accept(video_tag(ts))
+        assert frame is not None
+        out.append(frame.timestamp)
+    assert out == [500_000, 500_040, 500_080], "no rebase while the clock is sane"
+    stream._last_wall -= 2.0  # the reconnect took two seconds
+    stream.mark_reconnect()
+    after = [stream.accept(video_tag(ts)) for ts in (0, 40)]
+    stamps = [f.timestamp for f in after if f is not None]
+    assert stream.rebases == 1
+    assert 500_080 < stamps[0] <= 500_080 + 2_100, "carries on, advanced by the gap"
+    assert stamps[1] - stamps[0] == 40, "and keeps the camera's own spacing after"
+
+
+def test_a_backward_jump_without_reconnect_is_rebased_too() -> None:
+    stream = media.Stream(name="video1")
+    first = stream.accept(video_tag(90_000))
+    second = stream.accept(video_tag(10))
+    assert first is not None and second is not None
+    assert second.timestamp > first.timestamp and stream.rebases == 1
+
+
+def test_a_reconnect_that_keeps_the_camera_clock_is_not_rebased() -> None:
+    stream = media.Stream(name="video1")
+    stream.accept(video_tag(1000))
+    stream._last_wall -= 1.0
+    stream.mark_reconnect()
+    frame = stream.accept(video_tag(2000))
+    assert frame is not None and frame.timestamp == 2000 and stream.rebases == 0
+
+
+def test_a_new_ingest_connection_marks_a_reconnect() -> None:
+    hub = media.Hub()
+    list(media.Connection(hub, fallback_name="unused").feed(stream_bytes("video1")))
+    stream = hub.get("video1")
+    assert stream is not None
+    stream._last_wall -= 3.0
+    frames = list(media.Connection(hub, fallback_name="unused").feed(stream_bytes("video1")))
+    assert stream.rebases == 1
+    assert all(f.timestamp > 80 for f in frames), "the replayed clock is moved past the old one"
 
 
 # -------------------------------------------------------------------- connection
