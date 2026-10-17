@@ -18,7 +18,7 @@ import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Final
+from typing import Callable, Final
 
 SNAPSHOT_PORT: Final = 7444
 UPLOAD_PREFIX: Final = "/internal/camera-upload/"
@@ -96,6 +96,48 @@ class Store:
     def _drop_expired(self) -> None:
         for token in [t for t, p in self._pending.items() if p.expired]:
             del self._pending[token]
+
+
+class SnapshotCache:
+    """Single-flight, rate-limited front for a slow snapshot fetch.
+
+    Every northbound snapshot request used to trigger a fresh camera upload and
+    a wait of up to ten seconds. NVRs poll snapshots, so this keeps at most one
+    fetch in flight, and at most one fetch per ``min_interval`` seconds; callers
+    inside the window receive the cached image. A failed fetch is not cached as
+    an image, but still counts against the rate limit so a dead camera cannot be
+    hammered.
+    """
+
+    def __init__(
+        self,
+        fetch: Callable[[], bytes | None],
+        min_interval: float = 1.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.fetch = fetch
+        self.min_interval = min_interval
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._image: bytes | None = None
+        self._image_at = float("-inf")
+        self._attempt_at = float("-inf")
+        self.fetches = 0
+
+    def get(self) -> bytes | None:
+        with self._lock:
+            now = self._clock()
+            if now - self._image_at < self.min_interval:
+                return self._image
+            if now - self._attempt_at < self.min_interval:
+                return None
+            self._attempt_at = now
+            self.fetches += 1
+            image = self.fetch()
+            if image is not None:
+                self._image = image
+                self._image_at = self._clock()
+            return image
 
 
 class _Handler(BaseHTTPRequestHandler):
