@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:,">
+<title>Osprey</title>
+<link rel="stylesheet" href="ui/tokens.css">
+<link rel="stylesheet" href="ui/app.css">
+<script type="importmap">
+{
+  "imports": {
+    "preact": "./ui/vendor/preact/preact.module.js",
+    "preact/hooks": "./ui/vendor/preact/hooks.module.js",
+    "htm": "./ui/vendor/htm/htm.module.js",
+    "@preact/signals": "./ui/vendor/signals/signals.module.js",
+    "@preact/signals-core": "./ui/vendor/signals-core/signals-core.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div id="app" aria-live="off"><p class="boot" role="status">Loading Osprey&hellip;</p></div>
+<noscript><p class="boot">Osprey needs JavaScript enabled in this browser.</p></noscript>
+<script type="module" src="ui/app.js"></script>
+</body>
+</html>
