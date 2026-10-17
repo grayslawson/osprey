@@ -164,6 +164,58 @@ def validate_runtime(value: dict[str, Any]) -> None:
             raise ValueError(f'ports.{key} duplicates ports.{seen[port]}')
         if port:
             seen[port] = key
+    validate_discovery(value.get("discovery", {}))
+    validate_onvif(value.get("onvif", {}))
+
+def validate_discovery(value: Any) -> None:
+    """``discovery``: which LAN interface WS-Discovery uses, Hello cadence, scopes."""
+    if not isinstance(value, dict):
+        raise ValueError('"discovery" must be an object')
+    unknown = set(value) - {"interface", "address", "hello_interval", "scopes"}
+    if unknown:
+        raise ValueError(f'"discovery" has unknown keys: {", ".join(sorted(unknown))}')
+    interface = value.get("interface")
+    if interface is not None and (
+        not isinstance(interface, str) or re.fullmatch(r"[A-Za-z0-9_.:@-]{1,15}", interface) is None
+    ):
+        raise ValueError("discovery.interface must be a network interface name")
+    address = value.get("address")
+    if address is not None:
+        import ipaddress
+        try:
+            parsed = ipaddress.IPv4Address(address)
+        except (ValueError, TypeError):
+            raise ValueError("discovery.address must be an IPv4 address") from None
+        if parsed.is_unspecified or parsed.is_multicast:
+            raise ValueError("discovery.address must be a unicast interface address")
+    interval = value.get("hello_interval", 300)
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or not (
+        interval == 0 or 30 <= interval <= 86400
+    ):
+        raise ValueError("discovery.hello_interval must be 0 (off) or 30-86400 seconds")
+    scopes = value.get("scopes", [])
+    if not isinstance(scopes, list) or len(scopes) > 16:
+        raise ValueError("discovery.scopes must be a list of at most 16 scope URIs")
+    import discovery
+    for scope in scopes:
+        discovery.validate_scope(scope)
+
+
+def validate_onvif(value: Any, cameras: list[dict[str, Any]] | None = None) -> None:
+    """``onvif``: the northbound device identity (never the camera's MAC)."""
+    if not isinstance(value, dict):
+        raise ValueError('"onvif" must be an object')
+    unknown = set(value) - {"identity"}
+    if unknown:
+        raise ValueError(f'"onvif" has unknown keys: {", ".join(sorted(unknown))}')
+    import identity
+    parsed = identity.IdentityConfig.from_mapping(value.get("identity"))
+    if parsed.mac is not None:
+        for item in cameras or []:
+            mac = str(item.get("mac", ""))
+            if len(mac) == 12 and identity.normalise_mac(mac) == parsed.mac:
+                raise ValueError("onvif.identity.mac must differ from every camera MAC")
+
 
 # Every value cuckoo reads has a default here, so a config built from {} answers
 # everything. Ports mirror the module constants (asserted by the tests).
@@ -196,6 +248,12 @@ DEFAULTS: Final[dict[str, Any]] = {
         # Where named positions persist; null = next to the TLS certificate.
         "presets_file": None,
     },
+    # Northbound ONVIF identity overrides; unset values are derived and never
+    # equal the physical camera's MAC or serial (see identity.py).
+    "onvif": {"identity": {}},
+    # WS-Discovery: pin multicast to one LAN interface/address, repeat Hello
+    # every hello_interval seconds (0 = only at startup), add scopes.
+    "discovery": {"interface": None, "address": None, "hello_interval": 300, "scopes": []},
     "ports": {
         "control": 7442,
         "ingest": 7550,

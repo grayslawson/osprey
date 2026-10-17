@@ -184,7 +184,9 @@ def test_a_camera_is_adopted_and_the_onvif_face_reflects_it(tmp_path: Path) -> N
             stack.north.port, onvif.DEVICE_PATH, "GetDeviceInformation",
             "http://www.onvif.org/ver10/device/wsdl",
         )
-        assert text_of(device, "SerialNumber") == "AABBCCDDEEFF"
+        # Osprey is its own ONVIF device: a derived serial, never the G5's MAC.
+        serial = text_of(device, "SerialNumber")
+        assert serial is not None and serial.startswith("OSP") and "AABBCCDDEEFF" not in device
         assert text_of(device, "FirmwareVersion") == "5.3.95"
 
         profiles = soap(

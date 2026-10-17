@@ -13,6 +13,7 @@ implementation — every verb here is one a real client actually sends.
 from __future__ import annotations
 
 import html
+import ipaddress
 import json
 import logging
 import hashlib
@@ -20,6 +21,7 @@ import hmac
 import os
 import secrets
 import base64
+import re
 from datetime import datetime, timezone
 import subprocess
 import threading
@@ -33,9 +35,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, ClassVar, Final
 from xml.etree import ElementTree
 
+import discovery
+import identity as device_identity
 from media import BANDWIDTH_WINDOW
-from model import PAN, TILT, ZOOM, Camera, Position
+from model import PAN, TILT, ZOOM, Camera, Position, VideoTrack
 from frigate_config import Store
+from principals import (
+    ANY_USER, ROLE_ADMIN, ROLE_EVENTS, ROLE_MEDIA, ROLE_PTZ, DigestVerifier, Principal,
+    UserDirectory,
+)
+from snapshots import SnapshotCache
 from logbuffer import BUFFER, LogBuffer
 from setup_wizard import SetupError, SetupManager
 
@@ -46,6 +55,10 @@ PTZ_PATH: Final = "/onvif/ptz_service"
 IMAGING_PATH: Final = "/onvif/imaging_service"
 EVENTS_PATH: Final = "/onvif/events_service"
 MAX_SOAP_REQUEST_BYTES: Final = 256 * 1024
+# An oversized body up to this size is drained (and discarded) before the 413
+# so the client reliably receives the response instead of a connection reset.
+MAX_DISCARD_BYTES: Final = 4 * MAX_SOAP_REQUEST_BYTES
+DISCARD_TIMEOUT_SEC: Final = 5.0
 SNAPSHOT_PATH: Final = "/snapshot/"
 PREVIEW_PATH: Final = "/preview/"
 CONTROL_STEP_PATH: Final = "/control/step"
@@ -160,23 +173,69 @@ class AdminAuth:
                 del self._sessions[session]
 
 
-@dataclass(frozen=True)
-class OnvifAuth:
-    """Optional WS-Security UsernameToken verifier.
+DEFAULT_MAX_SKEW_SECONDS: Final = 300
 
-    Disabled when ``username`` is unset, preserving camera/Frigate behaviour.
-    PasswordDigest is ``Base64(SHA1(nonce + created + password))`` per ONVIF.
+
+@dataclass(frozen=True)
+class AuthResult:
+    """Outcome of checking one SOAP request's WS-Security header.
+
+    ``anonymous`` means authentication is not configured at all (compatibility
+    mode). Otherwise ``principal`` is set on success and ``error`` explains a
+    failure; an error never reaches the client beyond ``ter:NotAuthorized``.
     """
-    username: str | None = None
-    password: str | None = None
-    max_skew_seconds: int = 300
-    _replay: dict[bytes, float] = field(default_factory=dict, compare=False, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
+
+    principal: Principal | None = None
+    error: str | None = None
+    anonymous: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.anonymous or self.principal is not None
+
+
+class OnvifAuth:
+    """Optional WS-Security UsernameToken verifier for one or more principals.
+
+    Disabled when nothing is configured, preserving anonymous camera/Frigate
+    behaviour. ``OnvifAuth(username, password)`` is the original single-credential
+    form; that user holds every role. ``users`` adds principals with roles (see
+    ``principals``). PasswordDigest is ``Base64(SHA1(nonce + created + password))``.
+
+    ``Created`` must be within ``max_skew_seconds`` of Osprey's clock in either
+    direction (default 300 s, ``OSPREY_ONVIF_MAX_SKEW_SECONDS``); clients that
+    follow ONVIF call the pre-auth GetSystemDateAndTime first and correct for
+    their own offset. Each accepted (nonce, created, username) is remembered for
+    the skew window and a repeat is rejected.
+    """
 
     # A client can submit a fresh nonce on every request. Keep replay
     # protection bounded so authenticated-but-untrusted clients cannot grow
     # this in-memory set without limit.
     MAX_REPLAY: ClassVar[int] = 4096
+
+    def __init__(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        max_skew_seconds: int = DEFAULT_MAX_SKEW_SECONDS,
+        *,
+        users: UserDirectory | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self.username = username
+        self.password = password
+        self.max_skew_seconds = max_skew_seconds
+        self.directory = users or UserDirectory()
+        self._clock = clock
+        self._replay: dict[bytes, float] = {}
+        self._lock = threading.Lock()
+        principals = list(self.directory.users)
+        if username and password:
+            if any(user.username == username for user in principals):
+                raise RuntimeError(f"ONVIF user {username!r} is configured twice")
+            principals.append(Principal(username, password, frozenset({ROLE_ADMIN})))
+        self.principals: tuple[Principal, ...] = tuple(principals)
 
     @classmethod
     def from_environment(cls) -> "OnvifAuth":
@@ -192,33 +251,54 @@ class OnvifAuth:
             raise RuntimeError(
                 "OSPREY_ONVIF_USERNAME and OSPREY_ONVIF_PASSWORD(_FILE) must be configured together"
             )
-        return cls(username or None, password or None)
+        users_file = os.environ.get("OSPREY_ONVIF_USERS_FILE")
+        directory = None
+        if users_file:
+            try:
+                directory = UserDirectory.load(users_file)
+            except ValueError as exc:
+                raise RuntimeError(f"invalid OSPREY_ONVIF_USERS_FILE: {exc}") from exc
+        skew_text = os.environ.get("OSPREY_ONVIF_MAX_SKEW_SECONDS", "")
+        skew = DEFAULT_MAX_SKEW_SECONDS
+        if skew_text:
+            try:
+                skew = int(skew_text)
+            except ValueError:
+                skew = -1
+            if not 30 <= skew <= 3600:
+                raise RuntimeError("OSPREY_ONVIF_MAX_SKEW_SECONDS must be an integer from 30 to 3600")
+        return cls(username or None, password or None, skew, users=directory)
 
     @property
     def configured(self) -> bool:
         """Whether an incomplete or complete authentication configuration exists."""
-        return self.username is not None or self.password is not None
+        return self.username is not None or self.password is not None or self.directory.enabled
 
     @property
     def enabled(self) -> bool:
-        return bool(self.username and self.password)
+        partial = bool(self.username) != bool(self.password)
+        return bool(self.principals) and not partial
 
-    def valid(self, payload: bytes) -> bool:
+    def principal(self, username: str) -> Principal | None:
+        return next((user for user in self.principals if user.username == username), None)
+
+    def authenticate(self, payload: bytes, peer: str = "") -> AuthResult:
+        if not self.configured:
+            return AuthResult(anonymous=True)
         if not self.enabled:
-            # Anonymous mode is only valid when authentication is completely
-            # unset. A manually constructed partial config must fail closed.
-            return not self.configured
+            # A manually constructed partial config must fail closed.
+            return AuthResult(error="authentication is misconfigured")
         try:
             root = ElementTree.fromstring(payload)
             token = next((e for e in root.iter() if local_name(e.tag) == "UsernameToken"), None)
             if token is None:
-                return False
-            values = {local_name(e.tag): (e.text or "") for e in token.iter()}
+                return AuthResult(error="no UsernameToken")
+            values = {local_name(e.tag): (e.text or "").strip() for e in token.iter()}
             nonce = base64.b64decode(values.get("Nonce", ""), validate=True)
             created = values.get("Created", "")
             digest = base64.b64decode(values.get("Password", ""), validate=True)
             if not 16 <= len(nonce) <= 64 or len(digest) != 20 or not created:
-                return False
+                return AuthResult(error="malformed UsernameToken")
             # ONVIF devices vary: both second precision and fractional
             # precision UTC timestamps are common.
             parsed = None
@@ -229,28 +309,41 @@ class OnvifAuth:
                 except ValueError:
                     continue
             if parsed is None:
-                return False
-            now = time.time()
+                return AuthResult(error="malformed Created timestamp")
+            now = self._clock()
             if abs(now - parsed.timestamp()) > self.max_skew_seconds:
-                return False
-            key = hashlib.sha256(nonce + created.encode() + values.get("Username", "").encode()).digest()
-            with self._lock:
-                for old, when in list(self._replay.items()):
-                    if now - when > self.max_skew_seconds:
-                        del self._replay[old]
-            if key in self._replay:
-                return False
-            identity_ok = hmac.compare_digest(values.get("Username", ""), self.username or "")
-            expected = hashlib.sha1(nonce + created.encode() + (self.password or "").encode()).digest()
-            valid = identity_ok and hmac.compare_digest(digest, expected)
-            if valid:
-                if len(self._replay) >= self.MAX_REPLAY:
-                    oldest = min(self._replay, key=lambda candidate: self._replay[candidate])
-                    self._replay.pop(oldest, None)
-                self._replay[key] = now
-            return valid
+                return AuthResult(error="Created is outside the clock-skew window")
+            username = values.get("Username", "")
+            principal = self.principal(username)
+            password = principal.password if principal is not None else ""
+            expected = hashlib.sha1(nonce + created.encode() + password.encode()).digest()
+            # Compare even for unknown users so timing does not reveal names.
+            if not hmac.compare_digest(digest, expected) or principal is None:
+                return AuthResult(error="invalid credentials")
+            if peer and not principal.permits_peer(peer):
+                return AuthResult(error="source address not allowed for this user")
+            if not peer and principal.allow_from:
+                return AuthResult(error="source address unknown")
+            if principal.replay_protection:
+                key = hashlib.sha256(nonce + created.encode() + username.encode()).digest()
+                with self._lock:
+                    for old, when in list(self._replay.items()):
+                        if now - when > self.max_skew_seconds:
+                            del self._replay[old]
+                    if key in self._replay:
+                        return AuthResult(error="replayed nonce")
+                    if len(self._replay) >= self.MAX_REPLAY:
+                        oldest = min(self._replay, key=lambda candidate: self._replay[candidate])
+                        self._replay.pop(oldest, None)
+                    self._replay[key] = now
+            return AuthResult(principal=principal)
         except (ElementTree.ParseError, ValueError, TypeError, OverflowError):
-            return False
+            return AuthResult(error="unparseable security header")
+
+    def valid(self, payload: bytes, peer: str = "") -> bool:
+        """Backwards-compatible boolean form of :meth:`authenticate`."""
+        return self.authenticate(payload, peer).ok
+
 
 SOAP: Final = "http://www.w3.org/2003/05/soap-envelope"
 NAMESPACES: Final = {
@@ -264,10 +357,12 @@ NAMESPACES: Final = {
     "wsa": "http://www.w3.org/2005/08/addressing",
     "wsnt": "http://docs.oasis-open.org/wsn/b-2",
     "tns1": "http://www.onvif.org/ver10/topics",
+    "ter": "http://www.onvif.org/ver10/error",
 }
 
-MANUFACTURER: Final = "cuckoo"
+MANUFACTURER: Final = device_identity.DEFAULT_MANUFACTURER
 PTZ_NODE: Final = "PTZNode"
+VIDEO_SOURCE: Final = "VideoSource"
 PTZ_CONFIG: Final = "PTZConfig"
 FOV_TRANSLATION_SPACE: Final = (
     "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov"
@@ -402,6 +497,8 @@ class Backend:
     set_preset: Callable[[str, int | None], int | None] = lambda _n, _i: None
     remove_preset: Callable[[int], bool] = lambda _i: False
     refresh_position: Callable[[], bool] = lambda: False
+    # Halt the head: (pan_tilt, zoom) -> whether a stop was issued or not needed.
+    stop: Callable[[bool, bool], bool] = lambda _pt, _z: False
     # Why a move cannot be dispatched right now, in the camera's own terms:
     # "PTZ channel unavailable" / "the camera is already moving" / generic.
     move_refusal: Callable[[], str] = lambda: "the camera is not accepting movement"
@@ -443,43 +540,144 @@ class Event:
         )
 
 
+@dataclass
+class Subscription:
+    owner: str
+    expires: float
+    queue: deque[Event]
+
+
 class Subscriptions:
-    """Pull-point subscriptions, each with its own backlog."""
+    """Pull-point subscriptions, each with its own bounded backlog and lifetime.
+
+    Identifiers are unguessable. A subscription expires at its TerminationTime
+    unless renewed (``Renew``) or pulled from (``PullMessages`` keeps a live
+    subscriber alive, which matches what common clients expect). The table is
+    capped globally and per owner: a client that leaks subscriptions (an NVR
+    restarting, say) loses its own oldest one rather than starving others.
+    """
 
     DEPTH: Final = 100
+    MAX_TOTAL: Final = 16
+    MAX_PER_OWNER: Final = 4
+    DEFAULT_TTL: Final = 120.0
+    MIN_TTL: Final = 10.0
+    MAX_TTL: Final = 3600.0
 
-    def __init__(self) -> None:
-        self._queues: dict[str, deque[Event]] = {}
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self._items: dict[str, Subscription] = {}
         self._lock = threading.Lock()
-        self._counter = 0
+        self._clock = clock
 
-    def create(self) -> str:
+    @classmethod
+    def clamp_ttl(cls, ttl: float | None) -> float:
+        if ttl is None:
+            return cls.DEFAULT_TTL
+        return max(cls.MIN_TTL, min(cls.MAX_TTL, ttl))
+
+    def _expire(self, now: float) -> None:
+        for identifier in [key for key, item in self._items.items() if item.expires <= now]:
+            del self._items[identifier]
+
+    def create(self, owner: str = "", ttl: float | None = None) -> str | None:
+        """A new subscription id, or None when the table is full."""
         with self._lock:
-            self._counter += 1
-            identifier = f"sub{self._counter}"
-            self._queues[identifier] = deque(maxlen=self.DEPTH)
+            now = self._clock()
+            self._expire(now)
+            mine = sorted(
+                (key for key, item in self._items.items() if item.owner == owner),
+                key=lambda key: self._items[key].expires,
+            )
+            while len(mine) >= self.MAX_PER_OWNER:
+                del self._items[mine.pop(0)]
+            if len(self._items) >= self.MAX_TOTAL:
+                return None
+            identifier = secrets.token_urlsafe(12)
+            self._items[identifier] = Subscription(owner, now + self.clamp_ttl(ttl), deque(maxlen=self.DEPTH))
         return identifier
 
-    def drop(self, identifier: str) -> None:
+    def owner_of(self, identifier: str) -> str | None:
         with self._lock:
-            self._queues.pop(identifier, None)
+            self._expire(self._clock())
+            item = self._items.get(identifier)
+            return item.owner if item is not None else None
+
+    def owned_by(self, owner: str) -> list[str]:
+        with self._lock:
+            self._expire(self._clock())
+            return [key for key, item in self._items.items() if item.owner == owner]
+
+    def expires(self, identifier: str) -> float | None:
+        with self._lock:
+            item = self._items.get(identifier)
+            return item.expires if item is not None else None
+
+    def renew(self, identifier: str, ttl: float | None = None) -> float | None:
+        with self._lock:
+            now = self._clock()
+            self._expire(now)
+            item = self._items.get(identifier)
+            if item is None:
+                return None
+            item.expires = now + self.clamp_ttl(ttl)
+            return item.expires
+
+    def drop(self, identifier: str) -> bool:
+        with self._lock:
+            return self._items.pop(identifier, None) is not None
 
     def publish(self, event: Event) -> None:
         with self._lock:
-            for queue in self._queues.values():
-                queue.append(event)
+            self._expire(self._clock())
+            for item in self._items.values():
+                item.queue.append(event)
 
     def pull(self, identifier: str, limit: int = 10) -> list[Event]:
         with self._lock:
-            queue = self._queues.get(identifier)
-            if queue is None:
+            now = self._clock()
+            self._expire(now)
+            item = self._items.get(identifier)
+            if item is None:
                 return []
-            return [queue.popleft() for _ in range(min(limit, len(queue)))]
+            item.expires = max(item.expires, now + self.DEFAULT_TTL)
+            return [item.queue.popleft() for _ in range(min(limit, len(item.queue)))]
+
+    def exists(self, identifier: str) -> bool:
+        with self._lock:
+            self._expire(self._clock())
+            return identifier in self._items
 
     @property
     def count(self) -> int:
         with self._lock:
-            return len(self._queues)
+            self._expire(self._clock())
+            return len(self._items)
+
+
+_DURATION_RE: Final = re.compile(
+    r"P(?:(?P<d>\d+)D)?(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+(?:\.\d+)?)S)?)?"
+)
+
+
+def parse_termination(text: str, now: float) -> float | None:
+    """A WS-N TerminationTime (xs:duration or xs:dateTime) as seconds from now."""
+    text = text.strip()
+    if not text:
+        return None
+    match = _DURATION_RE.fullmatch(text)
+    if match is not None and text not in ("P", "PT"):
+        days, hours, minutes, seconds = (match.group(k) for k in "dhms")
+        return (
+            int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes or 0) * 60
+            + float(seconds or 0)
+        )
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            when = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+        return when - now
+    return None
 
 
 def motion_event(camera: Camera, active: bool) -> Event:
@@ -533,11 +731,37 @@ def envelope(body: str) -> str:
     )
 
 
-def fault(reason: str) -> str:
+SENDER: Final = "s:Sender"
+RECEIVER: Final = "s:Receiver"
+
+
+def fault(reason: str, code: str = RECEIVER, subcodes: tuple[str, ...] = ()) -> str:
+    """A SOAP 1.2 fault, optionally with ONVIF ``ter:`` subcodes (outermost first)."""
+    nested = ""
+    for subcode in reversed(subcodes):
+        nested = f"<s:Subcode><s:Value>{subcode}</s:Value>{nested}</s:Subcode>"
     return envelope(
-        "<s:Fault><s:Code><s:Value>s:Receiver</s:Value></s:Code>"
+        f"<s:Fault><s:Code><s:Value>{code}</s:Value>{nested}</s:Code>"
         f"<s:Reason><s:Text xml:lang=\"en\">{html.escape(reason)}</s:Text></s:Reason></s:Fault>"
     )
+
+
+def not_authorized(reason: str = "Sender not authorized") -> str:
+    return fault(reason, SENDER, ("ter:NotAuthorized",))
+
+
+def invalid_arg(reason: str, detail: str = "ter:InvalidArgVal") -> str:
+    subcodes = ("ter:InvalidArgVal",) if detail == "ter:InvalidArgVal" else ("ter:InvalidArgVal", detail)
+    return fault(reason, SENDER, subcodes)
+
+
+def fault_status(body: str) -> HTTPStatus:
+    """SOAP 1.2 HTTP binding: Sender faults are 400, Receiver faults are 500."""
+    if "<s:Fault>" not in body:
+        return HTTPStatus.OK
+    if f"<s:Value>{SENDER}</s:Value>" in body:
+        return HTTPStatus.BAD_REQUEST
+    return HTTPStatus.INTERNAL_SERVER_ERROR
 
 
 def local_name(tag: str) -> str:
@@ -594,6 +818,130 @@ def parse_call(payload: bytes) -> Call | None:
     return Call(action=local_name(first.tag), body=first, namespace=namespace)
 
 
+# ------------------------------------------------------------- operations
+
+TDS: Final = NAMESPACES["tds"]
+TRT: Final = NAMESPACES["trt"]
+TPTZ: Final = NAMESPACES["tptz"]
+TIMG: Final = NAMESPACES["timg"]
+TEV: Final = NAMESPACES["tev"]
+WSNT: Final = NAMESPACES["wsnt"]
+SERVICE_NAMESPACES: Final = frozenset({TDS, TRT, TPTZ, TIMG, TEV, WSNT})
+PRE_AUTH: Final = None
+
+
+@dataclass(frozen=True)
+class Operation:
+    """One SOAP operation Osprey implements, and who may call it.
+
+    ``role`` is ``PRE_AUTH`` (``None``) for the operations ONVIF Core lets any
+    client call before authenticating (GetSystemDateAndTime, GetCapabilities,
+    GetServices, GetServiceCapabilities, GetWsdlUrl, GetEndpointReference),
+    ``ANY_USER`` for device metadata every authenticated client needs, or a
+    role from ``principals``.
+    """
+
+    namespace: str
+    action: str
+    handler: str
+    role: str | None
+
+
+def _ops(namespace: str, role: str | None, *actions: str) -> list[Operation]:
+    return [Operation(namespace, action, f"_{_snake(action)}", role) for action in actions]
+
+
+def _snake(action: str) -> str:
+    """CamelCase to snake_case, keeping acronyms whole (GetDNS -> get_dns)."""
+    out: list[str] = []
+    for index, character in enumerate(action):
+        if character.isupper() and index:
+            previous = action[index - 1]
+            following = action[index + 1] if index + 1 < len(action) else ""
+            if previous.islower() or (previous.isupper() and following.islower()):
+                out.append("_")
+        out.append(character.lower())
+    return "".join(out)
+
+
+# The complete allow-list. Nothing outside it is dispatched, whatever the
+# request's element name; adding an operation means adding it here.
+OPERATIONS: Final[tuple[Operation, ...]] = tuple(
+    _ops(TDS, PRE_AUTH, "GetSystemDateAndTime", "GetCapabilities", "GetServices",
+         "GetWsdlUrl", "GetEndpointReference")
+    + [Operation(TDS, "GetServiceCapabilities", "_get_service_capabilities", PRE_AUTH)]
+    + _ops(TDS, ANY_USER, "GetDeviceInformation", "GetScopes", "GetHostname", "GetDNS",
+           "GetNTP", "GetNetworkInterfaces", "GetNetworkProtocols",
+           "GetNetworkDefaultGateway", "GetDiscoveryMode")
+    + _ops(TDS, ROLE_ADMIN, "SetSystemDateAndTime")
+    + [Operation(TRT, "GetServiceCapabilities", "_get_media_service_capabilities", PRE_AUTH)]
+    + _ops(TRT, ROLE_MEDIA, "GetProfiles", "GetProfile", "GetVideoSources",
+           "GetVideoSourceConfigurations", "GetVideoSourceConfiguration",
+           "GetCompatibleVideoSourceConfigurations", "GetVideoEncoderConfigurations",
+           "GetVideoEncoderConfiguration", "GetCompatibleVideoEncoderConfigurations",
+           "GetVideoEncoderConfigurationOptions", "GetGuaranteedNumberOfVideoEncoderInstances",
+           "GetStreamUri", "GetSnapshotUri", "GetAudioSources", "GetAudioSourceConfigurations",
+           "GetAudioEncoderConfigurations", "GetAudioOutputs", "SetSynchronizationPoint")
+    + _ops(TRT, ROLE_ADMIN, "SetVideoEncoderConfiguration")
+    + [Operation(TPTZ, "GetServiceCapabilities", "_get_ptz_service_capabilities", PRE_AUTH)]
+    + _ops(TPTZ, ROLE_PTZ, "GetNodes", "GetNode", "GetConfigurations", "GetConfiguration",
+           "GetConfigurationOptions", "GetStatus", "GetPresets", "AbsoluteMove",
+           "RelativeMove", "ContinuousMove", "Stop", "GotoPreset", "SetPreset", "RemovePreset")
+    + [Operation(TIMG, "GetServiceCapabilities", "_get_imaging_service_capabilities", PRE_AUTH)]
+    + _ops(TIMG, ROLE_MEDIA, "GetImagingSettings", "GetOptions")
+    + [Operation(TEV, "GetServiceCapabilities", "_get_events_service_capabilities", PRE_AUTH)]
+    + _ops(TEV, ROLE_EVENTS, "CreatePullPointSubscription", "PullMessages",
+           "GetEventProperties")
+    + [Operation(TEV, "SetSynchronizationPoint", "_set_event_synchronization_point", ROLE_EVENTS)]
+    + _ops(WSNT, ROLE_EVENTS, "Renew", "Unsubscribe")
+)
+_BY_KEY: Final[dict[tuple[str, str], Operation]] = {(op.namespace, op.action): op for op in OPERATIONS}
+_BY_ACTION: Final[dict[str, Operation]] = {}
+for _operation in OPERATIONS:
+    _BY_ACTION.setdefault(_operation.action, _operation)
+
+
+def operation_for(call: Call) -> Operation | None:
+    """Resolve a call against the allow-list.
+
+    A request in a known ONVIF service namespace must match that service
+    exactly (an Imaging ``Stop`` is not a PTZ ``Stop``). Some clients put
+    operations in other namespaces (or tests use a placeholder); those resolve
+    by action name to the first service that defines it.
+    """
+    if call.namespace in SERVICE_NAMESPACES:
+        found = _BY_KEY.get((call.namespace, call.action))
+        if found is None and call.namespace == TEV and call.action in ("Renew", "Unsubscribe"):
+            found = _BY_KEY.get((WSNT, call.action))
+        return found
+    return _BY_ACTION.get(call.action)
+
+
+@dataclass(frozen=True)
+class Caller:
+    """Who is making the current SOAP request (set for the call's duration)."""
+
+    principal: Principal | None = None
+    anonymous: bool = True
+    peer: str = ""
+    subscription: str = ""
+
+    def may(self, role: str) -> bool:
+        if self.principal is None:
+            return True
+        return self.principal.has(role)
+
+    @property
+    def owner(self) -> str:
+        if self.principal is not None:
+            return f"user:{self.principal.username}"
+        return f"peer:{self.peer}"
+
+
+SNAPSHOT_REALM: Final = "Osprey ONVIF"
+SNAPSHOT_TOKEN_PARAM: Final = "auth"
+
+
 # ---------------------------------------------------------------------- services
 
 
@@ -604,7 +952,12 @@ class Services:
                  auth: AdminAuth | None = None, onvif_auth: OnvifAuth | None = None,
         read_only: bool = False, logs: LogBuffer | None = None,
         setup: SetupManager | None = None,
-        frigate_url: str | None = None) -> None:
+        frigate_url: str | None = None,
+        identity: device_identity.IdentityConfig | None = None,
+        name: str = "osprey",
+        interface_mac: str | None = None,
+        extra_scopes: tuple[str, ...] = (),
+        snapshot_interval: float = 1.0) -> None:
         self.backend = backend
         self.host = host
         self.port = port
@@ -617,6 +970,45 @@ class Services:
         self.setup = setup
         self.frigate_store = Store.from_environment()
         self.frigate_url = self.frigate_store.load() or frigate_url
+        self.identity_config = identity or device_identity.IdentityConfig()
+        self.name = name
+        self.interface_mac = interface_mac
+        self.extra_scopes = extra_scopes
+        self.snapshots = SnapshotCache(lambda: self.backend.snapshot(), snapshot_interval)
+        self._caller = threading.local()
+        # Capability tokens in snapshot URIs are HMACs under a per-process key,
+        # so they become invalid on restart (InvalidAfterReboot=true).
+        self._snapshot_key = secrets.token_bytes(32)
+        self._snapshot_digest = DigestVerifier(SNAPSHOT_REALM, self.onvif_auth_principal)
+
+    # ---------------------------------------------------------------- identity
+
+    def onvif_auth_principal(self, username: str) -> Principal | None:
+        return self.onvif_auth.principal(username)
+
+    @property
+    def caller(self) -> Caller:
+        current = getattr(self._caller, "value", None)
+        return current if isinstance(current, Caller) else Caller()
+
+    def device_identity(self) -> device_identity.DeviceIdentity:
+        camera = self.backend.camera()
+        seed = camera.mac if camera is not None and camera.mac else f"{self.host}:{self.port}"
+        return device_identity.resolve(
+            self.identity_config,
+            seed=seed,
+            camera_mac=camera.mac if camera is not None else None,
+            camera_model=camera.model if camera is not None and camera.model else None,
+            controller_name=self.name,
+            interface_hw=self.interface_mac,
+        )
+
+    def scopes(self) -> tuple[str, ...]:
+        camera = self.backend.camera()
+        name = camera.name if camera is not None and camera.name else self.name
+        return discovery.scopes_for(
+            name, self.ptz_enabled, self.device_identity().model, self.extra_scopes
+        )
 
     def frigate_settings(self) -> dict[str, object]:
         return {"base_url": self.frigate_url, "configured": self.frigate_url is not None}
@@ -647,9 +1039,17 @@ class Services:
 
     @property
     def ptz_enabled(self) -> bool:
-        """Whether this ONVIF persona exposes or accepts PTZ operations."""
+        """Whether this ONVIF persona exposes PTZ to the current caller.
+
+        A principal without the ``ptz`` role (UniFi Protect, typically) sees the
+        device exactly as the read-only persona does: no PTZ service, no PTZ
+        configuration in profiles.
+        """
         camera = self.backend.camera()
-        return not self.read_only and camera is not None and camera.is_ptz
+        return (
+            not self.read_only and camera is not None and camera.is_ptz
+            and self.caller.may(ROLE_PTZ)
+        )
 
     # ------------------------------------------------------------ local control
     def control_step(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
@@ -1080,16 +1480,63 @@ class Services:
 
     # ---------------------------------------------------------------- dispatch
 
-    def handle(self, call: Call) -> str:
-        if call.action == "GetServiceCapabilities" and call.namespace == NAMESPACES["tptz"]:
-            return self._get_ptz_service_capabilities(call)
-        handler = getattr(self, f"_{_snake(call.action)}", None)
-        if handler is None:
+    def handle(self, call: Call, caller: Caller | None = None) -> str:
+        """Run one allow-listed operation for ``caller`` (default: trusted local)."""
+        operation = operation_for(call)
+        if operation is None:
             log.info("unhandled ONVIF action %s", call.action)
-            return fault(f"Action {call.action} is not implemented")
-        result = handler(call)
+            return fault(
+                f"Action {call.action} is not implemented", RECEIVER,
+                ("ter:ActionNotSupported",),
+            )
+        handler = getattr(self, operation.handler)
+        previous = getattr(self._caller, "value", None)
+        self._caller.value = caller or Caller()
+        try:
+            result = handler(call)
+        finally:
+            self._caller.value = previous
         assert isinstance(result, str)
         return result
+
+    def dispatch(self, payload: bytes, peer: str = "", subscription: str = "") -> tuple[HTTPStatus, str]:
+        """Authenticate, authorize and run one SOAP request.
+
+        Pre-auth operations run without credentials. Every other operation
+        needs a valid UsernameToken whose principal holds the operation's role,
+        unless ONVIF authentication is not configured at all.
+        """
+        call = parse_call(payload)
+        if call is None:
+            return HTTPStatus.BAD_REQUEST, fault(
+                "unparseable request", SENDER, ("ter:WellFormed",)
+            )
+        operation = operation_for(call)
+        if operation is None:
+            log.info("unhandled ONVIF action %s", call.action)
+            return HTTPStatus.INTERNAL_SERVER_ERROR, fault(
+                f"Action {call.action} is not implemented", RECEIVER,
+                ("ter:ActionNotSupported",),
+            )
+        result = self.onvif_auth.authenticate(payload, peer)
+        if operation.role is not PRE_AUTH:
+            if not result.ok:
+                log.info("ONVIF %s from %s rejected: %s", call.action, peer or "?", result.error)
+                return HTTPStatus.UNAUTHORIZED, not_authorized()
+            if result.principal is not None and not result.principal.has(operation.role):
+                log.info(
+                    "ONVIF %s denied for user %s (needs role %s)",
+                    call.action, result.principal.username, operation.role,
+                )
+                return HTTPStatus.BAD_REQUEST, not_authorized(
+                    f"user lacks the {operation.role} role for {call.action}"
+                )
+        caller = Caller(
+            principal=result.principal, anonymous=result.anonymous, peer=peer,
+            subscription=subscription,
+        )
+        body = self.handle(call, caller)
+        return fault_status(body), body
 
     # ------------------------------------------------------------------ device
 
@@ -1108,102 +1555,343 @@ class Services:
             "</tt:UTCDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>"
         )
 
+    def _set_system_date_and_time(self, call: Call) -> str:
+        # Osprey follows the host clock (keep it on NTP). Accept and ignore so a
+        # client's "sync time" step does not abort its setup flow.
+        log.info("ignoring SetSystemDateAndTime; Osprey uses the host clock")
+        return envelope("<tds:SetSystemDateAndTimeResponse/>")
+
     def _get_device_information(self, call: Call) -> str:
         camera = self.backend.camera()
+        ident = self.device_identity()
         return envelope(
             "<tds:GetDeviceInformationResponse>"
-            f"<tds:Manufacturer>{MANUFACTURER}</tds:Manufacturer>"
-            f"<tds:Model>{html.escape(camera.model if camera else 'unknown')}</tds:Model>"
-            f"<tds:FirmwareVersion>{html.escape(camera.firmware if camera else '0')}</tds:FirmwareVersion>"
-            f"<tds:SerialNumber>{html.escape(camera.mac if camera else '000000000000')}</tds:SerialNumber>"
-            f"<tds:HardwareId>{html.escape(camera.model if camera else 'unknown')}</tds:HardwareId>"
+            f"<tds:Manufacturer>{html.escape(ident.manufacturer)}</tds:Manufacturer>"
+            f"<tds:Model>{html.escape(ident.model)}</tds:Model>"
+            f"<tds:FirmwareVersion>{html.escape(camera.firmware if camera and camera.firmware else '0')}</tds:FirmwareVersion>"
+            f"<tds:SerialNumber>{html.escape(ident.serial)}</tds:SerialNumber>"
+            f"<tds:HardwareId>{html.escape(ident.hardware_id)}</tds:HardwareId>"
             "</tds:GetDeviceInformationResponse>"
         )
 
+    def _device_capabilities_xml(self) -> str:
+        return (
+            f"<tt:Device><tt:XAddr>{self.address(DEVICE_PATH)}</tt:XAddr>"
+            "<tt:Network><tt:IPFilter>false</tt:IPFilter>"
+            "<tt:ZeroConfiguration>false</tt:ZeroConfiguration>"
+            "<tt:IPVersion6>false</tt:IPVersion6><tt:DynDNS>false</tt:DynDNS></tt:Network>"
+            # SystemCapabilities is a strict sequence and every element below
+            # is required by the schema, SupportedVersions at least once.
+            "<tt:System><tt:DiscoveryResolve>false</tt:DiscoveryResolve>"
+            "<tt:DiscoveryBye>true</tt:DiscoveryBye>"
+            "<tt:RemoteDiscovery>false</tt:RemoteDiscovery>"
+            "<tt:SystemBackup>false</tt:SystemBackup>"
+            "<tt:SystemLogging>false</tt:SystemLogging>"
+            "<tt:FirmwareUpgrade>false</tt:FirmwareUpgrade>"
+            "<tt:SupportedVersions><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tt:SupportedVersions>"
+            "</tt:System></tt:Device>"
+        )
+
     def _get_capabilities(self, call: Call) -> str:
+        categories = {
+            (element.text or "").strip()
+            for element in call.body.iter() if local_name(element.tag) == "Category"
+        } - {""}
+        wanted = categories or {"All"}
+
+        def want(name: str) -> bool:
+            return "All" in wanted or name in wanted
+
         ptz = (
             f"<tt:PTZ><tt:XAddr>{self.address(PTZ_PATH)}</tt:XAddr></tt:PTZ>"
-            if self.ptz_enabled
+            if self.ptz_enabled and want("PTZ")
             else ""
         )
-        return envelope(
-            "<tds:GetCapabilitiesResponse><tds:Capabilities>"
-            # ONVIF Capabilities is a strict sequence: Device, Events, Imaging,
-            # Media, PTZ. A real client (zeep, which Home Assistant uses) validates
-            # against the schema and silently drops any element out of order — so a
-            # mis-ordered Events block means HA never creates motion sensors.
-            f"<tt:Device><tt:XAddr>{self.address(DEVICE_PATH)}</tt:XAddr>"
-            "<tt:System><tt:DiscoveryResolve>false</tt:DiscoveryResolve>"
-            "<tt:DiscoveryBye>true</tt:DiscoveryBye></tt:System></tt:Device>"
-            f"<tt:Events><tt:XAddr>{self.address(EVENTS_PATH)}</tt:XAddr>"
-            "<tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport>"
-            "<tt:WSPullPointSupport>true</tt:WSPullPointSupport>"
-            "<tt:WSPausableSubscriptionManagerInterfaceSupport>false"
-            "</tt:WSPausableSubscriptionManagerInterfaceSupport></tt:Events>"
+        parts = [
+            # ONVIF Capabilities is a strict sequence: Analytics, Device, Events,
+            # Imaging, Media, PTZ. A real client (zeep, which Home Assistant uses)
+            # validates against the schema and silently drops any element out of
+            # order — so a mis-ordered Events block means HA never creates motion
+            # sensors.
+            self._device_capabilities_xml() if want("Device") else "",
+            (
+                f"<tt:Events><tt:XAddr>{self.address(EVENTS_PATH)}</tt:XAddr>"
+                "<tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport>"
+                "<tt:WSPullPointSupport>true</tt:WSPullPointSupport>"
+                "<tt:WSPausableSubscriptionManagerInterfaceSupport>false"
+                "</tt:WSPausableSubscriptionManagerInterfaceSupport></tt:Events>"
+            ) if want("Events") else "",
             f"<tt:Imaging><tt:XAddr>{self.address(IMAGING_PATH)}</tt:XAddr></tt:Imaging>"
-            f"<tt:Media><tt:XAddr>{self.address(MEDIA_PATH)}</tt:XAddr>"
-            "<tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast>"
-            "<tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>"
-            "</tt:StreamingCapabilities></tt:Media>"
-            f"{ptz}"
+            if want("Imaging") else "",
+            (
+                f"<tt:Media><tt:XAddr>{self.address(MEDIA_PATH)}</tt:XAddr>"
+                "<tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast>"
+                "<tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>"
+                "</tt:StreamingCapabilities></tt:Media>"
+            ) if want("Media") else "",
+            ptz,
+        ]
+        body = "".join(parts)
+        if not body:
+            return fault("no capability in the requested category", RECEIVER, (
+                "ter:ActionNotSupported", "ter:NoSuchService",
+            ))
+        return envelope(
+            f"<tds:GetCapabilitiesResponse><tds:Capabilities>{body}"
             "</tds:Capabilities></tds:GetCapabilitiesResponse>"
         )
 
+    def _service_capabilities_inner(self, namespace: str) -> str:
+        """The ``Capabilities`` element of one service, in that service's namespace."""
+        if namespace == TDS:
+            return (
+                "<tds:Capabilities>"
+                '<tds:Network IPFilter="false" ZeroConfiguration="false" IPVersion6="false" '
+                'DynDNS="false" HostnameFromDHCP="false" NTP="0"/>'
+                '<tds:Security UsernameToken="true" HttpDigest="true" TLS1.0="false" '
+                'TLS1.1="false" TLS1.2="false"/>'
+                '<tds:System DiscoveryResolve="false" DiscoveryBye="true" RemoteDiscovery="false" '
+                'SystemBackup="false" SystemLogging="false" FirmwareUpgrade="false" '
+                'HttpSnapshot="true"/>'
+                "</tds:Capabilities>"
+            )
+        if namespace == TRT:
+            camera = self.backend.camera()
+            count = len(camera.tracks) if camera is not None else 0
+            return (
+                '<trt:Capabilities SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="false">'
+                f'<trt:ProfileCapabilities MaximumNumberOfProfiles="{max(1, count)}"/>'
+                '<trt:StreamingCapabilities RTPMulticast="false" RTP_TCP="true" '
+                'RTP_RTSP_TCP="true" NonAggregateControl="false" NoRTSPStreaming="false"/>'
+                "</trt:Capabilities>"
+            )
+        if namespace == TPTZ:
+            value = "true" if self.ptz_enabled else "false"
+            return (
+                '<tptz:Capabilities EFlip="false" Reverse="false" '
+                f'GetCompatibleConfigurations="false" MoveStatus="{value}" '
+                f'StatusPosition="{value}"/>'
+            )
+        if namespace == TIMG:
+            return '<timg:Capabilities ImageStabilization="false"/>'
+        return (
+            '<tev:Capabilities WSSubscriptionPolicySupport="false" WSPullPointSupport="true" '
+            'WSPausableSubscriptionManagerInterfaceSupport="false" MaxNotificationProducers="0" '
+            f'MaxPullPoints="{Subscriptions.MAX_TOTAL}"/>'
+        )
+
     def _get_services(self, call: Call) -> str:
+        include = call.text("IncludeCapability").lower() == "true"
         entries = [
-            ("http://www.onvif.org/ver10/device/wsdl", DEVICE_PATH),
-            ("http://www.onvif.org/ver10/media/wsdl", MEDIA_PATH),
-            ("http://www.onvif.org/ver20/imaging/wsdl", IMAGING_PATH),
-            ("http://www.onvif.org/ver10/events/wsdl", EVENTS_PATH),
+            (TDS, DEVICE_PATH),
+            (TRT, MEDIA_PATH),
+            (TIMG, IMAGING_PATH),
+            (TEV, EVENTS_PATH),
         ]
         if self.ptz_enabled:
-            entries.insert(2, ("http://www.onvif.org/ver20/ptz/wsdl", PTZ_PATH))
+            entries.insert(2, (TPTZ, PTZ_PATH))
         body = "".join(
             f"<tds:Service><tds:Namespace>{namespace}</tds:Namespace>"
             f"<tds:XAddr>{self.address(path)}</tds:XAddr>"
-            "<tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>"
+            + (f"<tds:Capabilities>{self._service_capabilities_inner(namespace)}</tds:Capabilities>" if include else "")
+            + "<tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>"
             "</tds:Service>"
             for namespace, path in entries
         )
         return envelope(f"<tds:GetServicesResponse>{body}</tds:GetServicesResponse>")
 
+    def _get_wsdl_url(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetWsdlUrlResponse><tds:WsdlUrl>http://www.onvif.org/onvif/ver10/device/wsdl/devicemgmt.wsdl"
+            "</tds:WsdlUrl></tds:GetWsdlUrlResponse>"
+        )
+
+    def _get_endpoint_reference(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetEndpointReferenceResponse>"
+            f"<tds:GUID>{discovery.endpoint_for(self.host, self.port)}</tds:GUID>"
+            "</tds:GetEndpointReferenceResponse>"
+        )
+
     def _get_scopes(self, call: Call) -> str:
-        camera = self.backend.camera()
-        scopes = [
-            "onvif://www.onvif.org/type/video_encoder",
-            "onvif://www.onvif.org/Profile/Streaming",
-            f"onvif://www.onvif.org/name/{camera.name if camera else 'cuckoo'}",
-        ]
-        if self.ptz_enabled:
-            scopes.append("onvif://www.onvif.org/type/ptz")
+        configurable = ("onvif://www.onvif.org/name/", "onvif://www.onvif.org/location/")
         body = "".join(
-            "<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef>"
+            "<tds:Scopes><tt:ScopeDef>"
+            f"{'Configurable' if scope.startswith(configurable) else 'Fixed'}</tt:ScopeDef>"
             f"<tt:ScopeItem>{html.escape(scope)}</tt:ScopeItem></tds:Scopes>"
-            for scope in scopes
+            for scope in self.scopes()
         )
         return envelope(f"<tds:GetScopesResponse>{body}</tds:GetScopesResponse>")
 
+    def _get_hostname(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetHostnameResponse><tds:HostnameInformation>"
+            "<tt:FromDHCP>false</tt:FromDHCP>"
+            f"<tt:Name>{html.escape(self.device_identity().hostname)}</tt:Name>"
+            "</tds:HostnameInformation></tds:GetHostnameResponse>"
+        )
+
+    def _get_dns(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetDNSResponse><tds:DNSInformation><tt:FromDHCP>false</tt:FromDHCP>"
+            "</tds:DNSInformation></tds:GetDNSResponse>"
+        )
+
+    def _get_ntp(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetNTPResponse><tds:NTPInformation><tt:FromDHCP>false</tt:FromDHCP>"
+            "</tds:NTPInformation></tds:GetNTPResponse>"
+        )
+
+    def _ipv4_host(self) -> str | None:
+        try:
+            return str(ipaddress.IPv4Address(self.host))
+        except ValueError:
+            return None
+
+    def _get_network_interfaces(self, call: Call) -> str:
+        ident = self.device_identity()
+        address = self._ipv4_host()
+        manual = (
+            f"<tt:Manual><tt:Address>{address}</tt:Address>"
+            f"<tt:PrefixLength>{ident.prefix_length}</tt:PrefixLength></tt:Manual>"
+            if address else ""
+        )
+        return envelope(
+            "<tds:GetNetworkInterfacesResponse>"
+            '<tds:NetworkInterfaces token="eth0"><tt:Enabled>true</tt:Enabled>'
+            f"<tt:Info><tt:Name>eth0</tt:Name><tt:HwAddress>{ident.mac}</tt:HwAddress>"
+            "<tt:MTU>1500</tt:MTU></tt:Info>"
+            f"<tt:IPv4><tt:Enabled>{'true' if address else 'false'}</tt:Enabled>"
+            f"<tt:Config>{manual}<tt:DHCP>false</tt:DHCP></tt:Config></tt:IPv4>"
+            "</tds:NetworkInterfaces></tds:GetNetworkInterfacesResponse>"
+        )
+
+    def _rtsp_port(self) -> int | None:
+        try:
+            return urlsplit(self.backend.stream_uri("video1")).port
+        except ValueError:
+            return None
+
+    def _get_network_protocols(self, call: Call) -> str:
+        rtsp = self._rtsp_port()
+        body = (
+            "<tds:NetworkProtocols><tt:Name>HTTP</tt:Name><tt:Enabled>true</tt:Enabled>"
+            f"<tt:Port>{self.port}</tt:Port></tds:NetworkProtocols>"
+        )
+        if rtsp is not None:
+            body += (
+                "<tds:NetworkProtocols><tt:Name>RTSP</tt:Name><tt:Enabled>true</tt:Enabled>"
+                f"<tt:Port>{rtsp}</tt:Port></tds:NetworkProtocols>"
+            )
+        return envelope(f"<tds:GetNetworkProtocolsResponse>{body}</tds:GetNetworkProtocolsResponse>")
+
+    def _get_network_default_gateway(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetNetworkDefaultGatewayResponse><tds:NetworkGateway/>"
+            "</tds:GetNetworkDefaultGatewayResponse>"
+        )
+
+    def _get_discovery_mode(self, call: Call) -> str:
+        return envelope(
+            "<tds:GetDiscoveryModeResponse><tds:DiscoveryMode>Discoverable</tds:DiscoveryMode>"
+            "</tds:GetDiscoveryModeResponse>"
+        )
+
     def _get_service_capabilities(self, call: Call) -> str:
         return envelope(
-            "<tds:GetServiceCapabilitiesResponse><tds:Capabilities>"
-            '<tds:Network IPFilter="false" ZeroConfiguration="false" IPVersion6="false"/>'
-            '<tds:System DiscoveryResolve="false" DiscoveryBye="true"/>'
-            "</tds:Capabilities></tds:GetServiceCapabilitiesResponse>"
+            f"<tds:GetServiceCapabilitiesResponse>{self._service_capabilities_inner(TDS)}"
+            "</tds:GetServiceCapabilitiesResponse>"
+        )
+
+    def _get_media_service_capabilities(self, call: Call) -> str:
+        return envelope(
+            f"<trt:GetServiceCapabilitiesResponse>{self._service_capabilities_inner(TRT)}"
+            "</trt:GetServiceCapabilitiesResponse>"
+        )
+
+    def _get_imaging_service_capabilities(self, call: Call) -> str:
+        return envelope(
+            f"<timg:GetServiceCapabilitiesResponse>{self._service_capabilities_inner(TIMG)}"
+            "</timg:GetServiceCapabilitiesResponse>"
+        )
+
+    def _get_events_service_capabilities(self, call: Call) -> str:
+        return envelope(
+            f"<tev:GetServiceCapabilitiesResponse>{self._service_capabilities_inner(TEV)}"
+            "</tev:GetServiceCapabilitiesResponse>"
         )
 
     def _get_ptz_service_capabilities(self, call: Call) -> str:
-        camera = self.backend.camera()
-        supported = self.ptz_enabled
-        value = "true" if supported else "false"
         return envelope(
-            "<tptz:GetServiceCapabilitiesResponse>"
-            f'<tptz:Capabilities EFlip="false" Reverse="false" '
-            f'GetCompatibleConfigurations="false" MoveStatus="{value}" '
-            f'StatusPosition="{value}"/>'
+            f"<tptz:GetServiceCapabilitiesResponse>{self._service_capabilities_inner(TPTZ)}"
             "</tptz:GetServiceCapabilitiesResponse>"
         )
 
     # ------------------------------------------------------------------- media
+
+    @staticmethod
+    def _encoding(track: VideoTrack) -> str:
+        # Media1's VideoEncoding enumeration is JPEG/MPEG4/H264 only. H.265
+        # tracks are still reported as "H265" because Home Assistant and Frigate
+        # tolerate it; strict Profile S clients (and Protect) need an H.264 track.
+        return "H265" if track.codec.value == "h265" else "JPEG" if track.codec.value == "mjpg" else track.codec.value.upper()
+
+    def _source_track(self, camera: Camera | None) -> VideoTrack | None:
+        """The largest video track stands in for the camera's one sensor."""
+        if camera is None:
+            return None
+        videos = [track for track in camera.tracks if track.is_video] or list(camera.tracks)
+        if not videos:
+            return None
+        return max(videos, key=lambda track: track.width * track.height)
+
+    def _source_configuration_xml(self, camera: Camera | None, element: str) -> str:
+        source = self._source_track(camera)
+        width = source.width if source else 1920
+        height = source.height if source else 1080
+        uses = len(camera.tracks) if camera is not None else 1
+        return (
+            f'<{element} token="{VIDEO_SOURCE}">'
+            f"<tt:Name>{VIDEO_SOURCE}</tt:Name><tt:UseCount>{max(1, uses)}</tt:UseCount>"
+            f"<tt:SourceToken>{VIDEO_SOURCE}</tt:SourceToken>"
+            f'<tt:Bounds x="0" y="0" width="{width}" height="{height}"/>'
+            f"</{element}>"
+        )
+
+    def _encoder_xml(self, track: VideoTrack, element: str) -> str:
+        """A schema-ordered tt:VideoEncoderConfiguration.
+
+        Sequence: Name, UseCount, Encoding, Resolution, Quality, RateControl,
+        [MPEG4], [H264], Multicast, SessionTimeout. UniFi Protect is reported
+        to abandon adoption when RateControl is missing; Multicast and
+        SessionTimeout are required by the schema.
+        """
+        token = html.escape(track.name, quote=True)
+        encoding = self._encoding(track)
+        gov = max(1, track.fps) * 2
+        h264 = (
+            f"<tt:H264><tt:GovLength>{gov}</tt:GovLength>"
+            "<tt:H264Profile>Main</tt:H264Profile></tt:H264>"
+            if encoding == "H264" else ""
+        )
+        return (
+            f'<{element} token="{token}"><tt:Name>{html.escape(track.name)}</tt:Name>'
+            "<tt:UseCount>1</tt:UseCount>"
+            f"<tt:Encoding>{encoding}</tt:Encoding>"
+            f"<tt:Resolution><tt:Width>{track.width}</tt:Width>"
+            f"<tt:Height>{track.height}</tt:Height></tt:Resolution>"
+            "<tt:Quality>5</tt:Quality>"
+            f"<tt:RateControl><tt:FrameRateLimit>{track.fps}</tt:FrameRateLimit>"
+            "<tt:EncodingInterval>1</tt:EncodingInterval>"
+            f"<tt:BitrateLimit>{max(1, track.bitrate // 1000)}</tt:BitrateLimit></tt:RateControl>"
+            f"{h264}"
+            "<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type>"
+            "<tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address>"
+            "<tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast>"
+            "<tt:SessionTimeout>PT60S</tt:SessionTimeout>"
+            f"</{element}>"
+        )
 
     def _profile_xml(self, camera: Camera, name: str, prefix: str = "trt:Profiles") -> str:
         track = camera.track(name)
@@ -1218,25 +1906,10 @@ class Services:
                 f"{PTZ_DEFAULT_SPACES}"
                 "</tt:PTZConfiguration>"
             )
-        encoding = "H265" if track.codec.value == "h265" else track.codec.value.upper()
         return (
             f'<{prefix} token="{html.escape(name, quote=True)}" fixed="true"><tt:Name>{html.escape(name)}</tt:Name>'
-            f'<tt:VideoSourceConfiguration token="VideoSource">'
-            "<tt:Name>VideoSource</tt:Name><tt:UseCount>1</tt:UseCount>"
-            "<tt:SourceToken>VideoSource</tt:SourceToken>"
-            f'<tt:Bounds x="0" y="0" width="{track.width}" height="{track.height}"/>'
-            "</tt:VideoSourceConfiguration>"
-            f'<tt:VideoEncoderConfiguration token="{html.escape(name, quote=True)}">'
-            f"<tt:Name>{html.escape(name)}</tt:Name><tt:UseCount>1</tt:UseCount>"
-            f"<tt:Encoding>{encoding}</tt:Encoding>"
-            f"<tt:Resolution><tt:Width>{track.width}</tt:Width>"
-            f"<tt:Height>{track.height}</tt:Height></tt:Resolution>"
-            "<tt:Quality>5</tt:Quality>"
-            f"<tt:RateControl><tt:FrameRateLimit>{track.fps}</tt:FrameRateLimit>"
-            "<tt:EncodingInterval>1</tt:EncodingInterval>"
-            f"<tt:BitrateLimit>{track.bitrate // 1000}</tt:BitrateLimit></tt:RateControl>"
-            "<tt:SessionTimeout>PT60S</tt:SessionTimeout>"
-            "</tt:VideoEncoderConfiguration>"
+            f"{self._source_configuration_xml(camera, 'tt:VideoSourceConfiguration')}"
+            f"{self._encoder_xml(track, 'tt:VideoEncoderConfiguration')}"
             f"{ptz}</{prefix}>"
         )
 
@@ -1251,7 +1924,7 @@ class Services:
         camera = self.backend.camera()
         token = call.text("ProfileToken")
         if camera is None or camera.track(token) is None:
-            return fault("no such profile")
+            return invalid_arg("no such profile", "ter:NoProfile")
         return envelope(
             f"<trt:GetProfileResponse>{self._profile_xml(camera, token, 'trt:Profile')}"
             "</trt:GetProfileResponse>"
@@ -1259,35 +1932,139 @@ class Services:
 
     def _get_video_sources(self, call: Call) -> str:
         camera = self.backend.camera()
-        track = camera.tracks[0] if camera and camera.tracks else None
+        track = self._source_track(camera)
         width = track.width if track else 1920
         height = track.height if track else 1080
         fps = track.fps if track else 15
         return envelope(
-            '<trt:GetVideoSourcesResponse><trt:VideoSources token="VideoSource">'
-            f"<tt:Framerate>{fps}</tt:Framerate>"
+            f'<trt:GetVideoSourcesResponse><trt:VideoSources token="{VIDEO_SOURCE}">'
+            f"<tt:Framerate>{float(fps)}</tt:Framerate>"
             f"<tt:Resolution><tt:Width>{width}</tt:Width><tt:Height>{height}</tt:Height>"
             "</tt:Resolution></trt:VideoSources></trt:GetVideoSourcesResponse>"
+        )
+
+    def _get_video_source_configurations(self, call: Call) -> str:
+        camera = self.backend.camera()
+        return envelope(
+            "<trt:GetVideoSourceConfigurationsResponse>"
+            f"{self._source_configuration_xml(camera, 'trt:Configurations')}"
+            "</trt:GetVideoSourceConfigurationsResponse>"
+        )
+
+    def _get_compatible_video_source_configurations(self, call: Call) -> str:
+        camera = self.backend.camera()
+        token = call.text("ProfileToken")
+        if camera is None or camera.track(token) is None:
+            return invalid_arg("no such profile", "ter:NoProfile")
+        return envelope(
+            "<trt:GetCompatibleVideoSourceConfigurationsResponse>"
+            f"{self._source_configuration_xml(camera, 'trt:Configurations')}"
+            "</trt:GetCompatibleVideoSourceConfigurationsResponse>"
+        )
+
+    def _get_video_source_configuration(self, call: Call) -> str:
+        camera = self.backend.camera()
+        if call.text("ConfigurationToken") != VIDEO_SOURCE:
+            return invalid_arg("no such video source configuration", "ter:NoConfig")
+        return envelope(
+            "<trt:GetVideoSourceConfigurationResponse>"
+            f"{self._source_configuration_xml(camera, 'trt:Configuration')}"
+            "</trt:GetVideoSourceConfigurationResponse>"
         )
 
     def _get_video_encoder_configurations(self, call: Call) -> str:
         camera = self.backend.camera()
         if camera is None:
             return fault("no camera")
-        body = "".join(
-            f'<trt:Configurations token="{html.escape(track.name, quote=True)}"><tt:Name>{html.escape(track.name)}</tt:Name>'
-            "<tt:UseCount>1</tt:UseCount>"
-            f"<tt:Encoding>{'H265' if track.codec.value == 'h265' else track.codec.value.upper()}"
-            "</tt:Encoding>"
-            f"<tt:Resolution><tt:Width>{track.width}</tt:Width>"
-            f"<tt:Height>{track.height}</tt:Height></tt:Resolution>"
-            "</trt:Configurations>"
-            for track in camera.tracks
-        )
+        body = "".join(self._encoder_xml(track, "trt:Configurations") for track in camera.tracks)
         return envelope(
             f"<trt:GetVideoEncoderConfigurationsResponse>{body}"
             "</trt:GetVideoEncoderConfigurationsResponse>"
         )
+
+    def _get_video_encoder_configuration(self, call: Call) -> str:
+        camera = self.backend.camera()
+        track = camera.track(call.text("ConfigurationToken")) if camera is not None else None
+        if track is None:
+            return invalid_arg("no such video encoder configuration", "ter:NoConfig")
+        return envelope(
+            "<trt:GetVideoEncoderConfigurationResponse>"
+            f"{self._encoder_xml(track, 'trt:Configuration')}"
+            "</trt:GetVideoEncoderConfigurationResponse>"
+        )
+
+    def _get_compatible_video_encoder_configurations(self, call: Call) -> str:
+        camera = self.backend.camera()
+        track = camera.track(call.text("ProfileToken")) if camera is not None else None
+        if track is None:
+            return invalid_arg("no such profile", "ter:NoProfile")
+        return envelope(
+            "<trt:GetCompatibleVideoEncoderConfigurationsResponse>"
+            f"{self._encoder_xml(track, 'trt:Configurations')}"
+            "</trt:GetCompatibleVideoEncoderConfigurationsResponse>"
+        )
+
+    def _get_video_encoder_configuration_options(self, call: Call) -> str:
+        """Options for one encoder: each channel has exactly its armed settings."""
+        camera = self.backend.camera()
+        token = call.text("ConfigurationToken") or call.text("ProfileToken")
+        tracks = list(camera.tracks) if camera is not None else []
+        if token:
+            selected = camera.track(token) if camera is not None else None
+            if selected is None:
+                return invalid_arg("no such configuration or profile", "ter:NoConfig")
+            tracks = [selected]
+        h264 = [track for track in tracks if self._encoding(track) == "H264"]
+        h264_xml = ""
+        if h264:
+            resolutions = "".join(
+                f"<tt:ResolutionsAvailable><tt:Width>{width}</tt:Width><tt:Height>{height}</tt:Height>"
+                "</tt:ResolutionsAvailable>"
+                for width, height in sorted({(track.width, track.height) for track in h264}, reverse=True)
+            )
+            fps = max(track.fps for track in h264)
+            h264_xml = (
+                f"<tt:H264>{resolutions}"
+                f"<tt:GovLengthRange><tt:Min>1</tt:Min><tt:Max>{max(1, fps) * 4}</tt:Max></tt:GovLengthRange>"
+                f"<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>{max(1, fps)}</tt:Max></tt:FrameRateRange>"
+                "<tt:EncodingIntervalRange><tt:Min>1</tt:Min><tt:Max>1</tt:Max></tt:EncodingIntervalRange>"
+                "<tt:H264ProfilesSupported>Main</tt:H264ProfilesSupported></tt:H264>"
+            )
+        return envelope(
+            "<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options>"
+            "<tt:QualityRange><tt:Min>0</tt:Min><tt:Max>10</tt:Max></tt:QualityRange>"
+            f"{h264_xml}</trt:Options></trt:GetVideoEncoderConfigurationOptionsResponse>"
+        )
+
+    def _get_guaranteed_number_of_video_encoder_instances(self, call: Call) -> str:
+        camera = self.backend.camera()
+        tracks = list(camera.tracks) if camera is not None else []
+        h264 = sum(1 for track in tracks if self._encoding(track) == "H264")
+        return envelope(
+            "<trt:GetGuaranteedNumberOfVideoEncoderInstancesResponse>"
+            f"<trt:TotalNumber>{len(tracks)}</trt:TotalNumber>"
+            f"<trt:H264>{h264}</trt:H264>"
+            "</trt:GetGuaranteedNumberOfVideoEncoderInstancesResponse>"
+        )
+
+    # Audio is not offered over ONVIF yet: empty lists are valid Profile S
+    # answers and keep clients from treating the device as broken.
+    def _get_audio_sources(self, call: Call) -> str:
+        return envelope("<trt:GetAudioSourcesResponse/>")
+
+    def _get_audio_source_configurations(self, call: Call) -> str:
+        return envelope("<trt:GetAudioSourceConfigurationsResponse/>")
+
+    def _get_audio_encoder_configurations(self, call: Call) -> str:
+        return envelope("<trt:GetAudioEncoderConfigurationsResponse/>")
+
+    def _get_audio_outputs(self, call: Call) -> str:
+        return envelope("<trt:GetAudioOutputsResponse/>")
+
+    def _set_synchronization_point(self, call: Call) -> str:
+        # Keyframes repeat on the camera's own GOP and parameter sets are sent
+        # ahead of every keyframe, so there is nothing to force here.
+        return envelope("<trt:SetSynchronizationPointResponse/>")
 
     def _set_video_encoder_configuration(self, call: Call) -> str:
         """Re-arm a channel's codec on the fly (ONVIF SetVideoEncoderConfiguration).
@@ -1301,16 +2078,26 @@ class Services:
         token = call.attribute("Configuration", "token") or call.text("ConfigurationToken")
         encoding = call.text("Encoding")
         if camera is None or not token or camera.track(token) is None:
-            return fault("no such video encoder configuration")
+            return invalid_arg("no such video encoder configuration", "ter:NoConfig")
         codec = ENCODING_TO_CODEC.get(encoding.upper())
         if codec is None:
-            return fault(f"unsupported encoding {encoding!r}")
+            return invalid_arg(f"unsupported encoding {encoding!r}", "ter:ConfigModify")
         if not self.backend.set_encoder(token, codec):
             return fault("could not apply video encoder configuration")
         return envelope("<trt:SetVideoEncoderConfigurationResponse/>")
 
-    def _get_stream_uri(self, call: Call) -> str:
+    def _profile_token(self, call: Call) -> tuple[str, str | None]:
+        """The requested profile, and a fault if a known camera lacks it."""
         token = call.text("ProfileToken") or "video1"
+        camera = self.backend.camera()
+        if camera is not None and camera.tracks and camera.track(token) is None:
+            return token, invalid_arg("no such profile", "ter:NoProfile")
+        return token, None
+
+    def _get_stream_uri(self, call: Call) -> str:
+        token, problem = self._profile_token(call)
+        if problem is not None:
+            return problem
         uri = self.backend.stream_uri(token)
         return envelope(
             "<trt:GetStreamUriResponse><trt:MediaUri>"
@@ -1321,16 +2108,70 @@ class Services:
             "</trt:MediaUri></trt:GetStreamUriResponse>"
         )
 
+    def snapshot_token(self, username: str, profile: str) -> str:
+        mac = hmac.new(self._snapshot_key, f"{username}\0{profile}".encode(), hashlib.sha256).digest()
+        return f"{username}.{base64.urlsafe_b64encode(mac[:18]).decode()}"
+
+    def _snapshot_token_principal(self, value: str, profile: str) -> Principal | None:
+        username, _, _ = value.partition(".")
+        principal = self.onvif_auth.principal(username)
+        if principal is None:
+            return None
+        return principal if hmac.compare_digest(value, self.snapshot_token(username, profile)) else None
+
     def _get_snapshot_uri(self, call: Call) -> str:
-        token = call.text("ProfileToken") or "video1"
+        token, problem = self._profile_token(call)
+        if problem is not None:
+            return problem
+        uri = self.backend.snapshot_uri(token)
+        principal = self.caller.principal
+        tokenised = principal is not None
+        if tokenised:
+            assert principal is not None
+            separator = "&" if "?" in uri else "?"
+            uri = f"{uri}{separator}{SNAPSHOT_TOKEN_PARAM}={self.snapshot_token(principal.username, token)}"
         return envelope(
             "<trt:GetSnapshotUriResponse><trt:MediaUri>"
-            f"<tt:Uri>{html.escape(self.backend.snapshot_uri(token))}</tt:Uri>"
+            f"<tt:Uri>{html.escape(uri)}</tt:Uri>"
             "<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
-            "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
+            f"<tt:InvalidAfterReboot>{'true' if tokenised else 'false'}</tt:InvalidAfterReboot>"
             "<tt:Timeout>PT60S</tt:Timeout>"
             "</trt:MediaUri></trt:GetSnapshotUriResponse>"
         )
+
+    def snapshot_response(
+        self, profile: str, authorization: str = "", query_token: str = "",
+        peer: str = "", uri: str = "",
+    ) -> tuple[HTTPStatus, bytes, dict[str, str]]:
+        """Serve ``GET /snapshot/<profile>`` with auth, token check and rate limit.
+
+        With ONVIF auth enabled, the request needs either the capability token
+        from GetSnapshotUri or HTTP Digest credentials of a principal holding
+        the ``media`` role. Anonymous mode keeps the historical public endpoint.
+        """
+        camera = self.backend.camera()
+        if camera is not None and camera.tracks and camera.track(profile) is None:
+            return HTTPStatus.NOT_FOUND, b"unknown profile", {"Content-Type": "text/plain"}
+        if self.onvif_auth.configured:
+            principal = None
+            if query_token:
+                principal = self._snapshot_token_principal(query_token, profile)
+            if principal is None and authorization:
+                principal = self._snapshot_digest.authenticate(authorization, "GET", uri)
+            if (
+                principal is None
+                or not self.onvif_auth.enabled
+                or not principal.has(ROLE_MEDIA)
+                or (peer and not principal.permits_peer(peer))
+            ):
+                return HTTPStatus.UNAUTHORIZED, b"authentication required", {
+                    "Content-Type": "text/plain",
+                    "WWW-Authenticate": self._snapshot_digest.challenge(),
+                }
+        image = self.snapshots.get()
+        if image is None:
+            return HTTPStatus.SERVICE_UNAVAILABLE, b"", {"Content-Type": "text/plain"}
+        return HTTPStatus.OK, image, {"Content-Type": "image/jpeg", "Cache-Control": "no-store"}
 
     # --------------------------------------------------------------------- PTZ
 
@@ -1505,10 +2346,35 @@ class Services:
         return envelope("<tptz:ContinuousMoveResponse/>")
 
     def _stop(self, call: Call) -> str:
+        """ONVIF Stop: halt the selected axes where they are now.
+
+        PanTilt and Zoom default to true. The controller re-targets the head at
+        its latest reported pose (the camera has no native stop verb), so the
+        head may settle a few motor steps past the moment Stop arrived. Stopping
+        an idle head succeeds without sending anything.
+        """
         if not self.ptz_enabled:
             return fault("PTZ is disabled on this ONVIF endpoint")
-        # Each step completes on its own, so there is nothing to interrupt.
-        self.backend.refresh_position()
+        camera = self.backend.camera()
+        if camera is None:
+            return fault("no camera")
+
+        def flag(name: str) -> bool:
+            value = call.text(name, "true").lower()
+            if value not in ("true", "false", "1", "0"):
+                raise ValueError(name)
+            return value in ("true", "1")
+
+        try:
+            pan_tilt, zoom = flag("PanTilt"), flag("Zoom")
+        except ValueError as exc:
+            return invalid_arg(f"{exc} must be a boolean")
+        if not pan_tilt and not zoom:
+            return envelope("<tptz:StopResponse/>")
+        if not self.backend.stop(pan_tilt, zoom):
+            if camera.motion.status == "IDLE":
+                return envelope("<tptz:StopResponse/>")
+            return fault(self.backend.move_refusal())
         return envelope("<tptz:StopResponse/>")
 
     def _get_presets(self, call: Call) -> str:
@@ -1597,8 +2463,9 @@ class Services:
     def _get_imaging_settings(self, call: Call) -> str:
         return envelope(
             "<timg:GetImagingSettingsResponse><timg:ImagingSettings>"
-            "<tt:Brightness>50</tt:Brightness><tt:Contrast>50</tt:Contrast>"
-            "<tt:ColorSaturation>50</tt:ColorSaturation><tt:Sharpness>50</tt:Sharpness>"
+            # ImagingSettings20 sequence: Brightness, ColorSaturation, Contrast, …, Sharpness.
+            "<tt:Brightness>50</tt:Brightness><tt:ColorSaturation>50</tt:ColorSaturation>"
+            "<tt:Contrast>50</tt:Contrast><tt:Sharpness>50</tt:Sharpness>"
             "</timg:ImagingSettings></timg:GetImagingSettingsResponse>"
         )
 
@@ -1606,51 +2473,106 @@ class Services:
         limits = "<tt:Min>0</tt:Min><tt:Max>100</tt:Max>"
         return envelope(
             "<timg:GetOptionsResponse><timg:ImagingOptions>"
-            f"<tt:Brightness>{limits}</tt:Brightness><tt:Contrast>{limits}</tt:Contrast>"
-            f"<tt:ColorSaturation>{limits}</tt:ColorSaturation><tt:Sharpness>{limits}</tt:Sharpness>"
+            f"<tt:Brightness>{limits}</tt:Brightness><tt:ColorSaturation>{limits}</tt:ColorSaturation>"
+            f"<tt:Contrast>{limits}</tt:Contrast><tt:Sharpness>{limits}</tt:Sharpness>"
             "</timg:ImagingOptions></timg:GetOptionsResponse>"
         )
 
     # ------------------------------------------------------------------ events
 
     def _create_pull_point_subscription(self, call: Call) -> str:
-        identifier = self.subscriptions.create()
+        now = time.time()
+        requested = call.text("InitialTerminationTime")
+        ttl = parse_termination(requested, now) if requested else None
+        if requested and ttl is None:
+            return invalid_arg("InitialTerminationTime is not a duration or dateTime")
+        identifier = self.subscriptions.create(self.caller.owner, ttl)
+        if identifier is None:
+            return fault("too many pull-point subscriptions", RECEIVER, ("ter:Action", "ter:MaxPullPoints"))
         address = f"{self.address(EVENTS_PATH)}?sub={identifier}"
+        expires = self.subscriptions.expires(identifier) or now
         return envelope(
             "<tev:CreatePullPointSubscriptionResponse>"
             "<tev:SubscriptionReference>"
             f"<wsa:Address>{html.escape(address)}</wsa:Address>"
             "</tev:SubscriptionReference>"
-            f"<wsnt:CurrentTime>{utc()}</wsnt:CurrentTime>"
-            f"<wsnt:TerminationTime>{utc(time.time() + 60)}</wsnt:TerminationTime>"
+            f"<wsnt:CurrentTime>{utc(now)}</wsnt:CurrentTime>"
+            f"<wsnt:TerminationTime>{utc(expires)}</wsnt:TerminationTime>"
             "</tev:CreatePullPointSubscriptionResponse>"
         )
 
+    def _caller_subscription(self) -> tuple[str, str | None]:
+        """The subscription this request addresses, or a fault.
+
+        The id comes from the subscription address (``?sub=``). Without one, a
+        caller that owns exactly one subscription is assumed to mean it; a
+        caller can never reach another owner's subscription.
+        """
+        caller = self.caller
+        identifier = caller.subscription
+        if not identifier:
+            mine = self.subscriptions.owned_by(caller.owner)
+            if len(mine) != 1:
+                return "", invalid_arg("subscription address required", "ter:InvalidSubscription")
+            identifier = mine[0]
+        owner = self.subscriptions.owner_of(identifier)
+        if owner is None:
+            return "", invalid_arg("unknown or expired subscription", "ter:InvalidSubscription")
+        if self.caller.principal is not None and owner != caller.owner:
+            return "", not_authorized("subscription belongs to another client")
+        return identifier, None
+
     def pull_messages(self, identifier: str, limit: int = 10) -> str:
+        if not self.subscriptions.exists(identifier):
+            return invalid_arg("unknown or expired subscription", "ter:InvalidSubscription")
         events = self.subscriptions.pull(identifier, limit)
         body = "".join(event.as_xml() for event in events)
+        expires = self.subscriptions.expires(identifier) or time.time()
         return envelope(
             "<tev:PullMessagesResponse>"
             f"<tev:CurrentTime>{utc()}</tev:CurrentTime>"
-            f"<tev:TerminationTime>{utc(time.time() + 60)}</tev:TerminationTime>"
+            f"<tev:TerminationTime>{utc(expires)}</tev:TerminationTime>"
             f"{body}</tev:PullMessagesResponse>"
         )
 
     def _pull_messages(self, call: Call) -> str:
-        # Without a subscription id on the URL, serve whichever one exists.
-        return self.pull_messages(self._only_subscription())
+        identifier, problem = self._caller_subscription()
+        if problem is not None:
+            return problem
+        try:
+            limit = int(call.text("MessageLimit", "10"))
+        except ValueError:
+            return invalid_arg("MessageLimit must be an integer")
+        return self.pull_messages(identifier, max(1, min(limit, Subscriptions.DEPTH)))
 
     def _renew(self, call: Call) -> str:
+        identifier, problem = self._caller_subscription()
+        if problem is not None:
+            return problem
+        requested = call.text("TerminationTime")
+        now = time.time()
+        ttl = parse_termination(requested, now) if requested else None
+        if requested and ttl is None:
+            return invalid_arg("TerminationTime is not a duration or dateTime")
+        expires = self.subscriptions.renew(identifier, ttl)
+        if expires is None:
+            return invalid_arg("unknown or expired subscription", "ter:InvalidSubscription")
         return envelope(
             "<wsnt:RenewResponse>"
-            f"<wsnt:CurrentTime>{utc()}</wsnt:CurrentTime>"
-            f"<wsnt:TerminationTime>{utc(time.time() + 60)}</wsnt:TerminationTime>"
+            f"<wsnt:TerminationTime>{utc(expires)}</wsnt:TerminationTime>"
+            f"<wsnt:CurrentTime>{utc(now)}</wsnt:CurrentTime>"
             "</wsnt:RenewResponse>"
         )
 
     def _unsubscribe(self, call: Call) -> str:
-        self.subscriptions.drop(self._only_subscription())
+        identifier, problem = self._caller_subscription()
+        if problem is not None:
+            return problem
+        self.subscriptions.drop(identifier)
         return envelope("<wsnt:UnsubscribeResponse/>")
+
+    def _set_event_synchronization_point(self, call: Call) -> str:
+        return envelope("<tev:SetSynchronizationPointResponse/>")
 
     def _get_event_properties(self, call: Call) -> str:
         return envelope(
@@ -1669,10 +2591,6 @@ class Services:
             "</wsnt:TopicExpressionDialect>"
             "</tev:GetEventPropertiesResponse>"
         )
-
-    def _only_subscription(self) -> str:
-        with self.subscriptions._lock:  # noqa: SLF001 - same module
-            return next(iter(self.subscriptions._queues), "")
 
 
 def _fmt_rate(bytes_per_sec: float) -> str:
@@ -1716,15 +2634,6 @@ def _sparkline(series: list[float], width: int = 200, height: int = 30) -> str:
         f"<polyline points='{line}' fill='none' stroke='currentColor' "
         "stroke-width='1.5' stroke-linejoin='round'/></svg>"
     )
-
-
-def _snake(action: str) -> str:
-    out: list[str] = []
-    for index, character in enumerate(action):
-        if character.isupper() and index:
-            out.append("_")
-        out.append(character.lower())
-    return "".join(out)
 
 
 def canonical_camera_id(camera: Camera) -> str:
@@ -1868,15 +2777,21 @@ class _Handler(BaseHTTPRequestHandler):
                 page = page.replace("<body>", f"<body><nav aria-label='Camera selection'><strong>Camera:</strong> {links}</nav>", 1)
             self._send(HTTPStatus.OK, page.encode(), "text/html; charset=utf-8")
             return
-        if self.path.startswith(SNAPSHOT_PATH):
-            # Snapshot URLs are also consumed by Frigate and ONVIF clients.
-            # They carry an opaque track token and remain public on the
-            # camera-facing ONVIF port; the operator UI and controls are auth'd.
-            image = self.services.backend.snapshot()
-            if image is None:
-                self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"", "text/plain")
-                return
-            self._send(HTTPStatus.OK, image, "image/jpeg")
+        if root.startswith(SNAPSHOT_PATH):
+            # Snapshot URLs are consumed by Frigate, Protect and other ONVIF
+            # clients. With ONVIF auth enabled they need the capability token
+            # from GetSnapshotUri or HTTP Digest credentials (media role).
+            _, _, query = self.path.partition("?")
+            values = parse_qs(query, keep_blank_values=False)
+            status, body, headers = self.services.snapshot_response(
+                unquote(root[len(SNAPSHOT_PATH):]).strip("/"),
+                authorization=self.headers.get("Authorization", ""),
+                query_token=values.get(SNAPSHOT_TOKEN_PARAM, [""])[0],
+                peer=str(self.client_address[0]),
+                uri=self.path,
+            )
+            content_type = headers.pop("Content-Type", "text/plain")
+            self._send(status, body, content_type, headers)
             return
         if root.startswith(PREVIEW_PATH):
             if self.services.read_only:
@@ -1992,32 +2907,44 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            length = 0
+            length = -1
         # SOAP is XML and is parsed synchronously.  Bound the body before
         # reading it so an unauthenticated endpoint cannot be used for memory
         # exhaustion (and reject malformed negative lengths).
         if length < 0 or length > MAX_SOAP_REQUEST_BYTES:
-            self.close_connection = True
-            self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, b"request too large", "text/plain")
+            self._reject_oversized(length)
             return
         payload = self.rfile.read(length) if length else b""
-        if not self.services.onvif_auth.valid(payload):
-            self._send(HTTPStatus.UNAUTHORIZED, fault("ONVIF authentication required").encode(), "text/xml")
-            return
-        call = parse_call(payload)
-        if call is None:
-            self._send(HTTPStatus.BAD_REQUEST, fault("unparseable request").encode(), "text/xml")
-            return
-        subscription = self._subscription_from_path()
-        if call.action == "PullMessages" and subscription:
-            body = self.services.pull_messages(subscription)
-        elif call.action == "Unsubscribe" and subscription:
-            self.services.subscriptions.drop(subscription)
-            body = envelope("<wsnt:UnsubscribeResponse/>")
-        else:
-            body = self.services.handle(call)
-        status = HTTPStatus.INTERNAL_SERVER_ERROR if "s:Fault" in body else HTTPStatus.OK
+        status, body = self.services.dispatch(
+            payload, peer=str(self.client_address[0]),
+            subscription=self._subscription_from_path(),
+        )
         self._send(status, body.encode(), "application/soap+xml; charset=utf-8")
+
+    def _reject_oversized(self, length: int) -> None:
+        """Answer 413 without buffering the body, then close.
+
+        Closing while the client is still sending makes the kernel reset the
+        connection, and the client may never read the 413. So a body up to
+        ``MAX_DISCARD_BYTES`` is read and thrown away in small chunks (bounded
+        time and memory); anything larger is refused without draining.
+        """
+        self.close_connection = True
+        if 0 < length <= MAX_DISCARD_BYTES:
+            remaining = length
+            try:
+                self.connection.settimeout(DISCARD_TIMEOUT_SEC)
+                while remaining > 0:
+                    chunk = self.rfile.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except OSError:
+                return
+        try:
+            self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, b"request too large", "text/plain")
+        except OSError:
+            pass
 
     def _session(self) -> tuple[str, str] | None:
         cookie = self.headers.get("Cookie", "")
@@ -2188,10 +3115,15 @@ class _Handler(BaseHTTPRequestHandler):
                 return value
         return ""
 
-    def _send(self, status: HTTPStatus, body: bytes, content_type: str) -> None:
+    def _send(
+        self, status: HTTPStatus, body: bytes, content_type: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if body:
             self.wfile.write(body)
