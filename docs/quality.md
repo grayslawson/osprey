@@ -8,7 +8,7 @@ installations change. Use the linked evidence instead of relying on memory.
 | --- | --- | --- | --- |
 | Camera control and adoption | `cuckoo/controller.py`, `cuckoo/adoption.py`, `cuckoo/ptz.py` | `cuckoo/tests/test_adoption_flow.py`, `cuckoo/tests/test_layers.py` | Unit and fake-peer coverage; hardware validation is opt-in |
 | ONVIF and discovery | `cuckoo/onvif.py`, `cuckoo/discovery.py` | `cuckoo/tests/test_onvif*.py`, `cuckoo/tests/test_discovery.py` | Contract tests for profiles, PTZ, auth, and discovery |
-| Media and RTSP | `cuckoo/media.py`, `cuckoo/rtsp.py`, `cuckoo/snapshots.py` | `cuckoo/tests/test_rtsp.py`, `cuckoo/tests/test_media.py`, `cuckoo/tests/test_snapshots.py` | Codec and authentication behavior covered without hardware |
+| Media and RTSP | `cuckoo/media.py`, `cuckoo/rtsp.py`, `cuckoo/snapshots.py` | `cuckoo/tests/test_rtsp.py`, `cuckoo/tests/test_rtsp_session.py`, `cuckoo/tests/test_media.py`, `cuckoo/tests/test_snapshots.py` | Codec and authentication behavior covered without hardware |
 | Administration and setup | `cuckoo/setup_wizard.py`, `cuckoo/main.py` | `cuckoo/tests/test_setup_wizard.py`, `cuckoo/tests/test_stack.py` | Safe generated state, error paths, and restart behavior |
 | Distribution | `docker/`, `homeassistant/`, `nix/`, `packaging/` | `homeassistant/validate.sh`, package workflow, Compose checks | Metadata and build inputs validated in CI |
 | Security and operations | `SECURITY.md`, `scripts/osprey-doctor.sh` | `scripts/validate-repo.sh`, Trivy workflow, doctor tests | Explicit trust boundaries; deployment-specific verification remains required |
