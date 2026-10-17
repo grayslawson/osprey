@@ -551,8 +551,10 @@ class Backend:
     # Per-track runtime telemetry keyed by track name (see media.Hub.stats): the
     # windowed byte-rate + series, lifetime bytes, frames, subscribers, playable.
     telemetry: Callable[[], dict[str, dict[str, object]]] = dict
-    # Recycle the PTZ channel through the controller's bounded recovery.
-    recover_ptz: Callable[[], bool] = lambda: False
+    # Recycle the PTZ channel through the controller's bounded recovery (the
+    # PTZ watchdog contract). None means the backend has none, and recovery
+    # falls back to a position poll, whose motor-state reply clears a timeout.
+    recover_ptz: Callable[[], bool] | None = None
     # Machine-readable PTZ liveness (see Controller.ptz_health).
     ptz_health: Callable[[], dict[str, object]] = dict
 
@@ -1195,7 +1197,15 @@ class Services:
         camera = self.backend.camera()
         if camera is None or not camera.is_ptz:
             return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "no PTZ camera"}
-        if not self.backend.recover_ptz():
+        recover = self.backend.recover_ptz
+        if recover is None:
+            if not self.backend.refresh_position():
+                return HTTPStatus.CONFLICT, {"error": "the camera management channel is not connected"}
+            return HTTPStatus.ACCEPTED, {
+                "ok": True,
+                "message": "Position poll sent; the state clears when the motor replies",
+            }
+        if not recover():
             return HTTPStatus.CONFLICT, {"error": "the camera management channel is not connected"}
         return HTTPStatus.ACCEPTED, {
             "ok": True,
@@ -1337,9 +1347,12 @@ class Services:
             ptz_error = camera.motion.error
             ptz_detail = ptz_error or ("ready" if ptz_state == "IDLE" else "in motion")
             ptz_class = " class='alert-danger'" if ptz_state == "UNKNOWN" else ""
+            # UNKNOWN with a cause reads "UNKNOWN: <error>" in the headline itself,
+            # so the reason is visible even where the small detail line is not.
+            ptz_headline = f"{ptz_state}: {ptz_error}" if ptz_state == "UNKNOWN" and ptz_error else ptz_state
             metric_cards = (
                 f"<div class='metric-grid'>"
-                f"<div class='metric' id='ptz-state-card'><span>PTZ state</span><strong id='ptz-state'{ptz_class}>{esc(ptz_state)}</strong><small id='ptz-error'>{esc(ptz_detail)}</small></div>"
+                f"<div class='metric' id='ptz-state-card'><span>PTZ state</span><strong id='ptz-state'{ptz_class}>{esc(ptz_headline)}</strong><small id='ptz-error'>{esc(ptz_detail)}</small></div>"
                 f"<div class='metric'><span>Position</span><strong>{pan:+.2f} / {tilt:+.2f}</strong><small>pan / tilt · ONVIF units</small></div>"
                 f"<div class='metric'><span>Zoom</span><strong>{zoom_percent}%</strong><small>absolute target</small></div>"
                 f"<div class='metric'><span>Streams online</span><strong>{playable_count} / {len(camera.tracks)}</strong><small>{_fmt_rate(total_rate)} in · {int(total_frames)} frames</small></div>"
