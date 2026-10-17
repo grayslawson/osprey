@@ -450,7 +450,7 @@ def build(options: Options) -> Stack:
             refresh_position=selected_refresh,
             move_refusal=selected_refusal,
             set_encoder=selected_encoder,
-            telemetry=hub.stats,
+            telemetry=lambda: rtsp.telemetry(hub, stream),
         )
 
     backend = backend_for(None)
