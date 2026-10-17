@@ -15,7 +15,6 @@ subscriber that joins mid-stream can still start.
 from __future__ import annotations
 
 import logging
-import queue
 import socket
 import socketserver
 import threading
@@ -32,6 +31,13 @@ INGEST_PORT: Final = 7550
 MJPEG_PORT: Final = 7551
 READ_SIZE: Final = 65536
 QUEUE_DEPTH: Final = 120  # a slow subscriber loses frames rather than stalling ingest
+QUEUE_BYTES: Final = 8 * 1024 * 1024  # and never buffers more than this per subscriber
+STALE_AFTER: Final = 5.0  # seconds without a frame before a track stops counting as live
+# A timestamp step this far from what the wall clock says is a new timeline (the
+# camera reconnected or its clock wrapped), not media time passing.
+BACKWARD_TOLERANCE_MS: Final = 1000
+FORWARD_TOLERANCE_MS: Final = 5000
+RECONNECT_TOLERANCE_MS: Final = 2000
 BANDWIDTH_WINDOW: Final = 60.0  # seconds of byte samples kept for the live rate/graph
 BANDWIDTH_BUCKETS: Final = 40  # time slices the window is drawn as (the sparkline width)
 
@@ -43,43 +49,97 @@ class VideoFrame:
     timestamp: int
     units: list[bytes]
     keyframe: bool
+    # When the frame reached us (monotonic). RTCP sender reports map RTP time to
+    # wall-clock time through it, so it is the arrival, not the send, that counts.
+    arrival: float = field(default=0.0, compare=False)
+    # Shared, per-frame scratch space: RTSP packetises a frame once and every
+    # client reuses the payloads. Not part of the frame's value.
+    cache: dict[object, object] = field(default_factory=dict, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
 class AudioFrame:
     timestamp: int
     payload: bytes
+    arrival: float = field(default=0.0, compare=False)
 
 
 Frame = VideoFrame | AudioFrame
 
 
-class Subscriber:
-    """A bounded view of one stream. Falls behind by dropping, never by blocking."""
+def frame_size(frame: Frame) -> int:
+    if isinstance(frame, VideoFrame):
+        return sum(len(unit) for unit in frame.units)
+    return len(frame.payload)
 
-    def __init__(self, depth: int = QUEUE_DEPTH) -> None:
-        self._queue: queue.Queue[Frame] = queue.Queue(maxsize=depth)
-        self.dropped = 0
+
+class Subscriber:
+    """A bounded view of one stream. Falls behind by dropping, never by blocking.
+
+    The bound is both a frame count and a byte budget. When either is exceeded the
+    whole backlog is discarded and the subscriber resumes at the next keyframe:
+    dropping frames one at a time from the head of a GOP would hand the decoder
+    P-frames whose reference picture is gone, which is worse than a short gap.
+    A subscriber made with `wait_for_keyframe` also *starts* on a keyframe.
+    """
+
+    def __init__(
+        self,
+        depth: int = QUEUE_DEPTH,
+        max_bytes: int = QUEUE_BYTES,
+        wait_for_keyframe: bool = False,
+    ) -> None:
+        self._frames: deque[Frame] = deque()
+        self._bytes = 0
+        self._depth = depth
+        self._max_bytes = max_bytes
+        self._cond = threading.Condition()
+        self._resync = wait_for_keyframe
+        self.dropped = 0  # frames discarded on overflow or while resynchronising
+        self.overflows = 0  # times the backlog was discarded
+
+    @property
+    def waiting_for_keyframe(self) -> bool:
+        with self._cond:
+            return self._resync
+
+    @property
+    def backlog(self) -> int:
+        with self._cond:
+            return len(self._frames)
 
     def offer(self, frame: Frame) -> None:
-        try:
-            self._queue.put_nowait(frame)
-        except queue.Full:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:  # pragma: no cover - raced with a reader
-                pass
-            self.dropped += 1
-            try:
-                self._queue.put_nowait(frame)
-            except queue.Full:  # pragma: no cover - raced with another writer
-                pass
+        keyframe = isinstance(frame, VideoFrame) and frame.keyframe
+        size = frame_size(frame)
+        with self._cond:
+            if self._resync and not keyframe:
+                self.dropped += 1
+                return
+            if self._frames and (
+                len(self._frames) >= self._depth or self._bytes + size > self._max_bytes
+            ):
+                self.dropped += len(self._frames)
+                self.overflows += 1
+                self._frames.clear()
+                self._bytes = 0
+                if not keyframe:
+                    self._resync = True
+                    self.dropped += 1
+                    return
+            self._resync = False
+            self._frames.append(frame)
+            self._bytes += size
+            self._cond.notify()
 
     def take(self, timeout: float = 1.0) -> Frame | None:
-        try:
-            return self._queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        with self._cond:
+            if not self._frames:
+                self._cond.wait(timeout)
+            if not self._frames:
+                return None
+            frame = self._frames.popleft()
+            self._bytes -= frame_size(frame)
+            return frame
 
 
 @dataclass
@@ -95,6 +155,13 @@ class Stream:
     keyframes: int = 0
     bytes_in: int = 0
     last_timestamp: int = 0
+    last_frame_at: float = 0.0  # monotonic arrival of the newest frame; 0 before any
+    rebases: int = 0  # timeline discontinuities absorbed (camera reconnects, wraps)
+    _ts_offset: int = 0
+    _last_raw: int | None = None
+    _last_out: int = 0
+    _last_wall: float = 0.0
+    _reconnected: bool = False
     _subscribers: list[Subscriber] = field(default_factory=list)
     _samples: deque[tuple[float, int]] = field(default_factory=deque)
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -104,14 +171,66 @@ class Stream:
         """True once a subscriber joining now could start decoding."""
         return self.parameters.complete
 
+    def frame_age(self, now: float | None = None) -> float | None:
+        """Seconds since the newest frame arrived, or None if none ever has."""
+        if not self.last_frame_at:
+            return None
+        return max(0.0, (time.monotonic() if now is None else now) - self.last_frame_at)
+
+    @property
+    def live(self) -> bool:
+        """Playable *and* the camera is pushing right now.
+
+        `ready` alone stays true forever once parameter sets were seen, so a
+        client that DESCRIBEs a track the camera stopped pushing would be handed
+        a session that never carries a byte.
+        """
+        age = self.frame_age()
+        return self.ready and age is not None and age < STALE_AFTER
+
+    @property
+    def position(self) -> int:
+        """The newest frame's timestamp on the continuous output timeline (ms)."""
+        return self._last_out
+
+    def mark_reconnect(self) -> None:
+        """A new ingest connection started feeding this track."""
+        self._reconnected = True
+
+    def _timeline(self, raw: int, now: float) -> int:
+        """Map the camera's tag timestamp onto one continuous timeline.
+
+        Across a camera reconnect the FLV clock usually restarts. Subscribers keep
+        their RTP sessions, so the output timeline is rebased to carry on from
+        where it was, advanced by the wall-clock time the gap took. Video and audio
+        share the FLV clock, so one offset keeps them in sync.
+        """
+        reconnected, self._reconnected = self._reconnected, False
+        if self._last_raw is not None:
+            delta = raw - self._last_raw
+            elapsed = int((now - self._last_wall) * 1000)
+            jumped = delta < -BACKWARD_TOLERANCE_MS or delta > elapsed + FORWARD_TOLERANCE_MS
+            if reconnected and abs(delta - elapsed) > RECONNECT_TOLERANCE_MS:
+                jumped = True
+            if jumped:
+                self._ts_offset = self._last_out + max(1, elapsed) - raw
+                self.rebases += 1
+                log.info("%s: timeline rebased (camera clock stepped %+d ms in %d ms)",
+                         self.name, delta, elapsed)
+        out = raw + self._ts_offset
+        self._last_raw = raw
+        self._last_out = out
+        self._last_wall = now
+        return out
+
     @property
     def audio(self) -> tuple[int, int, int] | None:
         if not self.audio_specific_config:
             return None
         return hevc.audio_config(self.audio_specific_config)
 
-    def subscribe(self) -> Subscriber:
-        subscriber = Subscriber()
+    def subscribe(self, wait_for_keyframe: bool = True) -> Subscriber:
+        subscriber = Subscriber(wait_for_keyframe=wait_for_keyframe)
         with self._lock:
             self._subscribers.append(subscriber)
         return subscriber
@@ -120,6 +239,11 @@ class Stream:
         with self._lock:
             if subscriber in self._subscribers:
                 self._subscribers.remove(subscriber)
+
+    @property
+    def dropped_total(self) -> int:
+        with self._lock:
+            return sum(s.dropped for s in self._subscribers)
 
     @property
     def subscriber_count(self) -> int:
@@ -203,11 +327,14 @@ class Stream:
                 self.parameters = recovered
                 log.info("%s: %s parameter sets recovered in band, stream is playable",
                          self.name, self.fmt.rtpmap)
+        now = time.monotonic()
         frame = VideoFrame(
-            timestamp=tag.timestamp,
+            timestamp=self._timeline(tag.timestamp, now),
             units=units,
             keyframe=tag.is_keyframe or any(self.fmt.is_keyframe(u) for u in units),
+            arrival=now,
         )
+        self.last_frame_at = now
         self.frames += 1
         if frame.keyframe:
             self.keyframes += 1
@@ -224,7 +351,11 @@ class Stream:
             return None
         if not packet.payload:
             return None
-        frame = AudioFrame(timestamp=tag.timestamp, payload=packet.payload)
+        now = time.monotonic()
+        frame = AudioFrame(
+            timestamp=self._timeline(tag.timestamp, now), payload=packet.payload, arrival=now
+        )
+        self.last_frame_at = now
         self._fan_out(frame)
         return frame
 
@@ -265,6 +396,10 @@ class Hub:
                 "keyframes": stream.keyframes,
                 "subscribers": stream.subscriber_count,
                 "playable": stream.ready,
+                "live": stream.live,
+                "last_frame_age": stream.frame_age(),
+                "rebases": stream.rebases,
+                "dropped": stream.dropped_total,
             }
         return out
 
@@ -282,6 +417,7 @@ class Connection:
         self.hub = hub
         self.name = fallback_name
         self.named = False
+        self._seen: set[str] = set()
         self._deframer = flv.Deframer()
 
     def feed(self, chunk: bytes) -> Iterator[Frame]:
@@ -293,6 +429,9 @@ class Connection:
                     self.named = True
                     log.info("stream named %s", found)
                 continue
+            if self.name not in self._seen:
+                self._seen.add(self.name)
+                self.hub.stream(self.name).mark_reconnect()
             frame = self.hub.publish(self.name, tag)
             if frame is not None:
                 yield frame
