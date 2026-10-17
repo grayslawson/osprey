@@ -21,10 +21,6 @@ classifiers = [
 ]
 dependencies = []
 
-[project.urls]
-Homepage = "https://github.com/rjmotion/pyunifiwire"
-Issues = "https://github.com/rjmotion/pyunifiwire/issues"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/unifiwire"]
 

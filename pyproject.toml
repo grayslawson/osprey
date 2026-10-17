@@ -1,0 +1,71 @@
+# Transitional distribution metadata for the `osprey-ptz` PyPI project.
+#
+# The controller is not yet an installable package: cuckoo/ is a set of flat
+# modules and pyunifiwire/ is a separate project. This wheel bundles both under
+# osprey_ptz/_app/ and exposes one `osprey` command. Phase 0 of the packaging
+# plan (specs/002-python-package-cli) replaces it with a src/osprey layout.
+#
+# The version comes from the VERSION file, the single version source. The
+# sibling pyunifiwire metadata is not used by this wheel.
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "osprey-ptz"
+dynamic = ["version"]
+description = "Self-hosted controller for UniFi G5 PTZ cameras: RTSP restream, ONVIF, and a web UI for an existing Frigate installation"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE", "pyunifiwire/LICENSE"]
+authors = [{ name = "Osprey contributors" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: No Input/Output (Daemon)",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Video :: Capture",
+]
+# The core is standard library only.
+dependencies = []
+
+[project.optional-dependencies]
+mqtt = ["paho-mqtt>=2.1,<3"]
+
+[project.scripts]
+osprey = "osprey_ptz.launcher:main"
+
+[project.urls]
+Homepage = "https://github.com/grayslawson/osprey"
+Documentation = "https://github.com/grayslawson/osprey/tree/main/docs"
+Issues = "https://github.com/grayslawson/osprey/issues"
+Changelog = "https://github.com/grayslawson/osprey/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = '^(?P<version>\d+\.\d+\.\d+)\s*$'
+
+[tool.hatch.build.targets.wheel]
+packages = ["packaging/pypi/osprey_ptz"]
+exclude = ["**/__pycache__", "cuckoo/tests", "cuckoo/harness"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"cuckoo" = "osprey_ptz/_app/cuckoo"
+"pyunifiwire/src/unifiwire" = "osprey_ptz/_app/unifiwire"
+"pyunifiwire/LICENSE" = "osprey_ptz/_app/LICENSE-pyunifiwire"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/pyproject.toml",
+  "/VERSION",
+  "/README.md",
+  "/LICENSE",
+  "/NOTICE",
+  "/cuckoo",
+  "/pyunifiwire/src",
+  "/pyunifiwire/LICENSE",
+  "/packaging/pypi",
+]
+exclude = ["cuckoo/tests", "cuckoo/harness", "**/__pycache__"]
