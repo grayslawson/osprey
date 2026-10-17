@@ -9,6 +9,7 @@ callback receives bytes).  The default contract is::
     osprey/<device>/command/preset/goto {"name":"gate"}
     osprey/<device>/command/home       {}
     osprey/<device>/event/control      structured result/error JSON
+    osprey/<device>/state/ptz          PTZ state/position JSON (on change, <=1/s)
 
 Commands are deliberately allow-listed and always execute under a shared
 MovementGate.  MQTT must never become an unauthenticated arbitrary movement
@@ -225,6 +226,13 @@ class MqttBridge:
         elif action == "home":
             if data:
                 raise ValueError("home takes an empty object")
+
+    def publish_state(self, state: dict[str, object]) -> None:
+        """Publish the current PTZ state; a no-op unless MQTT is enabled."""
+        if not self.config.enabled:
+            return
+        payload = json.dumps(state, separators=(",", ":")).encode()
+        self.adapter.publish(f"{self.config.prefix}/state/ptz", payload)
 
     def _emit(self, result: dict[str, object]) -> None:
         payload = json.dumps(result, separators=(",", ":")).encode()

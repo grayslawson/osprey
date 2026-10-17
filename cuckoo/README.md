@@ -237,6 +237,9 @@ the header of `handoff.sh` for the full set of `CUCKOO_*` overrides.
   continuous mode; a client holding an arrow key sends these repeatedly.
 - **`RemovePreset` forgets the slot locally.** No wire delete has been observed, so
   a preset cuckoo wrote persists on the camera even though the client sees it gone.
+- **The preset table is Osprey's own, persisted to `osprey-presets.json`.** The camera
+  cannot list its slots back, so the table is restored from disk on connect and
+  re-written to the camera once per start (see `docs/ptz-health.md`).
 - **ONVIF `Capabilities` order is load-bearing.** It is a strict schema sequence
   and a real client drops anything out of order — get it wrong and Home Assistant
   silently adds the camera with no event sensors.
