@@ -949,6 +949,32 @@ class Controller:
                 return False
             return True
 
+    def stop_motion(self, mac: str, pan_tilt: bool = True, zoom: bool = True) -> bool:
+        """Halt an in-flight move by re-targeting the head at its reported pose.
+
+        The PTZ channel has no stop verb; writing the scratch preset at the
+        current position and going there is the closest real equivalent.
+        Stopping an idle head is a successful no-op. Returns False only when no
+        PTZ channel is available or the command could not be written.
+        """
+        session = self._ptz_session(mac)
+        if session is None:
+            return False
+        with session.move_lock:
+            motion = session.camera.motion
+            was_moving = motion.activity != 0
+            hold = motion.halt(pan_tilt, zoom)
+            if hold is None:
+                return False
+            if not was_moving:
+                return True
+            try:
+                session.request_many(ptz.PRESET, ptz.move_to(hold))
+                session.request(ptz.GET_POSITION, ptz.get_position())
+            except (OSError, ssl.SSLError):
+                return False
+            return True
+
     def goto_preset(self, mac: str, index: int, speed: int = ptz.DEFAULT_SPEED) -> bool:
         session = self._ptz_session(mac)
         if session is None:
