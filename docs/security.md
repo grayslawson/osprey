@@ -10,8 +10,11 @@ network services, not Internet services.
   firewall or network segment.
 - Protect the browser operator console with `OSPREY_ADMIN_PASSWORD_HASH` or
   `OSPREY_ADMIN_PASSWORD_FILE`, and put it behind an HTTPS reverse proxy when
-  accessed remotely. UI sessions use CSRF protection; ONVIF/RTSP access does
-  not grant access to the console.
+  accessed remotely. Without a password the console is locked, not open.
+  Mutations need the `X-CSRF-Token` header, login is throttled, and every
+  browser response carries a strict Content-Security-Policy with
+  `X-Frame-Options` and `nosniff`. ONVIF/RTSP access does not grant access to
+  the console.
 - MQTT is disabled by default. When enabled, use TLS, certificate validation,
   broker authentication, and least-privilege ACLs. Osprey accepts only
   allow-listed command topics and ignores retained movement commands.
