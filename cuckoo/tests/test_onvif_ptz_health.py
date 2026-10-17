@@ -124,8 +124,13 @@ def test_recover_endpoint_is_csrf_protected_and_healthz_is_public() -> None:
         session_cookie = next(value.split(";", 1)[0] for name, value in cookies
                               if name.lower() == "set-cookie"
                               and value.startswith(f"{onvif.SESSION_COOKIE}="))
-        csrf = next(value.split("=", 1)[1].split(";", 1)[0] for name, value in cookies
-                    if name.lower() == "set-cookie" and value.startswith("osprey_csrf="))
+        # The CSRF token is not a cookie: the session endpoint returns it to the
+        # authenticated browser, which then sends it as X-CSRF-Token.
+        assert not any(value.startswith("osprey_csrf=") for name, value in cookies)
+        connection.request("GET", "/api/v1/session", headers={"Cookie": session_cookie})
+        response = connection.getresponse()
+        csrf = json.loads(response.read())["csrf"]
+        assert response.status == HTTPStatus.OK and csrf
 
         connection.request("POST", onvif.CONTROL_RECOVER_PATH, body="{}",
                            headers={"Content-Type": "application/json", "Cookie": session_cookie})
