@@ -1,0 +1,81 @@
+{
+  "comment": "Vendored browser modules for cuckoo/web. Files are byte-identical copies from the npm tarballs; verify with scripts/verify-web-vendor.py.",
+  "packages": [
+    {
+      "package": "preact",
+      "version": "10.29.8",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/preact/-/preact-10.29.8.tgz",
+      "integrity": "sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==",
+      "tarball_sha256": "b18cb0a457f3d43c7bb30391a74ade7d13e03bc6e77915e061c70c0fe1123299",
+      "files": {
+        "preact/preact.module.js": {
+          "from": "package/dist/preact.module.js",
+          "sha256": "c30e721ebfdc6e2ad4c18c14d2dfb82667829c8aec27de1207774e3fc16858a8"
+        },
+        "preact/hooks.module.js": {
+          "from": "package/hooks/dist/hooks.module.js",
+          "sha256": "a6ee626f2d01570592dd569a792e3f050154aa02890eead8c223fa3ed5aa3d5a"
+        },
+        "preact/LICENSE.txt": {
+          "from": "package/LICENSE",
+          "sha256": "1fe6958409c8c257a70c587a18b6f7f412b179b456630790d30b2ec9a8e4b7d4"
+        }
+      }
+    },
+    {
+      "package": "htm",
+      "version": "3.1.1",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/htm/-/htm-3.1.1.tgz",
+      "integrity": "sha512-983Vyg8NwUE7JkZ6NmOqpCZ+sh1bKv2iYTlUkzlWmA5JD2acKoxd4KVxbMmxX/85mtfdnDmTFoNKcg5DGAvxNQ==",
+      "tarball_sha256": "2425b9bee11409177bcabc7f32e319926fc6690c1701c0b257c88bdff2d5ba90",
+      "files": {
+        "htm/htm.module.js": {
+          "from": "package/dist/htm.module.js",
+          "sha256": "ab33dd3f38059b9be4d5f5350128eefb2356639c4e0bbe9d9e8b3ba75847e9e4"
+        },
+        "htm/LICENSE.txt": {
+          "from": "package/LICENSE",
+          "sha256": "740725f7252e750af735d0028cc534970772f513331e9f68150fede8fb3ce00f"
+        }
+      }
+    },
+    {
+      "package": "@preact/signals",
+      "version": "2.11.2",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@preact/signals/-/signals-2.11.2.tgz",
+      "integrity": "sha512-rVTRTt/T0HIRgbugwS5FigbfF/kfdEFYFtiqxa+lbpqTajepqnR0firuAS2iNdHyejWB7Yc9p9QePkVNBtTAwg==",
+      "tarball_sha256": "616281d8da24cf912ab7525c699e5cda0fb7612bbc8d5d4425a0f62dd1dea962",
+      "files": {
+        "signals/signals.module.js": {
+          "from": "package/dist/signals.module.js",
+          "sha256": "68bfef67ac50f6bd7d34ec62ac555205c459a6992824be43cb9688dba8baef5c"
+        },
+        "signals/LICENSE.txt": {
+          "from": "package/LICENSE",
+          "sha256": "a11fc89e4c6b118854c7a667734a0b2e6bf2af5e45c6686de31adbccc8f3ae8d"
+        }
+      }
+    },
+    {
+      "package": "@preact/signals-core",
+      "version": "1.14.4",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@preact/signals-core/-/signals-core-1.14.4.tgz",
+      "integrity": "sha512-HNB6HYeYKhQbJ1aKl+YRjrS4+QWHLKX6qKoUsfS/m0vqzsVaEBiZiaKbG/e+NKk2ch5ALQr/ihWaMHxiCuuWHA==",
+      "tarball_sha256": "26dab47f2289a8ae668fc0af87c86f0fb69508b11ab61e194e8f3ac45cf041a3",
+      "files": {
+        "signals-core/signals-core.module.js": {
+          "from": "package/dist/signals-core.module.js",
+          "sha256": "bfbb64b74f7f06a4f7c6f6bb854cccb40d03f1e96305d43c41876cba581ea112"
+        },
+        "signals-core/LICENSE.txt": {
+          "from": "package/LICENSE",
+          "sha256": "a11fc89e4c6b118854c7a667734a0b2e6bf2af5e45c6686de31adbccc8f3ae8d"
+        }
+      }
+    }
+  ]
+}
