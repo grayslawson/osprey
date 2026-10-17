@@ -1437,13 +1437,13 @@ class Services:
         return envelope("<tptz:RelativeMoveResponse/>")
 
     def _continuous_move(self, call: Call) -> str:
-        if not self.ptz_enabled:
-            return fault("PTZ is disabled on this ONVIF endpoint")
         """The camera has no continuous verb, so velocity becomes one relative step.
 
         A client holding an arrow key sends these repeatedly, which gives the same
         felt behaviour without pretending to a mode the camera does not have.
         """
+        if not self.ptz_enabled:
+            return fault("PTZ is disabled on this ONVIF endpoint")
         camera = self.backend.camera()
         if camera is None:
             return fault("no camera")
