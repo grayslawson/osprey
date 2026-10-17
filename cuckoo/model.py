@@ -6,11 +6,14 @@ this and not on each other.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Final
+
+log = logging.getLogger("cuckoo.motion")
 
 PAN: Final = "pan"
 TILT: Final = "tilt"
@@ -18,7 +21,14 @@ ZOOM: Final = "zoom"
 FOCUS: Final = "focus"
 
 AXES: Final[tuple[str, str, str, str]] = (PAN, TILT, ZOOM, FOCUS)
-MOTION_EVENT_TIMEOUT_SEC: Final = 60.0
+# Upper bound on one reservation. The G5 normally reports a terminal frame in
+# well under ten seconds even for a full-travel pan; when it does not, the
+# controller re-queries position rather than latching MOVING for a minute.
+MOTION_EVENT_TIMEOUT_SEC: Final = 15.0
+# How long an unflagged activity word at the requested pose may keep MoveStatus
+# MOVING. Shorter than Frigate's 10 s autotracking wait, long enough to cover a
+# genuine final settle of the motors.
+AT_TARGET_ACTIVITY_GRACE_SEC: Final = 2.0
 # The G5 reports the target pose after the motor controller rounds its stop
 # point. Physical captures show pan can differ by four raw encoder steps and
 # tilt by one while the camera is visibly settled at the requested view.
@@ -162,6 +172,13 @@ class Motion:
 
     Position arrives two ways: polled, and pushed while the head is moving.
     Both write here; `settled` reflects the most recent push.
+
+    Every exit from a reservation is bounded. A reservation ends on the
+    camera's terminal frame, on a no-op target, on an at-target activity word
+    that outlives `AT_TARGET_ACTIVITY_GRACE_SEC`, or on the reservation
+    deadline. A deadline expiry does not invent a position: it reports UNKNOWN
+    and raises `needs_poll` so the controller asks the camera, and the first
+    fresh motor reply clears the error.
     """
 
     position: Position = field(default_factory=Position)
@@ -169,13 +186,18 @@ class Motion:
     updated_at: float = 0.0
     available: bool = False
     _target: Position | None = field(default=None, init=False, repr=False)
+    _start_position: Position | None = field(default=None, init=False, repr=False)
     _settled_position: Position | None = field(default=None, init=False, repr=False)
     _seen_activity: bool = field(default=False, init=False, repr=False)
     _deadline: float = field(default=0.0, init=False, repr=False)
+    _at_target_since: float = field(default=0.0, init=False, repr=False)
     _error: str | None = field(default="PTZ channel unavailable", init=False, repr=False)
+    _needs_poll: bool = field(default=False, init=False, repr=False)
     _pan_tilt_pending: bool = field(default=False, init=False, repr=False)
     _zoom_pending: bool = field(default=False, init=False, repr=False)
     _connected_once: bool = field(default=False, init=False, repr=False)
+    _last_reply_at: float = field(default=0.0, init=False, repr=False)
+    _timeouts: int = field(default=0, init=False, repr=False)
     _lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
@@ -195,20 +217,67 @@ class Motion:
                 return "UNKNOWN"
             return "MOVING" if self._pan_tilt_pending or self._zoom_pending else "IDLE"
 
+    @property
+    def error(self) -> str | None:
+        with self._lock:
+            self._expire_if_needed()
+            return self._error
+
+    @property
+    def needs_poll(self) -> bool:
+        """True while only a fresh position reply can make the state truthful."""
+        with self._lock:
+            self._expire_if_needed()
+            return self.available and (self._needs_poll or self._error is not None)
+
+    def last_reply_age(self, now: float | None = None) -> float | None:
+        """Seconds since the last motor-state/position reply (monotonic)."""
+        with self._lock:
+            if self._last_reply_at <= 0.0:
+                return None
+            return max(0.0, (time.monotonic() if now is None else now) - self._last_reply_at)
+
+    @property
+    def timeouts(self) -> int:
+        with self._lock:
+            return self._timeouts
+
+    def _release(self, settled_at: Position | None) -> None:
+        self.activity = 0
+        self._target = None
+        self._start_position = None
+        self._settled_position = settled_at
+        self._seen_activity = False
+        self._deadline = 0.0
+        self._at_target_since = 0.0
+        self._pan_tilt_pending = False
+        self._zoom_pending = False
+
     def _expire_if_needed(self) -> None:
+        now = time.monotonic()
+        if (
+            self._target is not None
+            and self._at_target_since > 0.0
+            and now - self._at_target_since >= AT_TARGET_ACTIVITY_GRACE_SEC
+        ):
+            # The head has reported the requested pose for the whole grace
+            # period while still flagging activity. Treat it as settled rather
+            # than latching MOVING until the reservation deadline: Frigate's
+            # autotracker gives up long before that.
+            self._release(self.position)
+            return
         if (
             self.activity != 0
             and self._deadline > 0.0
-            and time.monotonic() >= self._deadline
+            and now >= self._deadline
         ):
-            self.activity = 0
-            self._target = None
-            self._settled_position = None
-            self._seen_activity = False
-            self._deadline = 0.0
+            self._release(None)
             self._error = "motor state timeout"
-            self._pan_tilt_pending = False
-            self._zoom_pending = False
+            self._needs_poll = True
+            self._timeouts += 1
+            log.warning(
+                "PTZ motor state timeout: no terminal motor event; querying position"
+            )
 
     def connect(self) -> None:
         with self._lock:
@@ -236,27 +305,17 @@ class Motion:
         with self._lock:
             self.available = True
             self._connected_once = True
-            self.activity = 0
-            self._target = None
-            self._settled_position = None
-            self._seen_activity = False
-            self._deadline = 0.0
+            self._release(None)
             self._error = "awaiting PTZ state"
-            self._pan_tilt_pending = False
-            self._zoom_pending = False
+            self._needs_poll = True
             self.updated_at = time.time()
 
-    def disconnect(self) -> None:
+    def disconnect(self, reason: str = "PTZ channel unavailable") -> None:
         with self._lock:
             self.available = False
-            self.activity = 0
-            self._target = None
-            self._settled_position = None
-            self._seen_activity = False
-            self._deadline = 0.0
-            self._error = "PTZ channel unavailable"
-            self._pan_tilt_pending = False
-            self._zoom_pending = False
+            self._release(None)
+            self._error = reason
+            self._needs_poll = False
             self.updated_at = time.time()
 
     def begin(
@@ -269,29 +328,33 @@ class Motion:
                 return False
             self.activity = 1
             self._target = target
+            self._start_position = self.position
             self._seen_activity = False
+            self._at_target_since = 0.0
             self._deadline = time.monotonic() + max(0.0, timeout)
             self._error = None
+            self._needs_poll = False
             if target is None:
                 # A previously stored camera preset does not expose its axes.
                 self._pan_tilt_pending = True
                 self._zoom_pending = True
             else:
                 self._set_pending_axes(target, self.position)
+                if not self._pan_tilt_pending and not self._zoom_pending:
+                    # A move to where the head already is has nothing to wait
+                    # for. Holding the reservation would report IDLE while
+                    # refusing every new move as "already moving" until the
+                    # deadline. Any motor frames the camera still emits for it
+                    # land at the settled pose and are treated as noise.
+                    self._release(self.position)
             self.updated_at = time.time()
             return True
 
     def cancel(self) -> None:
         """Roll back a command that could not be written to the PTZ channel."""
         with self._lock:
-            self.activity = 0
-            self._target = None
-            self._settled_position = self.position
-            self._seen_activity = False
-            self._deadline = 0.0
+            self._release(self.position)
             self._error = None
-            self._pan_tilt_pending = False
-            self._zoom_pending = False
             self.updated_at = time.time()
 
     def _set_pending_axes(self, target: Position, current: Position) -> None:
@@ -319,7 +382,10 @@ class Motion:
         ignore_activity: bool = False,
     ) -> None:
         with self._lock:
+            now = time.monotonic()
+            self._last_reply_at = now
             self._error = None
+            self._needs_poll = False
             self.position = position
             if self._target is not None:
                 self._set_pending_axes(self._target, position)
@@ -332,14 +398,30 @@ class Motion:
                 # reached the requested motors.  Its explicit ignoreActivity flag
                 # means the activity word is stale lens/controller noise; the
                 # accompanying target pose may therefore settle this reservation.
-                # An unflagged nonzero motor event still cannot do so.
-                self.activity = 0
-                self._target = None
-                self._settled_position = position
-                self._seen_activity = False
-                self._deadline = 0.0
-                self._pan_tilt_pending = False
-                self._zoom_pending = False
+                # A position-query reply (confirmed) is likewise a fresh reading
+                # of a pose that matches the request.
+                self._release(position)
+            elif (
+                self._target is not None
+                and activity == 0
+                and self._seen_activity
+                and not confirmed
+            ):
+                # The head moved (we saw genuine activity away from the start
+                # pose) and has now reported a terminal frame somewhere other
+                # than the target: it stopped short, hit a limit, or rounded
+                # further than VIEW_SETTLE_TOLERANCE_STEPS. That is still the
+                # end of this move; waiting for a target it will never report
+                # only produced a 60 s MOVING latch and then UNKNOWN.
+                # Position-query replies (confirmed) carry no activity word, so
+                # a mid-move poll must never be mistaken for this terminal frame.
+                log.warning(
+                    "PTZ move settled off target: pan=%d tilt=%d zoom=%d "
+                    "(requested pan=%d tilt=%d zoom=%d)",
+                    position.pan, position.tilt, position.zoom,
+                    self._target.pan, self._target.tilt, self._target.zoom,
+                )
+                self._release(position)
             elif activity != 0:
                 if (
                     self._target is None
@@ -354,29 +436,37 @@ class Motion:
                     self._zoom_pending = False
                     self.updated_at = time.time()
                     return
-                self._seen_activity = True
+                if not (
+                    self._start_position is not None
+                    and self._target is not None
+                    and position.same_view_as(self._start_position)
+                ):
+                    # Activity at the pose the move started from may be the
+                    # previous move's trailing lens noise. Only motion away from
+                    # the start pose proves this move is under way, which is
+                    # what later lets an off-target terminal frame settle it.
+                    self._seen_activity = True
                 self.activity = activity
                 if self._target is None:
                     self._pan_tilt_pending = True
                     self._zoom_pending = True
-                elif not self._pan_tilt_pending and not self._zoom_pending:
+                elif reached_target:
                     # A real activity word at the target is contradictory but
-                    # still authoritative unless the camera set ignoreActivity.
-                    # Keep MoveStatus MOVING until a terminal/ignored update
-                    # arrives, so Frigate will poll instead of issuing a move
-                    # that begin() must reject as busy.
+                    # still authoritative for a moment unless the camera set
+                    # ignoreActivity. Keep MoveStatus MOVING so Frigate polls
+                    # instead of issuing a move begin() must reject as busy, but
+                    # only for AT_TARGET_ACTIVITY_GRACE_SEC (see
+                    # _expire_if_needed), not the whole reservation deadline.
                     self._pan_tilt_pending = True
                     self._zoom_pending = True
+                    if self._at_target_since == 0.0:
+                        self._at_target_since = now
+                else:
+                    self._at_target_since = 0.0
                 if self._deadline == 0.0:
-                    self._deadline = time.monotonic() + MOTION_EVENT_TIMEOUT_SEC
+                    self._deadline = now + MOTION_EVENT_TIMEOUT_SEC
             elif self._target is None and self._seen_activity:
-                self.activity = activity
-                self._target = None
-                self._settled_position = position
-                self._seen_activity = False
-                self._deadline = 0.0
-                self._pan_tilt_pending = False
-                self._zoom_pending = False
+                self._release(position)
             self.updated_at = time.time()
 
 

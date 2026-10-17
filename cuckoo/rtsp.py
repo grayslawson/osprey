@@ -374,7 +374,7 @@ class _Handler(socketserver.BaseRequestHandler):
                 self.session.stream.unsubscribe(self.session.subscriber)
             if self.session is not None and self.session.udp is not None:
                 self.session.udp.close()
-            log.info("rtsp client %s gone", self.client_address[0])
+            log.debug("rtsp client %s gone", self.client_address[0])
 
     # ------------------------------------------------------------------- methods
 
