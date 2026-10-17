@@ -29,10 +29,11 @@ import events
 import media
 import ptz
 import snapshots
+from presets import MAX_PRESETS_PER_CAMERA, PresetStore, is_home
 from unifiwire import ws
 from unifiwire import envelope
 from unifiwire.envelope import CAMERA, HELLO, PARAM_AGREEMENT, TIME_SYNC, Envelope, Ids, decode
-from model import Camera, Codec, Preset
+from model import Camera, Codec, Position, Preset
 
 CONTROL_PORT: Final = 7442
 READ_SIZE: Final = 65536
@@ -47,8 +48,47 @@ PTZ_RECOVERY_CALLBACK_TIMEOUT_SEC: Final = 15.0
 PTZ_RECOVERY_INITIAL_BACKOFF_SEC: Final = 2.0
 PTZ_RECOVERY_MAX_BACKOFF_SEC: Final = 30.0
 PTZ_RECOVERY_MAX_ATTEMPTS: Final = 5
+# An exhausted recovery is not permanent: a camera that rebooted or recovered
+# its network gets another bounded sequence after this long.
+PTZ_RECOVERY_REARM_SEC: Final = 300.0
+# How long a preset write waits for the camera's acknowledgement. The G5's
+# reply shape for `Preset` config is not fully characterised, so a missing ack
+# is logged but not treated as a refusal; an explicit error reply is.
+PRESET_ACK_TIMEOUT_SEC: Final = 2.0
 
 log = logging.getLogger("cuckoo.control")
+
+
+@dataclass(frozen=True)
+class PtzWatchdog:
+    """Liveness bounds for the ptz1 channel.
+
+    The camera's websocket can stay ESTABLISHED, pings and all, while its PTZ
+    process has stopped answering. Socket liveness therefore proves nothing:
+    only a motor-state push or a GetCurrentPosition reply does. The ptz1 socket
+    is recycled, so the bounded Disable/Enable recovery re-establishes it, when
+    either `max_unanswered` position requests have gone unanswered, or the
+    oldest unanswered request is `reply_timeout_sec` old (silence).
+    """
+
+    reply_timeout_sec: float = 30.0
+    max_unanswered: int = 3
+    # While state is UNKNOWN (motor timeout, fresh channel) or a request is
+    # outstanding, re-ask at most this often.
+    probe_interval_sec: float = 2.0
+    # A healthy idle channel is still probed this often so a silent failure is
+    # noticed before the next move needs it. 0 disables idle probing.
+    idle_probe_sec: float = 60.0
+
+    def __post_init__(self) -> None:
+        if not 0.5 <= self.reply_timeout_sec <= 300:
+            raise ValueError("ptz watchdog reply timeout must be 0.5..300 s")
+        if not 1 <= self.max_unanswered <= 20:
+            raise ValueError("ptz watchdog max_unanswered must be 1..20")
+        if not 0.1 <= self.probe_interval_sec <= 60:
+            raise ValueError("ptz watchdog probe interval must be 0.1..60 s")
+        if not (self.idle_probe_sec == 0 or 5 <= self.idle_probe_sec <= 3600):
+            raise ValueError("ptz watchdog idle probe must be 0 or 5..3600 s")
 
 
 def normalise_mac(value: str) -> str:
@@ -69,6 +109,7 @@ class PtzRecovery:
     callback_deadline: float = 0.0
     next_attempt_at: float = 0.0
     exhausted: bool = False
+    exhausted_at: float = 0.0
 
 
 @dataclass
@@ -84,6 +125,15 @@ class Session:
     last_ping: float = 0.0
     ack_deadline: float = 0.0
     ptz_ready: bool = False
+    # Set when the peer sent a CLOSE frame or a write failed mid-frame; the read
+    # loop then drops the session through the normal _drop() path.
+    closing: bool = False
+    broken: bool = False
+    # PTZ liveness: monotonic time of the oldest unanswered position request,
+    # how many are outstanding, and when we last asked.
+    position_requested_at: float = 0.0
+    unanswered_polls: int = 0
+    last_probe_at: float = 0.0
     # Set by the controller: every message in and out, for when the question is
     # "what did we actually send it?".
     traffic: Callable[[str, Envelope], None] | None = None
@@ -102,7 +152,69 @@ class Session:
         log.debug("-> %s id=%s", message.function_name, message.message_id)
         if self.traffic is not None:
             self.traffic("out", message)
-        ws.send(self.sock, message.to_json())
+        self._write_frame(message.to_json(), ws.Opcode.BINARY)
+
+    def _write_frame(self, payload: bytes, opcode: ws.Opcode) -> None:
+        """Write one whole frame; any failure poisons the stream.
+
+        A timeout or error part-way through `sendall` leaves a partial frame
+        on the wire, after which nothing we send can be parsed. Mark the session
+        broken and shut the socket down so the read loop drops it and recovery
+        starts, instead of writing more bytes into a desynchronised stream.
+        """
+        if self.broken:
+            raise OSError("session stream is broken")
+        try:
+            ws.send(self.sock, payload, opcode)
+        except OSError:
+            self.broken = True
+            shutdown = getattr(self.sock, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            raise
+
+    def ping(self) -> None:
+        with self._write_lock:
+            self._write_frame(b"", ws.Opcode.PING)
+
+    def pong(self, payload: bytes) -> None:
+        with self._write_lock:
+            self._write_frame(payload, ws.Opcode.PONG)
+
+    def request_position(
+        self, now: float | None = None, coalesce_sec: float = 0.0
+    ) -> Envelope | None:
+        """Ask for the motor pose and count it as outstanding until answered.
+
+        With `coalesce_sec`, a request made while another is still outstanding
+        and younger than that is folded into it (returns None). On-demand
+        GetStatus refreshes use this: Frigate polls several times a second while
+        tracking, and counting each poll would let a merely slow camera trip the
+        watchdog's unanswered-request bound.
+        """
+        at = time.monotonic() if now is None else now
+        with self._write_lock:
+            if (
+                coalesce_sec > 0
+                and self.unanswered_polls > 0
+                and at - self.last_probe_at < coalesce_sec
+            ):
+                return None
+            message = envelope.request(ptz.GET_POSITION, ptz.get_position(), self.ids)
+            self._send_unlocked(message)
+            if self.unanswered_polls == 0:
+                self.position_requested_at = at
+            self.unanswered_polls += 1
+            self.last_probe_at = at
+            return message
+
+    def note_motor_reply(self) -> None:
+        with self._write_lock:
+            self.unanswered_polls = 0
+            self.position_requested_at = 0.0
 
     def reply(self, source: Envelope, payload: dict[str, Any]) -> None:
         with self._write_lock:
@@ -143,6 +255,10 @@ class Controller:
         expected_camera_mac: str | None = None,
         configured_cameras: dict[str, dict[str, object]] | None = None,
         bind_host: str = "0.0.0.0",
+        preset_store: PresetStore | None = None,
+        auto_home: bool = True,
+        watchdog: PtzWatchdog | None = None,
+        preset_ack_timeout: float = PRESET_ACK_TIMEOUT_SEC,
     ) -> None:
         self.cert = cert
         self.ingest_host = ingest_host
@@ -167,6 +283,22 @@ class Controller:
         self._ready: queue.Queue[Session] = queue.Queue()
         # A recovery is owned per camera, never by each timer tick or socket.
         self._ptz_recovery: dict[str, PtzRecovery] = {}
+        self.preset_store = preset_store
+        self.auto_home = auto_home
+        self.watchdog = watchdog or PtzWatchdog()
+        self.preset_ack_timeout = preset_ack_timeout
+        self._presets_lock = threading.Lock()
+        self._auto_home_checked: set[str] = set()
+        self._presets_synced: set[str] = set()
+        # Consecutive watchdog recycles without a motor reply, per camera. They
+        # count towards the recovery attempt budget so a camera that re-dials
+        # but never answers is backed off rather than recycled every 5 s.
+        self._watchdog_strikes: dict[str, int] = {}
+        self._watchdog_recycles: dict[str, int] = {}
+        self._recover_requests: queue.Queue[str] = queue.Queue()
+        self._acks: dict[int, tuple[threading.Event, list[Envelope]]] = {}
+        self._acks_lock = threading.Lock()
+        self._selector: selectors.BaseSelector | None = None
         self.on_adopted: Callable[[Camera], None] | None = None
         self.on_motion: Callable[[Camera], None] | None = None
         self.on_detection: Callable[[Camera, events.Detection], None] | None = None
@@ -189,6 +321,7 @@ class Controller:
 
         sel = selectors.DefaultSelector()
         sel.register(listener, selectors.EVENT_READ)
+        self._selector = sel
         try:
             while not self._stop.is_set():
                 for key, _ in sel.select(timeout=SELECT_TIMEOUT_SEC):
@@ -198,7 +331,7 @@ class Controller:
                         assert isinstance(key.fileobj, socket.socket)
                         self._readable(key.fileobj, sel)
                 self._drain_ready(sel)
-                self._tick()
+                self._tick(sel)
         finally:
             sel.close()
             listener.close()
@@ -265,7 +398,7 @@ class Controller:
             log.warning("rejected unregistered camera: mac=%s model=%s", mac, upgrade.camera_model)
             sock.close()
             return
-        camera = self.cameras.setdefault(mac, Camera(mac=mac))
+        camera = self._camera_for(mac)
         registration = self.configured_cameras.get(mac)
         if registration is not None:
             camera.name = str(registration.get("name", camera.name or mac))
@@ -282,12 +415,31 @@ class Controller:
         )
         if session.is_ptz_channel:
             session.ptz_ready = True
-            if session.camera.motion.open_channel():
-                # A replacement PTZ socket invalidates any pending move from the
-                # old one. Query immediately so ONVIF leaves UNKNOWN only after
-                # the new channel has supplied truthful state.
-                session.request(ptz.GET_POSITION, ptz.get_position())
+            session.camera.motion.open_channel()
+            # A replacement PTZ socket invalidates any pending move from the
+            # old one, and a first socket has not told us where the head is.
+            # Query immediately: ONVIF leaves UNKNOWN only after this channel
+            # has supplied truthful state, and the watchdog counts the request.
+            try:
+                session.request_position()
+                self._sync_presets(session)
+            except (OSError, ssl.SSLError) as exc:
+                log.warning("PTZ channel write failed on open: %s", exc)
         self._ready.put(session)
+
+    def _camera_for(self, mac: str) -> Camera:
+        """The model for a connecting camera, restoring persisted presets once."""
+        camera = self.cameras.get(mac)
+        if camera is not None:
+            return camera
+        camera = Camera(mac=mac)
+        if self.preset_store is not None:
+            # Restore the slot table this controller wrote before it
+            # restarted; the camera keeps the slots but cannot list them.
+            camera.presets = self.preset_store.load(mac)
+            if camera.presets:
+                log.info("restored %d preset(s) for %s", len(camera.presets), mac)
+        return self.cameras.setdefault(mac, camera)
 
     def _drain_ready(self, sel: selectors.BaseSelector) -> None:
         """Register sessions the accept threads finished upgrading."""
@@ -300,7 +452,13 @@ class Controller:
                 self._sessions[session.sock] = session
             sel.register(session.sock, selectors.EVENT_READ)
 
-    def _drop(self, sock: socket.socket, sel: selectors.BaseSelector) -> None:
+    def _drop(
+        self,
+        sock: socket.socket,
+        sel: selectors.BaseSelector | None = None,
+        reason: str = "PTZ channel unavailable",
+    ) -> None:
+        sel = sel if sel is not None else self._selector
         recovery_control: Session | None = None
         with self._sessions_lock:
             session = self._sessions.pop(sock, None)
@@ -310,7 +468,7 @@ class Controller:
                     for candidate in self._sessions.values()
                 )
                 if not has_replacement:
-                    session.camera.motion.disconnect()
+                    session.camera.motion.disconnect(reason)
                     recovery_control = next(
                         (
                             candidate
@@ -324,11 +482,15 @@ class Controller:
             log.info("%s channel closed", session.upgrade.subprotocol or "?")
         if recovery_control is not None:
             self._request_ptz_recovery(recovery_control, time.monotonic())
+        if sel is not None:
+            try:
+                sel.unregister(sock)
+            except (KeyError, ValueError):
+                pass
         try:
-            sel.unregister(sock)
-        except (KeyError, ValueError):
+            sock.close()
+        except OSError:  # pragma: no cover - already closed
             pass
-        sock.close()
 
     # -------------------------------------------------------------------- reading
 
@@ -347,14 +509,25 @@ class Controller:
             self._drop(sock, sel)
             return
         for frame in session.reader.feed(chunk):
+            if session.closing:
+                break
             self._on_frame(session, frame)
+        if session.closing or session.broken:
+            self._drop(sock, sel)
 
     def _on_frame(self, session: Session, frame: ws.Frame) -> None:
         if frame.opcode is ws.Opcode.CLOSE:
-            session.sock.close()
+            # Never close the socket here: a closed-but-registered fd lets the
+            # kernel hand the same number to the next accepted socket, and
+            # sel.register() then raises and kills the control loop. The read
+            # loop drops it through _drop(), which also starts PTZ recovery.
+            session.closing = True
             return
         if frame.opcode is ws.Opcode.PING:
-            ws.send(session.sock, frame.payload, ws.Opcode.PONG)
+            try:
+                session.pong(frame.payload)
+            except (OSError, ssl.SSLError):
+                pass  # broken is set; the read loop drops the session
             return
         if frame.opcode is ws.Opcode.PONG:
             return
@@ -373,6 +546,8 @@ class Controller:
 
     def _dispatch(self, session: Session, message: Envelope) -> None:
         name = message.function_name
+        if message.is_reply:
+            self._resolve_ack(message)
 
         if name == TIME_SYNC:
             # Answer EVERY timeSync, reply or not. The camera and controller
@@ -395,12 +570,19 @@ class Controller:
             parsed = ptz.parse_motor_state(message.payload)
             if parsed is not None:
                 position, activity = parsed
-                session.camera.motion.update(
+                motion = session.camera.motion
+                was_unknown = motion.status == "UNKNOWN"
+                motion.update(
                     position,
                     activity,
                     confirmed=name == ptz.GET_POSITION,
                     ignore_activity=bool(message.payload.get("ignoreActivity")),
                 )
+                session.note_motor_reply()
+                if self._watchdog_strikes.pop(session.camera.mac, 0) or was_unknown:
+                    log.warning("PTZ motor state fresh again: mac=%s", session.camera.mac)
+                if name == ptz.GET_POSITION and session.is_ptz_channel:
+                    self._maybe_auto_home(session)
                 if self.on_motion is not None:
                     self.on_motion(session.camera)
             if name == ptz.EVENT_MOTOR_STATE:
@@ -520,7 +702,7 @@ class Controller:
 
         for mac, recovery in list(self._ptz_recovery.items()):
             if mac in restored:
-                log.info("PTZ channel restored: mac=%s", mac)
+                log.warning("PTZ channel restored: mac=%s", mac)
                 del self._ptz_recovery[mac]
                 continue
             session = controls.get(mac)
@@ -530,7 +712,15 @@ class Controller:
                 del self._ptz_recovery[mac]
                 continue
             if recovery.exhausted:
-                continue
+                if now - recovery.exhausted_at < PTZ_RECOVERY_REARM_SEC:
+                    continue
+                log.warning(
+                    "PTZ recovery re-armed after %.0fs: mac=%s", PTZ_RECOVERY_REARM_SEC, mac
+                )
+                self._watchdog_strikes.pop(mac, None)
+                recovery.exhausted = False
+                recovery.attempts = 0
+                recovery.next_attempt_at = now
             if recovery.waiting_for_callback:
                 if now < recovery.callback_deadline:
                     continue
@@ -550,10 +740,13 @@ class Controller:
                 continue
             if recovery.attempts >= PTZ_RECOVERY_MAX_ATTEMPTS:
                 recovery.exhausted = True
+                recovery.exhausted_at = now
                 log.error(
-                    "PTZ recovery timed out: mac=%s after %d attempts",
+                    "PTZ recovery timed out: mac=%s after %d attempts; "
+                    "retrying in %.0fs (or use Recover PTZ)",
                     mac,
                     recovery.attempts,
+                    PTZ_RECOVERY_REARM_SEC,
                 )
                 continue
             recovery.attempts += 1
@@ -575,13 +768,18 @@ class Controller:
 
     # --------------------------------------------------------------------- timers
 
-    def _tick(self) -> None:
+    def _tick(self, sel: selectors.BaseSelector | None = None) -> None:
         now = time.time()
-        for session in list(self._sessions.values()):
+        with self._sessions_lock:
+            current = list(self._sessions.values())
+        for session in current:
+            if session.broken or session.closing:
+                self._drop(session.sock, sel)
+                continue
             if now - session.last_ping >= adoption.PING_INTERVAL_SEC:
                 try:
-                    ws.ping(session.sock)
-                except OSError:
+                    session.ping()
+                except (OSError, ssl.SSLError):
                     continue
                 session.last_ping = now
             sequence = session.sequence
@@ -594,7 +792,144 @@ class Controller:
                 log.debug("no ack for id=%s, stepping past", sequence.waiting_for)
                 sequence.on_timeout()
                 self._advance(session)
+        monotonic = time.monotonic()
+        self._drain_recover_requests(monotonic, sel)
+        self._watch_ptz(monotonic, sel)
+        # Re-read the clock: a drop above schedules recovery at "now".
         self._recover_ptz(time.monotonic())
+
+    # ------------------------------------------------------------------- watchdog
+
+    def _watch_ptz(self, now: float, sel: selectors.BaseSelector | None = None) -> None:
+        """Probe and, when it has stopped answering, recycle each ptz1 socket."""
+        config = self.watchdog
+        with self._sessions_lock:
+            ptz_sessions = [s for s in self._sessions.values() if s.is_ptz_channel]
+        for session in ptz_sessions:
+            if session.broken or session.closing:
+                continue
+            motion = session.camera.motion
+            outstanding = session.unanswered_polls
+            silent_for = now - session.position_requested_at if outstanding else 0.0
+            if outstanding >= config.max_unanswered or (
+                outstanding > 0 and silent_for >= config.reply_timeout_sec
+            ):
+                self._recycle_ptz(
+                    session,
+                    now,
+                    sel,
+                    f"no motor reply for {silent_for:.1f}s "
+                    f"after {outstanding} position request(s)",
+                )
+                continue
+            since_probe = now - session.last_probe_at
+            age = motion.last_reply_age(now)
+            due = (
+                (outstanding > 0 or motion.needs_poll)
+                and since_probe >= config.probe_interval_sec
+            ) or (
+                config.idle_probe_sec > 0
+                and since_probe >= config.idle_probe_sec
+                and (age is None or age >= config.idle_probe_sec)
+            )
+            if not due:
+                continue
+            try:
+                session.request_position(now)
+            except (OSError, ssl.SSLError) as exc:
+                log.warning("PTZ position probe failed: mac=%s: %s", session.camera.mac, exc)
+
+    def _recycle_ptz(
+        self,
+        session: Session,
+        now: float,
+        sel: selectors.BaseSelector | None,
+        why: str,
+    ) -> None:
+        """Close a ptz1 socket that has stopped answering and back off its recovery."""
+        mac = session.camera.mac
+        strikes = self._watchdog_strikes.get(mac, 0) + 1
+        self._watchdog_strikes[mac] = strikes
+        self._watchdog_recycles[mac] = self._watchdog_recycles.get(mac, 0) + 1
+        log.error(
+            "PTZ watchdog: mac=%s %s; recycling ptz1 channel (strike %d/%d)",
+            mac, why, strikes, PTZ_RECOVERY_MAX_ATTEMPTS,
+        )
+        self._drop(session.sock, sel, reason="PTZ not responding; recovering channel")
+        recovery = self._ptz_recovery.get(mac)
+        if recovery is not None and strikes > 1 and not recovery.waiting_for_callback:
+            # The camera re-dialled last time but still never answered. Spend
+            # the shared attempt budget and wait, rather than a tight loop.
+            recovery.attempts = max(recovery.attempts, strikes - 1)
+            recovery.next_attempt_at = now + min(
+                PTZ_RECOVERY_INITIAL_BACKOFF_SEC * (2 ** (strikes - 1)),
+                PTZ_RECOVERY_MAX_BACKOFF_SEC,
+            )
+
+    def recover_ptz(self, mac: str) -> bool:
+        """Operator request: recycle the PTZ channel now (thread-safe).
+
+        Returns False when there is no live management channel to recover
+        through. The work happens on the control loop's next tick.
+        """
+        if self._control_session(mac) is None:
+            return False
+        log.warning("PTZ recovery requested by operator: mac=%s", mac)
+        self._recover_requests.put(mac)
+        return True
+
+    def _drain_recover_requests(
+        self, now: float, sel: selectors.BaseSelector | None = None
+    ) -> None:
+        while True:
+            try:
+                mac = self._recover_requests.get_nowait()
+            except queue.Empty:
+                return
+            # A manual request starts a fresh budget, even after give-up.
+            self._watchdog_strikes.pop(mac, None)
+            self._ptz_recovery.pop(mac, None)
+            ptz_session = self._ptz_session(mac)
+            if ptz_session is not None:
+                self._watchdog_recycles[mac] = self._watchdog_recycles.get(mac, 0) + 1
+                self._drop(ptz_session.sock, sel, reason="operator requested PTZ recovery")
+                if mac in self._ptz_recovery:
+                    continue
+            control = self._control_session(mac)
+            if control is not None:
+                self._request_ptz_recovery(control, now)
+
+    def ptz_health(self, mac: str, now: float | None = None) -> dict[str, object]:
+        """Machine-readable PTZ liveness for /healthz and the operator console."""
+        at = time.monotonic() if now is None else now
+        camera = self.cameras.get(mac)
+        if camera is None:
+            return {"ptz": False, "healthy": False, "state": "UNKNOWN", "error": "no camera"}
+        session = self._ptz_session(mac)
+        motion = camera.motion
+        state = motion.status
+        recovery = self._ptz_recovery.get(mac)
+        age = motion.last_reply_age(at)
+        return {
+            "ptz": camera.is_ptz,
+            "channel": "up" if session is not None else "down",
+            "state": state,
+            "error": motion.error,
+            "healthy": session is not None and state != "UNKNOWN",
+            "last_motor_reply_age_sec": round(age, 1) if age is not None else None,
+            "unanswered_position_requests": session.unanswered_polls if session else 0,
+            "motion_timeouts": motion.timeouts,
+            "watchdog_recycles": self._watchdog_recycles.get(mac, 0),
+            "recovery": {
+                "active": recovery is not None,
+                "attempts": recovery.attempts if recovery else 0,
+                "max_attempts": PTZ_RECOVERY_MAX_ATTEMPTS,
+                "waiting_for_callback": recovery.waiting_for_callback if recovery else False,
+                "exhausted": recovery.exhausted if recovery else False,
+            },
+            "presets": len(camera.presets),
+            "home_preset": any(is_home(p.name) for p in camera.presets.values()),
+        }
 
 
     # ----------------------------------------------------------------------- moves
@@ -630,18 +965,49 @@ class Controller:
                 return False
             return True
 
+    @staticmethod
+    def _free_slot(camera: Camera) -> int | None:
+        """The lowest slot that is neither in use nor the scratch slot."""
+        for slot in range(0, 256):
+            if slot != ptz.SCRATCH_INDEX and slot not in camera.presets:
+                return slot
+        return None
+
     def set_preset(self, mac: str, name: str, index: int | None = None) -> int | None:
-        """Store the current position in a preset slot the camera keeps."""
+        """Store the current position in a preset slot the camera keeps.
+
+        Returns the slot only once the write has gone out and has not been
+        refused by the camera; the table is then persisted.
+        """
         session = self._ptz_session(mac)
         camera = self.cameras.get(mac)
         if session is None or camera is None:
             return None
-        slot = index if index is not None else camera.next_preset_index()
-        if slot == ptz.SCRATCH_INDEX:
-            slot += 1  # the scratch slot is overwritten by every arbitrary move
-        preset = Preset(index=slot, name=name, position=camera.motion.position)
-        session.request(ptz.PRESET, ptz.configure(preset))
-        camera.presets[slot] = preset
+        with self._presets_lock:
+            if index is not None and index != ptz.SCRATCH_INDEX and 0 <= index <= 255:
+                slot: int | None = index
+            else:
+                # The scratch slot is overwritten by every arbitrary move, and
+                # `slot + 1` could silently replace another named position.
+                slot = self._free_slot(camera)
+            if slot is None or (
+                slot not in camera.presets and len(camera.presets) >= MAX_PRESETS_PER_CAMERA
+            ):
+                log.warning("preset table full: mac=%s", mac)
+                return None
+            preset = Preset(index=slot, name=name, position=camera.motion.position)
+        acked = self._request_acked(session, ptz.PRESET, ptz.configure(preset))
+        if acked is False:
+            log.warning("camera refused preset %r in slot %d: mac=%s", name, slot, mac)
+            return None
+        if acked is None:
+            log.warning(
+                "preset %r slot %d not acknowledged within %.1fs; keeping it: mac=%s",
+                name, slot, self.preset_ack_timeout, mac,
+            )
+        with self._presets_lock:
+            camera.presets[slot] = preset
+            self._persist_presets(camera)
         return slot
 
     def remove_preset(self, mac: str, index: int) -> bool:
@@ -652,16 +1018,117 @@ class Controller:
         erase it on the camera.
         """
         camera = self.cameras.get(mac)
-        if camera is None or index not in camera.presets:
+        if camera is None:
             return False
-        del camera.presets[index]
+        with self._presets_lock:
+            if index not in camera.presets:
+                return False
+            del camera.presets[index]
+            self._persist_presets(camera)
         return True
+
+    def _persist_presets(self, camera: Camera) -> None:
+        if self.preset_store is not None:
+            self.preset_store.save(camera.mac, dict(camera.presets))
+
+    def _request_acked(
+        self, session: Session, name: str, payload: dict[str, Any]
+    ) -> bool | None:
+        """Send one request and wait briefly for its reply.
+
+        True: acknowledged. False: refused, or the write failed. None: no reply
+        within `preset_ack_timeout`. Never call this from the control loop
+        thread, which is the one that would deliver the reply.
+        """
+        event = threading.Event()
+        replies: list[Envelope] = []
+        try:
+            # Hold the ack table while sending so a reply that races the
+            # registration still finds its waiter.
+            with self._acks_lock:
+                message = session.request(name, payload)
+                self._acks[message.message_id] = (event, replies)
+        except (OSError, ssl.SSLError):
+            return False
+        try:
+            if not event.wait(self.preset_ack_timeout):
+                return None
+        finally:
+            with self._acks_lock:
+                self._acks.pop(message.message_id, None)
+        reply = replies[0].payload if replies else {}
+        status = reply.get("status")
+        refused = (
+            bool(reply.get("error"))
+            or reply.get("success") is False
+            or (isinstance(status, str) and status.lower() in ("error", "fail", "failed"))
+        )
+        return not refused
+
+    def _resolve_ack(self, message: Envelope) -> None:
+        with self._acks_lock:
+            waiter = self._acks.get(message.in_response_to)
+        if waiter is not None:
+            waiter[1].append(message)
+            waiter[0].set()
+
+    def _sync_presets(self, session: Session) -> None:
+        """Re-assert restored presets on the camera once per process.
+
+        Writing a slot does not move the head, and makes the advertised table
+        true even if the camera lost its own copy (factory reset, replacement).
+        """
+        camera = session.camera
+        if camera.mac in self._presets_synced:
+            return
+        with self._presets_lock:
+            stored = [camera.presets[i] for i in sorted(camera.presets)]
+        self._presets_synced.add(camera.mac)
+        if stored:
+            session.request_many(ptz.PRESET, [ptz.configure(p) for p in stored])
+
+    def _maybe_auto_home(self, session: Session) -> None:
+        """Save the first confirmed idle pose as `home` when none exists.
+
+        Frigate's autotracking `return_preset` is usually `home`; with no such
+        preset it fails every return. This never moves the camera: it records
+        where the head already is, once, and only when enabled and no preset of
+        that name exists. Operators replace it with "Save current view as home".
+        """
+        camera = session.camera
+        if not self.auto_home or camera.mac in self._auto_home_checked or not camera.is_ptz:
+            return
+        if camera.motion.status != "IDLE":
+            return
+        self._auto_home_checked.add(camera.mac)
+        with self._presets_lock:
+            if any(is_home(p.name) for p in camera.presets.values()):
+                return
+            slot = self._free_slot(camera)
+            if slot is None:
+                return
+            preset = Preset(index=slot, name="home", position=camera.motion.position)
+            try:
+                session.request(ptz.PRESET, ptz.configure(preset))
+            except (OSError, ssl.SSLError):
+                self._auto_home_checked.discard(camera.mac)
+                return
+            camera.presets[slot] = preset
+            self._persist_presets(camera)
+        log.warning(
+            "no 'home' preset: saved the current position as home (slot %d) for %s; "
+            "set ptz.auto_home=false to disable, or save a new home in the console",
+            slot, camera.mac,
+        )
 
     def poll_position(self, mac: str) -> bool:
         session = self._ptz_session(mac)
         if session is None:
             return False
-        session.request(ptz.GET_POSITION, ptz.get_position())
+        try:
+            session.request_position(coalesce_sec=self.watchdog.probe_interval_sec)
+        except (OSError, ssl.SSLError):
+            return False
         return True
 
     def _control_session(self, mac: str) -> Session | None:

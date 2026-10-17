@@ -164,3 +164,50 @@ def test_runtime_validation_rejects_unsafe_or_incomplete_values(override: dict[s
         candidate["tracks"] = {}
     with pytest.raises(ValueError):
         config.validate_runtime(candidate)
+
+
+# ------------------------------------------------------------------------ ptz
+
+
+def test_ptz_defaults_enable_auto_home_and_a_bounded_watchdog() -> None:
+    ptz = config.validate_ptz(None)
+    assert ptz["auto_home"] is True
+    assert ptz["reply_timeout_sec"] == 30.0
+    assert ptz["max_unanswered"] == 3
+    watchdog = controller.PtzWatchdog(
+        reply_timeout_sec=ptz["reply_timeout_sec"],
+        max_unanswered=ptz["max_unanswered"],
+        probe_interval_sec=ptz["probe_interval_sec"],
+        idle_probe_sec=ptz["idle_probe_sec"],
+    )
+    assert watchdog == controller.PtzWatchdog()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "yes",
+        {"auto_home": "true"},
+        {"reply_timeout_sec": 0},
+        {"reply_timeout_sec": True},
+        {"max_unanswered": 2.5},
+        {"idle_probe_sec": 1},
+        {"presets_file": ""},
+        {"unknown": 1},
+    ],
+)
+def test_ptz_settings_are_validated(value: object) -> None:
+    with pytest.raises(ValueError):
+        config.validate_ptz(value)
+
+
+def test_preset_file_defaults_next_to_the_certificate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OSPREY_PRESETS_FILE", raising=False)
+    options = main.Options(host="10.0.0.1", cert=tmp_path / "state" / "osprey.pem")
+    assert main.preset_path(options) == tmp_path / "state" / "osprey-presets.json"
+    options.ptz = {**options.ptz, "presets_file": str(tmp_path / "p.json")}
+    assert main.preset_path(options) == tmp_path / "p.json"
+    monkeypatch.setenv("OSPREY_PRESETS_FILE", str(tmp_path / "env.json"))
+    assert main.preset_path(options) == tmp_path / "env.json"

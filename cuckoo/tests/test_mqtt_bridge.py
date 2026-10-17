@@ -86,3 +86,15 @@ def test_busy_shared_gate_rejects_without_invoking_handler() -> None:
 def test_config_rejects_bad_topic_config(raw: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         MqttConfig.from_mapping(raw)
+
+
+def test_ptz_state_is_published_only_when_enabled() -> None:
+    fake = FakeMqtt()
+    bridge(fake).publish_state({"state": "UNKNOWN", "error": "motor state timeout"})
+    topic, payload = fake.events[-1]
+    assert topic.endswith("/state/ptz")
+    assert json.loads(payload) == {"state": "UNKNOWN", "error": "motor state timeout"}
+
+    quiet = FakeMqtt()
+    MqttBridge(MqttConfig(), quiet, MovementGate()).publish_state({"state": "IDLE"})
+    assert quiet.events == []

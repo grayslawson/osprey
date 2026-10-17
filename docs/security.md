@@ -36,6 +36,14 @@ Frigate client's behavior before changing a running installation. A TLS
 reverse proxy restricted to the Frigate host is another deployment option, but
 test camera/NVR interoperability before inserting it into the camera path.
 
+### Health endpoint
+
+`GET /healthz` on the ONVIF port is intentionally unauthenticated so monitoring
+can poll it. It returns PTZ state, error text, reply ages, and recovery counters
+only; it never includes MAC or IP addresses, preset names, or credentials. It
+cannot change state. Restrict the ONVIF port as described above if even that
+operational state should not be visible to the LAN.
+
 ### What anonymous ONVIF exposes
 
 With authentication disabled, any host that can reach Osprey's ONVIF port can
