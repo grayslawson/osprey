@@ -38,6 +38,34 @@ if missing:
     raise SystemExit("broken links in docs/README.md: " + ", ".join(missing))
 PY
 
+# VERSION is the single source of truth for the release version. The sibling
+# and distribution metadata that must spell the number out (Home Assistant
+# manifest, Homebrew formula, pyunifiwire) are checked here so they cannot
+# drift. Release tags are checked against VERSION by .github/workflows/release.yml.
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+root = Path.cwd()
+version = (root / "VERSION").read_text(encoding="utf-8").strip()
+if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    raise SystemExit(f"VERSION must be MAJOR.MINOR.PATCH, got {version!r}")
+checks = {
+    "homeassistant/addon/osprey/config.yaml": r'^version: "([^"]+)"$',
+    "packaging/homebrew/osprey.rb": r'^  version "([^"]+)"$',
+    "pyunifiwire/pyproject.toml": r'^version = "([^"]+)"$',
+    "pyunifiwire/src/unifiwire/__init__.py": r'^__version__ = "([^"]+)"$',
+}
+mismatched = []
+for name, pattern in checks.items():
+    match = re.search(pattern, (root / name).read_text(encoding="utf-8"), re.MULTILINE)
+    found = match.group(1) if match else None
+    if found != version:
+        mismatched.append(f"{name} ({found!r})")
+if mismatched:
+    raise SystemExit(f"versions differ from VERSION ({version}): " + ", ".join(mismatched))
+PY
+
 git diff --check
 
 # Keep executable launchers executable; this catches accidental mode changes

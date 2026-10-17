@@ -116,7 +116,7 @@ def video_settings(camera: Camera, ingest_host: str, port: int, tracks: list[str
 
 
 def disarm(tracks: list[str]) -> dict[str, Any]:
-    return {"video": {name: {"avSerializer": {"destinations": []}}} for name in tracks}
+    return {"video": {name: {"avSerializer": {"destinations": []}} for name in tracks}}
 
 
 def osd_settings(label: str, show_date: bool = True) -> dict[str, Any]:

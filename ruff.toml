@@ -1,0 +1,11 @@
+# Lint policy for CI and local checks. The tool version is pinned in
+# requirements-ci.txt.
+#
+# cuckoo/ is excluded for now: it carries 17 pre-existing pyflakes/bugbear
+# findings that belong to the ptz-watchdog and onvif/rtsp branches, which edit
+# that package concurrently. Remove the exclusion once those are fixed; the
+# current list is in the packaging-baseline handoff report.
+extend-exclude = ["cuckoo"]
+
+[lint]
+select = ["F", "B"]

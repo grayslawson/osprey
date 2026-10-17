@@ -1,10 +1,18 @@
+# Allow-list build context for docker/Dockerfile and the Home Assistant image.
 **
+!VERSION
+!LICENSE
+!NOTICE
 !docker/
 !docker/Dockerfile
+!docker/entrypoint.sh
+!docker/cuckoo_health.py
 !cuckoo/
 !cuckoo/**
 !pyunifiwire/
-!pyunifiwire/**
+!pyunifiwire/LICENSE
+!pyunifiwire/src/
+!pyunifiwire/src/**
 !homeassistant/
 !homeassistant/addon/
 !homeassistant/addon/osprey/
@@ -12,3 +20,6 @@
 !scripts/
 !scripts/osprey
 !scripts/osprey-doctor.sh
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache

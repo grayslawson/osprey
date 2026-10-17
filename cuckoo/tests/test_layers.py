@@ -408,6 +408,18 @@ def test_disarm_clears_destinations() -> None:
     assert payload["video"]["video1"]["avSerializer"]["destinations"] == []
 
 
+def test_disarm_clears_every_track_not_just_the_last() -> None:
+    payload = adoption.disarm(["video1", "video2", "video3"])
+    assert set(payload) == {"video"}
+    assert set(payload["video"]) == {"video1", "video2", "video3"}
+    for track in payload["video"].values():
+        assert track["avSerializer"]["destinations"] == []
+
+
+def test_disarm_with_no_tracks_is_an_empty_video_map() -> None:
+    assert adoption.disarm([]) == {"video": {}}
+
+
 def test_osd_drops_the_logo_but_keeps_the_overlay() -> None:
     payload = adoption.osd_settings("front door")
     assert payload["enableOverlay"] == 1

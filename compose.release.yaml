@@ -1,27 +1,57 @@
+# Osprey release deployment (host networking). Frigate is external and is
+# never managed here.
+#
+#   cp .env.example .env        # set OSPREY_HOST and OSPREY_IMAGE
+#   docker compose -f compose.release.yaml up -d
+#   docker compose -f compose.release.yaml logs -f osprey
+#
+# Host networking is the supported default: the camera dials OSPREY_HOST on
+# TCP 7442 (control, TLS), 7444 (snapshots) and 7550 (media ingest), clients use
+# TCP 8000 (ONVIF + operator console) and 8554 (RTSP), and WS-Discovery uses
+# UDP 3702 multicast, which does not cross a container bridge. Restrict these
+# ports to the camera/Frigate network with the host firewall.
+#
+# If host networking is not possible, use compose.release-bridge.yaml instead.
+# Docker Desktop (macOS/Windows) cannot serve a LAN camera in either mode.
 name: osprey
 services:
   osprey:
-    # Require an explicit image reference. The update helper validates that
-    # references use an immutable release tag or digest.
+    # Require an explicit image reference. scripts/osprey-update.sh validates
+    # that it is an immutable release tag or digest.
     image: ${OSPREY_IMAGE:?Set OSPREY_IMAGE to an immutable release tag or digest}
-    pull_policy: always
-    working_dir: /workspace/cuckoo
-    command: ["python3", "main.py", "--config", "/state/cuckoo.json", "--setup", "--cert", "/state/osprey.pem"]
+    pull_policy: missing
+    network_mode: host
     environment:
-      PYTHONPATH: /workspace/pyunifiwire/src
+      # The LAN address of THIS host as seen by the camera. Osprey writes it
+      # into the camera's controller and stream destinations; never use a
+      # loopback, wildcard or container-bridge address.
+      OSPREY_HOST: ${OSPREY_HOST:?Set OSPREY_HOST to this host's LAN address}
+      # Optional: restrict listeners to one local address (default all).
+      OSPREY_BIND: ${OSPREY_BIND:-}
+      # "1" opens the browser first-run wizard at http://OSPREY_HOST:8000/setup
+      # until it has saved a configuration; leave unset for normal operation.
+      OSPREY_SETUP: ${OSPREY_SETUP:-0}
+      OSPREY_ANNOUNCE: ${OSPREY_ANNOUNCE:-true}
+      # Strongly recommended: protect the operator console. Point this at a
+      # mounted secret, for example via the `secrets:` block below.
+      OSPREY_ADMIN_PASSWORD_FILE: ${OSPREY_ADMIN_PASSWORD_FILE:-}
     volumes:
-      - osprey-state:/state
-    # Keep camera protocols private by default. Set OSPREY_BIND explicitly to
-    # the LAN address/interface used by Frigate (never 0.0.0.0 on an untrusted
-    # host).
-    ports:
-      - "${OSPREY_BIND:-127.0.0.1}:${OSPREY_ONVIF_PORT:-8000}:8000"
-      - "${OSPREY_BIND:-127.0.0.1}:${OSPREY_RTSP_PORT:-8554}:8554"
+      # Certificate, wizard config (osprey.json) and generated secrets. Keep it
+      # across upgrades; back it up before major version changes.
+      - osprey-state:/var/lib/osprey
+    # secrets: [osprey_admin_password]   # then set
+    #   OSPREY_ADMIN_PASSWORD_FILE=/run/secrets/osprey_admin_password
+    user: "1000:1000"
     restart: unless-stopped
-    init: true
     read_only: true
     tmpfs: [/tmp:mode=1777]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    # The image already runs tini as PID 1.
+    init: false
+    stop_grace_period: 10s
 volumes:
   osprey-state:
+# secrets:
+#   osprey_admin_password:
+#     file: ./osprey-admin-password.txt   # openssl rand -base64 24 > osprey-admin-password.txt

@@ -1,8 +1,15 @@
 name: Home Assistant add-on images
 
+# Runs from release.yml after a tagged release (a GITHUB_TOKEN-created release
+# event does not start other workflows, so `release: published` never fired),
+# or by hand for a rebuild.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: Add-on version to build (for example, 0.1.0)
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -37,11 +44,10 @@ jobs:
       - name: Resolve image version
         id: version
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name }}
-          MANUAL_VERSION: ${{ inputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          raw_version="${RELEASE_VERSION:-${MANUAL_VERSION:-}}"
+          raw_version="${INPUT_VERSION:-}"
           version="${raw_version#v}"
           if [ -z "$version" ]; then
             echo 'A release tag or workflow_dispatch version is required' >&2
