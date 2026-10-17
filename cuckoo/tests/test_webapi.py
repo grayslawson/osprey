@@ -253,9 +253,11 @@ def test_console_is_locked_without_a_password(monkeypatch: pytest.MonkeyPatch) -
         status, _, _ = client.request("POST", onvif.CONTROL_STEP_PATH, raw=b"{}",
                                       headers={"Content-Type": "application/json"})
         assert status == 503 and recorder.absolute == []
-        # The app shell and public snapshot stay reachable.
+        # The app shell stays reachable, and snapshots are not behind the console
+        # lock: the ONVIF snapshot URI (profile-bound, as GetSnapshotUri returns it)
+        # is served without an admin session.
         assert client.request("GET", "/")[0] == 200
-        assert client.request("GET", onvif.SNAPSHOT_PATH)[0] == 200
+        assert client.request("GET", onvif.SNAPSHOT_PATH + "video1")[0] == 200
     finally:
         server.stop()
     monkeypatch.setenv("OSPREY_ADMIN_AUTH", "disabled")
@@ -638,7 +640,7 @@ def test_camera_scoped_legacy_controls_move_the_selected_camera() -> None:
                                       {"axis": "pan", "direction": 1})
         assert status == 200
         assert first.absolute == [] and len(second.absolute) == 1
-        status, _, image = client.request("GET", f"/cameras/{second_id}/snapshot/")
+        status, _, image = client.request("GET", f"/cameras/{second_id}/snapshot/video1")
         assert status == 200 and image.startswith(b"\xff\xd8")
     finally:
         server.stop()
