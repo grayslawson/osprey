@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Called by release.yml so a release tag cannot ship without passing the
+  # same gates as main.
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,8 +22,11 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
-      - name: Install test dependencies
-        run: python -m pip install --upgrade pytest mypy types-paho-mqtt paho-mqtt -e pyunifiwire
+          cache-dependency-path: requirements-ci.txt
+      - name: Install pinned test dependencies
+        run: |
+          python -m pip install --upgrade "pip==25.1.1"
+          python -m pip install -r requirements-ci.txt -e pyunifiwire
       - name: Run Python tests
         env:
           PYTHONPATH: ${{ github.workspace }}/cuckoo:${{ github.workspace }}/pyunifiwire/src
@@ -31,8 +37,14 @@ jobs:
         run: |
           python -m mypy --config-file cuckoo/mypy.ini cuckoo
           (cd pyunifiwire && python -m mypy .)
+      - name: Lint Python sources
+        run: ruff check --no-cache .
       - name: Compile Python sources
         run: python -m compileall -q cuckoo pyunifiwire/src
+      - name: Build and check distributions
+        run: |
+          python -m build --outdir "$RUNNER_TEMP/dist"
+          twine check --strict "$RUNNER_TEMP"/dist/*
       - name: Check shell scripts
         run: |
           find . -path './.git' -prune -o -path './.specify' -prune -o -name '*.sh' -type f -print0 \
