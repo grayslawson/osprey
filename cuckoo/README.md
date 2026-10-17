@@ -129,6 +129,18 @@ that names one channel re-codecs only it. The old cuckoo's SSH/credential fields
 gone (this cuckoo never touches the camera over SSH); see `config.py` for the full
 field map.
 
+### PTZ speed
+
+ONVIF `Speed` on `AbsoluteMove`, `RelativeMove`, and `GotoPreset` maps linearly
+onto the G5 speed scale: a GenericSpeedSpace value of 0 is the slowest step (1),
+and 1.0 is the ceiling set by `ptz.max_speed`. The largest pan/tilt or zoom
+component sets the single speed the camera accepts. A request with no `Speed`
+element runs at the ceiling. `ptz.max_speed` (default `1000`, the value Protect
+sends, and the only one measured on hardware) accepts 1 to 10000. Values above
+1000 are unverified: measure them on a real camera before relying on them. Set it
+in the file (`"ptz": { "max_speed": 1000 }`) or with `OSPREY_PTZ_MAX_SPEED`, which
+wins over the file. Rollback: remove the key or set it back to `1000`.
+
 ### Changing a codec at runtime
 
 A codec can also be flipped live over ONVIF `SetVideoEncoderConfiguration` — set a

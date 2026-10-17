@@ -485,7 +485,7 @@ def test_busy_and_unavailable_moves_are_conflicts(served: Any) -> None:
     server, service, _ = served
     client = Client(server)
     client.session()
-    service.backend.move_absolute = lambda _p: False
+    service.backend.move_absolute = lambda _p, _s: False
     service.backend.move_refusal = lambda: "the camera is already moving"
     status, body = client.json("POST", "/api/v1/cameras/default/ptz/move", {"mode": "relative", "pan": 0.1})
     assert status == 409 and body["error"]["code"] == "ptz_busy"
@@ -544,7 +544,7 @@ def test_watchdog_health_signal_is_surfaced(served: Any) -> None:
 
 
 def test_preset_crud_with_thumbnails(served: Any) -> None:
-    server, _, recorder = served
+    server, service, recorder = served
     camera = recorder.camera
     assert camera is not None
     client = Client(server)
@@ -559,7 +559,7 @@ def test_preset_crud_with_thumbnails(served: Any) -> None:
     assert status == 200 and image == recorder.image
     assert client.json("GET", base)[1]["presets"][0]["name"] == "Gate"
     assert client.json("POST", f"{base}/{token}/goto")[0] == 202
-    assert recorder.preset_gotos[-1] == (token, webapi.GOTO_SPEED)
+    assert recorder.preset_gotos[-1] == (token, service.backend.max_speed)
     assert client.json("PUT", f"{base}/{token}")[0] == 200
     camera.presets.pop(token)  # the Recorder backend only records removals
     camera.presets[token] = Preset(token, "Gate", Position())

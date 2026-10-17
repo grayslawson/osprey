@@ -28,6 +28,7 @@ from types import FrameType
 from typing import Any, Final
 
 import config
+import ptz
 from unifiwire import certs
 import discovery
 import events
@@ -71,6 +72,7 @@ class Options:
     # RTSP remains shared with the primary persona.
     onvif_read_only_port: int | None = None
     discovery_port: int = discovery.WS_DISCOVERY_PORT
+    ptz_max_speed: int = ptz.DEFAULT_MAX_SPEED
     announce: bool = True
     dump: Path | None = None
     expected_camera_ip: str | None = None
@@ -188,6 +190,11 @@ def resolve_options(args: argparse.Namespace) -> Options:
         effective["bind"] = args.bind
     elif os.environ.get("OSPREY_BIND"):
         effective["bind"] = os.environ["OSPREY_BIND"]
+    if os.environ.get("OSPREY_PTZ_MAX_SPEED"):
+        try:
+            effective.setdefault("ptz", {})["max_speed"] = int(os.environ["OSPREY_PTZ_MAX_SPEED"])
+        except ValueError:
+            raise SystemExit("invalid runtime configuration: OSPREY_PTZ_MAX_SPEED must be an integer")
     if args.name is not None:
         effective["name"] = args.name
     if args.cert is not None:
@@ -253,6 +260,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
         onvif_port=ports["onvif"],
         onvif_read_only_port=ports.get("onvif_read_only"),
         discovery_port=ports["discovery"],
+        ptz_max_speed=int(effective["ptz"]["max_speed"]),
         announce=effective["announce"],
         dump=args.dump,
         expected_camera_ip=getattr(args, "expected_camera_ip", None),
@@ -466,9 +474,9 @@ def build(options: Options) -> Stack:
             camera = selected()
             return camera.mac if camera is not None else None
 
-        def selected_move(position: Position) -> bool:
+        def selected_move(position: Position, speed: int) -> bool:
             mac = selected_mac()
-            return control.move(mac, position) if mac else False
+            return control.move(mac, position, speed) if mac else False
 
         def selected_goto(index: int, speed: int) -> bool:
             mac = selected_mac()
@@ -548,6 +556,7 @@ def build(options: Options) -> Stack:
             recover_ptz=selected_recover,
             ptz_health=selected_health,
             telemetry=lambda: rtsp.telemetry(hub, stream),
+            max_speed=options.ptz_max_speed,
         )
 
     backend = backend_for(None)
