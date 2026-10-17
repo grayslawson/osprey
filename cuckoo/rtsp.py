@@ -22,7 +22,6 @@ a busy network and what `-rtsp_transport tcp` selects.
 from __future__ import annotations
 
 import base64
-import hashlib
 import logging
 import random
 import socket
@@ -30,12 +29,12 @@ import socketserver
 import struct
 import threading
 import time
-import secrets
 from dataclasses import dataclass, field
 from typing import Final, Iterator
 
 import media
 import videofmt
+from principals import ROLE_MEDIA, DigestVerifier, Network, Principal, peer_in
 
 RTSP_PORT: Final = 8554
 VIDEO_PAYLOAD_TYPE: Final = 96
@@ -49,59 +48,57 @@ AUDIO_TRACK: Final = 1
 log = logging.getLogger("cuckoo.rtsp")
 
 
-@dataclass
 class RtspAuth:
-    """Optional RTSP Digest authentication (RFC 7616)."""
+    """Optional RTSP Digest authentication (RFC 7616), one or more principals.
 
-    username: str
-    password: str
-    nonce_ttl: int = 300
-    _nonces: dict[str, float] = field(default_factory=dict)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-    MAX_NONCES: Final[int] = 1024
+    ``RtspAuth(username, password)`` keeps the original single-credential form.
+    ``RtspAuth(users=...)`` accepts every principal holding the ``media`` (or
+    ``admin``) role, each optionally limited to source CIDRs. ``anonymous_from``
+    admits listed hosts without credentials while everyone else must
+    authenticate.
+    """
+
+    REALM: Final = "Osprey RTSP"
+    MAX_NONCES: Final[int] = DigestVerifier.MAX_NONCES
+
+    def __init__(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        nonce_ttl: int = 300,
+        *,
+        users: tuple[Principal, ...] = (),
+        anonymous_from: tuple[Network, ...] = (),
+    ) -> None:
+        principals = list(users)
+        if username:
+            if not password:
+                raise ValueError("RTSP username requires a password")
+            if any(user.username == username for user in principals):
+                raise ValueError(f"RTSP user {username!r} is configured twice")
+            principals.append(Principal(username, password, frozenset({ROLE_MEDIA})))
+        self.users = tuple(p for p in principals if p.has(ROLE_MEDIA))
+        self.anonymous_from = anonymous_from
+        self._verifier = DigestVerifier(self.REALM, self._lookup, nonce_ttl)
+
+    def _lookup(self, username: str) -> Principal | None:
+        return next((user for user in self.users if user.username == username), None)
 
     def challenge(self) -> str:
-        nonce = secrets.token_urlsafe(24)
-        now = time.monotonic()
-        with self._lock:
-            for old in [key for key, expiry in self._nonces.items() if expiry <= now]:
-                self._nonces.pop(old, None)
-            if len(self._nonces) >= self.MAX_NONCES:
-                oldest = min(self._nonces, key=lambda key: self._nonces[key])
-                self._nonces.pop(oldest, None)
-            self._nonces[nonce] = now + self.nonce_ttl
-        return f'Digest realm="Osprey RTSP", nonce="{nonce}", algorithm=MD5, qop="auth"'
+        return self._verifier.challenge()
 
-    def valid(self, header: str, method: str, uri: str) -> bool:
-        if not header.lower().startswith("digest "):
-            return False
-        values = dict((k.strip(), v.strip().strip('"')) for k, _, v in
-                      (part.partition("=") for part in header[7:].split(",")) if k)
-        nonce = values.get("nonce", "")
-        with self._lock:
-            expiry = self._nonces.get(nonce, 0)
-            if expiry < time.monotonic():
-                self._nonces.pop(nonce, None)
-                return False
-        if (
-            values.get("username") != self.username
-            or values.get("uri") != uri
-            or values.get("realm") != "Osprey RTSP"
-            or values.get("algorithm", "MD5").upper() != "MD5"
-        ):
-            return False
-        ha1 = hashlib.md5(f"{self.username}:Osprey RTSP:{self.password}".encode()).hexdigest()
-        ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
-        qop = values.get("qop", "")
-        if qop and qop != "auth":
-            return False
-        if qop:
-            if not values.get("nc") or not values.get("cnonce"):
-                return False
-            expected = hashlib.md5(f"{ha1}:{nonce}:{values.get('nc','')}:{values.get('cnonce','')}:{values['qop']}:{ha2}".encode()).hexdigest()
-        else:
-            expected = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
-        return secrets.compare_digest(expected, values.get("response", ""))
+    def authenticate(self, header: str, method: str, uri: str, peer: str = "") -> Principal | None:
+        principal = self._verifier.authenticate(header, method, uri)
+        if principal is None or (peer and not principal.permits_peer(peer)):
+            return None
+        if not peer and principal.allow_from:
+            return None
+        return principal
+
+    def valid(self, header: str, method: str, uri: str, peer: str = "") -> bool:
+        if peer and self.anonymous_from and peer_in(peer, self.anonymous_from):
+            return True
+        return self.authenticate(header, method, uri, peer) is not None
 
 
 def sdp(host: str, name: str, stream: media.Stream) -> str:
@@ -380,7 +377,8 @@ class _Handler(socketserver.BaseRequestHandler):
 
     def _respond(self, server: RtspServer, sock: socket.socket, request: Request) -> None:
         if server.auth is not None and not server.auth.valid(
-            request.headers.get("authorization", ""), request.method, request.uri
+            request.headers.get("authorization", ""), request.method, request.uri,
+            str(self.client_address[0]),
         ):
             self._send(sock, response("401 Unauthorized", request.cseq, {
                 "WWW-Authenticate": server.auth.challenge(),

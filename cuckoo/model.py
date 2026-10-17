@@ -294,6 +294,46 @@ class Motion:
             self._zoom_pending = False
             self.updated_at = time.time()
 
+    def halt(self, pan_tilt: bool = True, zoom: bool = True) -> Position | None:
+        """Abandon the in-flight move on the chosen axes and return the pose to hold.
+
+        The camera has no stop verb, so a stop is a new move to "here": the
+        latest reported pose on every stopped axis, and the previous target on
+        any axis that keeps moving. A preset move (unknown axes) can only be
+        stopped as a whole. Returns None when the PTZ channel is unavailable.
+        """
+        with self._lock:
+            self._expire_if_needed()
+            if not self.available:
+                return None
+            here = self.position
+            target = self._target
+            if target is None:
+                pan_tilt = zoom = True
+            hold = Position(
+                pan=here.pan if pan_tilt or target is None else target.pan,
+                tilt=here.tilt if pan_tilt or target is None else target.tilt,
+                zoom=here.zoom if zoom or target is None else target.zoom,
+                focus=here.focus,
+            )
+            still_moving = (not pan_tilt and self._pan_tilt_pending) or (
+                not zoom and self._zoom_pending
+            )
+            if still_moving and self.activity != 0:
+                self._target = hold
+                self._set_pending_axes(hold, here)
+            else:
+                self.activity = 0
+                self._target = None
+                self._settled_position = here
+                self._seen_activity = False
+                self._deadline = 0.0
+                self._error = None
+                self._pan_tilt_pending = False
+                self._zoom_pending = False
+            self.updated_at = time.time()
+            return hold
+
     def _set_pending_axes(self, target: Position, current: Position) -> None:
         self._pan_tilt_pending = (
             target.pan != current.pan or target.tilt != current.tilt
