@@ -164,3 +164,46 @@ def test_runtime_validation_rejects_unsafe_or_incomplete_values(override: dict[s
         candidate["tracks"] = {}
     with pytest.raises(ValueError):
         config.validate_runtime(candidate)
+
+
+# ------------------------------------------------------------- PTZ speed ceiling
+
+
+def test_ptz_max_speed_defaults_to_the_protect_speed() -> None:
+    assert config.merged({})["ptz"]["max_speed"] == 1000
+    assert main.resolve_options(_args(host="3.3.3.3")).ptz_max_speed == 1000
+
+
+@pytest.mark.parametrize("value", [1, 1000, 10000])
+def test_ptz_max_speed_accepts_the_scale_bounds(value: int) -> None:
+    config.validate_runtime(config.merged({"ptz": {"max_speed": value}}))
+
+
+@pytest.mark.parametrize("value", [0, -1, 10001, 1.5, "fast", True, None])
+def test_ptz_max_speed_rejects_out_of_range_or_non_integer(value: object) -> None:
+    with pytest.raises(ValueError):
+        config.validate_runtime(config.merged({"ptz": {"max_speed": value}}))
+
+
+def test_ptz_section_must_be_an_object() -> None:
+    with pytest.raises(ValueError):
+        config.validate_runtime(config.merged({"ptz": "fast"}))
+
+
+def test_ptz_max_speed_comes_from_the_file(tmp_path: Path) -> None:
+    cfg = tmp_path / "cuckoo.json"
+    cfg.write_text(json.dumps({"host": "4.4.4.4", "ptz": {"max_speed": 750}}))
+    assert main.resolve_options(_args(config=str(cfg))).ptz_max_speed == 750
+
+
+def test_ptz_max_speed_environment_overrides_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = tmp_path / "cuckoo.json"
+    cfg.write_text(json.dumps({"host": "4.4.4.4", "ptz": {"max_speed": 750}}))
+    monkeypatch.setenv("OSPREY_PTZ_MAX_SPEED", "2000")
+    assert main.resolve_options(_args(config=str(cfg))).ptz_max_speed == 2000
+
+
+def test_ptz_max_speed_environment_must_be_an_integer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSPREY_PTZ_MAX_SPEED", "fast")
+    with pytest.raises(SystemExit):
+        main.resolve_options(_args(config=str(tmp_path / "missing.json"), host="4.4.4.4"))
