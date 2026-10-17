@@ -184,10 +184,25 @@ class Session:
         with self._write_lock:
             self._write_frame(payload, ws.Opcode.PONG)
 
-    def request_position(self, now: float | None = None) -> Envelope:
-        """Ask for the motor pose and count it as outstanding until answered."""
+    def request_position(
+        self, now: float | None = None, coalesce_sec: float = 0.0
+    ) -> Envelope | None:
+        """Ask for the motor pose and count it as outstanding until answered.
+
+        With `coalesce_sec`, a request made while another is still outstanding
+        and younger than that is folded into it (returns None). On-demand
+        GetStatus refreshes use this: Frigate polls several times a second while
+        tracking, and counting each poll would let a merely slow camera trip the
+        watchdog's unanswered-request bound.
+        """
         at = time.monotonic() if now is None else now
         with self._write_lock:
+            if (
+                coalesce_sec > 0
+                and self.unanswered_polls > 0
+                and at - self.last_probe_at < coalesce_sec
+            ):
+                return None
             message = envelope.request(ptz.GET_POSITION, ptz.get_position(), self.ids)
             self._send_unlocked(message)
             if self.unanswered_polls == 0:
@@ -1111,7 +1126,7 @@ class Controller:
         if session is None:
             return False
         try:
-            session.request_position()
+            session.request_position(coalesce_sec=self.watchdog.probe_interval_sec)
         except (OSError, ssl.SSLError):
             return False
         return True
