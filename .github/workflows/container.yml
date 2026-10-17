@@ -1,9 +1,10 @@
 name: Container image
 
+# Tagged releases are built and signed by release.yml. This workflow covers
+# main and pull requests only, so a tag never publishes the same image twice.
 on:
   push:
     branches: [main]
-    tags: ['v*.*.*']
   pull_request:
 
 permissions:
@@ -36,7 +37,6 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=branch
-            type=ref,event=tag
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
       - name: Build and publish image
