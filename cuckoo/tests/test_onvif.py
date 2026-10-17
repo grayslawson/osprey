@@ -28,6 +28,7 @@ class Recorder:
     def __init__(self, camera: Camera | None) -> None:
         self.camera = camera
         self.absolute: list[Position] = []
+        self.speeds: list[int] = []
         self.presets_gone: list[int] = []
         self.preset_gotos: list[tuple[int, int]] = []
         self.image: bytes | None = b"\xff\xd8jpeg"
@@ -58,8 +59,9 @@ class Recorder:
             }
         }
 
-    def _move(self, position: Position) -> bool:
+    def _move(self, position: Position, speed: int) -> bool:
         self.absolute.append(position)
+        self.speeds.append(speed)
         return True
 
     def _goto(self, index: int, speed: int) -> bool:
@@ -682,6 +684,17 @@ def test_goto_preset_reaches_the_controller() -> None:
     assert recorder.preset_gotos == [(4, 1000)]
 
 
+def test_goto_preset_honors_the_requested_speed() -> None:
+    service, recorder = services()
+    service.backend.max_speed = 500
+    body = "<PresetToken>4</PresetToken><Speed><PanTilt x=\"1.0\" y=\"0\"/></Speed>"
+    assert "GotoPresetResponse" in ask(service, "GotoPreset", body)
+    assert recorder.preset_gotos == [(4, 500)]
+    slow = "<PresetToken>4</PresetToken><Speed><Zoom x=\"0.0\"/></Speed>"
+    ask(service, "GotoPreset", slow)
+    assert recorder.preset_gotos[-1] == (4, 1)
+
+
 def test_non_numeric_preset_token_is_a_fault() -> None:
     service, _ = services()
     assert "s:Fault" in ask(service, "GotoPreset", "<PresetToken>front-door</PresetToken>")
@@ -848,7 +861,7 @@ def test_control_step_tilt_up_decreases_g5_raw_tilt() -> None:
 
 def test_control_step_reports_unavailable_or_busy_move() -> None:
     service, recorder = services()
-    service.backend.move_relative = lambda _position: False
+    service.backend.move_relative = lambda _position, _speed: False
     service.backend.move_refusal = lambda: "PTZ channel unavailable"
     status, result = service.control_step({"axis": "zoom", "direction": 1})
     assert status == HTTPStatus.CONFLICT
@@ -1207,3 +1220,107 @@ def test_normalised_mapping_is_linear_and_sign_correct_for_inverted_axis() -> No
         for axis in (plain, inverted):
             motor = axis.from_normalised(value)
             assert abs(axis.to_normalised(motor) - value) <= 1.0 / 1000 + 1e-9
+
+
+# ------------------------------------------------------------- ONVIF Speed
+
+
+def _absolute_with_speed(x: str, y: str = "0", zoom: str | None = None) -> str:
+    speed = f'<tt:PanTilt x="{x}" y="{y}"/>'
+    if zoom is not None:
+        speed += f'<tt:Zoom x="{zoom}"/>'
+    return f'<Position><PanTilt x="0" y="0"/></Position><Speed>{speed}</Speed>'
+
+
+def test_absolute_move_without_speed_runs_at_the_full_profile_speed() -> None:
+    service, recorder = services()
+    assert "AbsoluteMoveResponse" in ask(service, "AbsoluteMove", '<Position><PanTilt x="0" y="0"/></Position>')
+    assert recorder.speeds == [1000]
+
+
+def test_continuous_move_without_a_speed_element_runs_at_full_speed() -> None:
+    service, recorder = services()
+    service.backend.move_relative = recorder._move
+    body = '<Velocity><PanTilt x="0.5" y="0"/></Velocity>'
+    assert "ContinuousMoveResponse" in ask(service, "ContinuousMove", body)
+    assert recorder.speeds == [1000]
+
+
+def test_speed_maps_linearly_onto_the_configured_ceiling() -> None:
+    service, recorder = services()
+    service.backend.max_speed = 500
+    service.backend.move_absolute = recorder._move
+    # 1 + round(x * 499): the zero end is the slowest step and 1.0 is the ceiling.
+    for value, expected in (("0", 1), ("1.0", 500), ("0.5", 251)):
+        assert "AbsoluteMoveResponse" in ask(service, "AbsoluteMove", _absolute_with_speed(value))
+        assert recorder.speeds[-1] == expected
+
+
+def test_the_largest_speed_component_sets_the_single_camera_speed() -> None:
+    service, recorder = services()
+    service.backend.move_absolute = recorder._move
+    body = _absolute_with_speed("0.1", y="0.9", zoom="0.3")
+    ask(service, "AbsoluteMove", body)
+    assert recorder.speeds[-1] == 1 + round(0.9 * 999)
+
+
+def test_out_of_range_speed_is_clamped_to_the_scale() -> None:
+    service, recorder = services()
+    service.backend.move_absolute = recorder._move
+    ask(service, "AbsoluteMove", _absolute_with_speed("7.5"))
+    assert recorder.speeds[-1] == 1000
+    ask(service, "AbsoluteMove", _absolute_with_speed("-2.0"))
+    assert recorder.speeds[-1] == 1000
+    ask(service, "AbsoluteMove", _absolute_with_speed("-0.0"))
+    assert recorder.speeds[-1] == 1
+
+
+def test_relative_move_honors_speed() -> None:
+    service, recorder = services()
+    service.backend.move_relative = recorder._move
+    body = '<Translation><PanTilt x="0.2" y="0"/></Translation><Speed><PanTilt x="0.5" y="0"/></Speed>'
+    assert "RelativeMoveResponse" in ask(service, "RelativeMove", body)
+    assert recorder.speeds == [501]
+
+
+def test_non_numeric_speed_is_a_fault_and_moves_nothing() -> None:
+    service, recorder = services()
+    service.backend.move_absolute = recorder._move
+    assert "s:Fault" in ask(service, "AbsoluteMove", _absolute_with_speed("fast"))
+    assert recorder.absolute == [] and recorder.speeds == []
+
+
+def test_ui_steps_and_zoom_use_the_configured_ceiling() -> None:
+    service, recorder = services()
+    service.backend.max_speed = 600
+    service.backend.move_relative = recorder._move
+    service.backend.move_absolute = recorder._move
+    assert service.control_step({"axis": "pan", "direction": 1})[0] == HTTPStatus.OK
+    assert recorder.speeds[-1] == 600
+    assert service.control_zoom({"percent": 50})[0] == HTTPStatus.OK
+    assert recorder.speeds[-1] == 600
+
+
+def test_speed_space_is_advertised_as_the_generic_normalised_range() -> None:
+    # The advertised range stays 0..1 (ONVIF GenericSpeedSpace) and 1.0 is the
+    # configured ceiling, so the advertised space and the mapping agree.
+    service, _ = services()
+    body = ask(service, "GetConfigurationOptions")
+    assert (
+        "PanTiltSpaces/GenericSpeedSpace</tt:URI>"
+        "<tt:XRange><tt:Min>0.0</tt:Min><tt:Max>1.0</tt:Max></tt:XRange>" in body
+    )
+
+
+
+def test_speed_mapping_helpers_bound_the_scale() -> None:
+    import ptz
+
+    assert ptz.speed_from_normalised(0.0, 1000) == 1
+    assert ptz.speed_from_normalised(1.0, 1000) == 1000
+    assert ptz.speed_from_normalised(2.0, 1000) == 1000
+    assert ptz.speed_from_normalised(-1.0, 1000) == 1
+    assert ptz.speed_from_normalised(1.0, 1) == 1
+    assert ptz.validate_max_speed(10000) == 10000
+    with pytest.raises(ValueError):
+        ptz.validate_max_speed(0)

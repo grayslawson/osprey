@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, ClassVar, Final
 from xml.etree import ElementTree
 
+import ptz
 from media import BANDWIDTH_WINDOW
 from model import PAN, TILT, ZOOM, Camera, Position
 from frigate_config import Store
@@ -392,8 +393,9 @@ class Backend:
     stream_uri: Callable[[str], str]
     snapshot_uri: Callable[[str], str]
     snapshot: Callable[[], bytes | None] = lambda: None
-    move_absolute: Callable[[Position], bool] = lambda _p: False
-    move_relative: Callable[[Position], bool] = lambda _p: False
+    # Each move carries the G5 speed (1..max_speed) the client asked for.
+    move_absolute: Callable[[Position, int], bool] = lambda _p, _s: False
+    move_relative: Callable[[Position, int], bool] = lambda _p, _s: False
     goto_preset: Callable[[int, int], bool] = lambda _i, _s: False
     set_preset: Callable[[str, int | None], int | None] = lambda _n, _i: None
     remove_preset: Callable[[int], bool] = lambda _i: False
@@ -406,6 +408,8 @@ class Backend:
     # Per-track runtime telemetry keyed by track name (see media.Hub.stats): the
     # windowed byte-rate + series, lifetime bytes, frames, subscribers, playable.
     telemetry: Callable[[], dict[str, dict[str, object]]] = dict
+    # Ceiling of the G5 speed scale; ONVIF speeds map linearly onto 1..max_speed.
+    max_speed: int = ptz.DEFAULT_MAX_SPEED
 
 
 # ------------------------------------------------------------------------ events
@@ -663,7 +667,7 @@ class Services:
         # UI speaks physical directions, so a positive direction must be up.
         sign = -1 if axis == TILT else 1
         values[axis] = ranges[axis].clamp(values[axis] + round(span * (step / 100) * direction * sign))
-        if not self.backend.move_relative(Position(**values)):
+        if not self.backend.move_relative(Position(**values), self.backend.max_speed):
             return HTTPStatus.CONFLICT, {"error": self.backend.move_refusal()}
         return HTTPStatus.OK, {"ok": True, "axis": axis, "direction": direction}
 
@@ -677,7 +681,7 @@ class Services:
         target = camera.zoom_range.from_normalised(percent / 50.0 - 1.0)
         values = camera.motion.position.as_dict()
         values[ZOOM] = target
-        if not self.backend.move_absolute(Position(**values)):
+        if not self.backend.move_absolute(Position(**values), self.backend.max_speed):
             return HTTPStatus.CONFLICT, {"error": self.backend.move_refusal()}
         return HTTPStatus.OK, {"ok": True, "percent": percent}
 
@@ -730,7 +734,7 @@ class Services:
             }
         if existing is None:
             return HTTPStatus.NOT_FOUND, {"error": "no such named preset"}
-        if not self.backend.goto_preset(existing.index, 1000):
+        if not self.backend.goto_preset(existing.index, self.backend.max_speed):
             return HTTPStatus.CONFLICT, {"error": self.backend.move_refusal()}
         return HTTPStatus.OK, {"ok": True, "action": action, "name": existing.name, "token": existing.index}
 
@@ -1364,6 +1368,31 @@ class Services:
             "</tptz:PTZStatus></tptz:GetStatusResponse>"
         )
 
+    def _requested_speed(self, call: Call) -> int:
+        """The G5 speed for a move, from the request's ONVIF Speed element.
+
+        Speed carries PanTilt and Zoom GenericSpeedSpace values (0..1). The camera
+        accepts one speed per move, so the largest component sets it. An absent
+        Speed (or one with no components, as in ContinuousMove) means the profile
+        default, which is full speed. Raises ValueError for a non-numeric value.
+        """
+        speed = call.find("Speed")
+        if speed is None:
+            return self.backend.max_speed
+        fractions: list[float] = []
+        try:
+            for child in speed:
+                name = local_name(child.tag)
+                if name == "PanTilt":
+                    fractions.extend(abs(float(child.attrib[axis])) for axis in ("x", "y") if axis in child.attrib)
+                elif name == "Zoom" and "x" in child.attrib:
+                    fractions.append(abs(float(child.attrib["x"])))
+        except ValueError as exc:
+            raise ValueError("Speed values must be numbers") from exc
+        if not fractions:
+            return self.backend.max_speed
+        return ptz.speed_from_normalised(max(fractions), self.backend.max_speed)
+
     def _target_from(self, call: Call, camera: Camera, relative: bool) -> Position:
         current = camera.motion.position
         pan_tilt = call.vector("PanTilt")
@@ -1416,7 +1445,12 @@ class Services:
         camera = self.backend.camera()
         if camera is None:
             return fault("no camera")
-        moved = self.backend.move_absolute(self._target_from(call, camera, relative=False))
+        try:
+            target = self._target_from(call, camera, relative=False)
+            speed = self._requested_speed(call)
+        except ValueError as exc:
+            return fault(str(exc))
+        moved = self.backend.move_absolute(target, speed)
         if not moved:
             return fault(self.backend.move_refusal())
         return envelope("<tptz:AbsoluteMoveResponse/>")
@@ -1429,9 +1463,10 @@ class Services:
             return fault("no camera")
         try:
             target = self._target_from(call, camera, relative=True)
+            speed = self._requested_speed(call)
         except ValueError as exc:
             return fault(str(exc))
-        moved = self.backend.move_absolute(target)
+        moved = self.backend.move_absolute(target, speed)
         if not moved:
             return fault(self.backend.move_refusal())
         return envelope("<tptz:RelativeMoveResponse/>")
@@ -1449,9 +1484,10 @@ class Services:
             return fault("no camera")
         try:
             target = self._target_from(call, camera, relative=True)
+            speed = self._requested_speed(call)
         except ValueError as exc:
             return fault(str(exc))
-        moved = self.backend.move_absolute(target)
+        moved = self.backend.move_absolute(target, speed)
         if not moved:
             return fault(self.backend.move_refusal())
         return envelope("<tptz:ContinuousMoveResponse/>")
@@ -1489,7 +1525,11 @@ class Services:
             index = int(token)
         except ValueError:
             return fault("preset tokens are numeric here")
-        if not self.backend.goto_preset(index, 1000):
+        try:
+            speed = self._requested_speed(call)
+        except ValueError as exc:
+            return fault(str(exc))
+        if not self.backend.goto_preset(index, speed):
             return fault(self.backend.move_refusal())
         return envelope("<tptz:GotoPresetResponse/>")
 
