@@ -41,6 +41,8 @@ import json
 from typing import Any, Final
 import re
 
+import ptz
+
 DEFAULT_CONFIG_PATH: Final = "cuckoo.json"
 
 
@@ -105,6 +107,7 @@ def validate_ptz(value: Any) -> dict[str, Any]:
             raise ValueError(f'"ptz.{key}" must be a number from {low:g} to {high:g}')
     if not isinstance(out["max_unanswered"], int):
         raise ValueError('"ptz.max_unanswered" must be an integer')
+    ptz.validate_max_speed(out["max_speed"])
     if 0 < out["idle_probe_sec"] < 5:
         raise ValueError('"ptz.idle_probe_sec" must be 0 (disabled) or at least 5')
     presets_file = out["presets_file"]
@@ -238,6 +241,9 @@ DEFAULTS: Final[dict[str, Any]] = {
     "ptz": {
         # Save the first confirmed idle pose as preset "home" when none exists.
         "auto_home": True,
+        # ONVIF speeds map linearly onto 1..max_speed on the G5 scale (1..10000).
+        # 1000 is what Protect sends; values above it are unverified on hardware.
+        "max_speed": ptz.DEFAULT_MAX_SPEED,
         # Watchdog: recycle the ptz1 socket after `max_unanswered` position
         # requests have gone unanswered, or the oldest has been silent for
         # `reply_timeout_sec`.
