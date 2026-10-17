@@ -1187,3 +1187,23 @@ def test_soap_request_body_is_bounded_before_parsing() -> None:
         connection.close()
     finally:
         server.stop()
+
+
+def test_normalised_mapping_is_linear_and_sign_correct_for_inverted_axis() -> None:
+    from model import AxisRange
+
+    plain = AxisRange(0, 1000)
+    inverted = AxisRange(0, 1000, invert=True)
+
+    # Linear across the span: the midpoint is zero and each 1/4 step is 0.5 units.
+    assert plain.from_normalised(0.0) == 500
+    assert plain.from_normalised(0.5) == 750
+    assert plain.from_normalised(-0.5) == 250
+    # Inverted axes flip the sign of the ONVIF vector, not the endpoints.
+    assert inverted.from_normalised(0.5) == 250
+    assert inverted.from_normalised(-1.0) == 1000
+
+    for value in (-1.0, -0.25, 0.0, 0.25, 1.0):
+        for axis in (plain, inverted):
+            motor = axis.from_normalised(value)
+            assert abs(axis.to_normalised(motor) - value) <= 1.0 / 1000 + 1e-9
