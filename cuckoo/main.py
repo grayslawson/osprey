@@ -31,6 +31,7 @@ import config
 from unifiwire import certs
 import discovery
 import events
+import identity
 import media
 import mqtt_bridge
 import onvif
@@ -80,6 +81,11 @@ class Options:
     setup_mode: bool = False
     frigate_url: str | None = None
     ptz: dict[str, Any] = field(default_factory=lambda: config.validate_ptz(None))
+    onvif_identity: identity.IdentityConfig = field(default_factory=identity.IdentityConfig)
+    discovery_interface: str | None = None
+    discovery_address: str | None = None
+    hello_interval: float = 300.0
+    discovery_scopes: tuple[str, ...] = ()
 
 
 @dataclass
@@ -213,6 +219,12 @@ def resolve_options(args: argparse.Namespace) -> Options:
         registered = tuple(config.validate_cameras(effective.get("cameras", [])))
     except ValueError as exc:
         raise SystemExit(f"invalid camera registry: {exc}") from exc
+    try:
+        config.validate_onvif(effective.get("onvif", {}), list(registered))
+    except ValueError as exc:
+        raise SystemExit(f"invalid runtime configuration: {exc}") from exc
+    onvif_settings = effective.get("onvif") or {}
+    discovery_settings = effective.get("discovery") or {}
     names, codecs = tracks_to_model(effective["tracks"])
     try:
         ptz_settings = config.validate_ptz(effective.get("ptz"))
@@ -255,6 +267,11 @@ def resolve_options(args: argparse.Namespace) -> Options:
         setup_mode=setup_mode and not config_had_host,
         frigate_url=frigate_url,
         ptz=ptz_settings,
+        onvif_identity=identity.IdentityConfig.from_mapping(onvif_settings.get("identity")),
+        discovery_interface=discovery_settings.get("interface"),
+        discovery_address=discovery_settings.get("address"),
+        hello_interval=float(discovery_settings.get("hello_interval", 300)),
+        discovery_scopes=tuple(discovery_settings.get("scopes") or ()),
     )
 
 
@@ -334,7 +351,18 @@ def build(options: Options) -> Stack:
             raise ValueError(f"cannot read OSPREY_RTSP_PASSWORD_FILE: {exc}") from exc
     if bool(rtsp_user) != bool(rtsp_password):
         raise ValueError("OSPREY_RTSP_USERNAME and RTSP password must be configured together")
-    rtsp_auth = rtsp.RtspAuth(rtsp_user, rtsp_password) if rtsp_user else None
+    # One credential store for ONVIF, snapshots and (opt-in) RTSP.
+    onvif_auth = onvif.OnvifAuth.from_environment()
+    directory = onvif_auth.directory
+    rtsp_auth: rtsp.RtspAuth | None = None
+    if rtsp_user or directory.rtsp_require_auth:
+        rtsp_auth = rtsp.RtspAuth(
+            rtsp_user or None, rtsp_password or None,
+            users=directory.users if directory.rtsp_require_auth else (),
+            anonymous_from=directory.rtsp_anonymous_from,
+        )
+        if not rtsp_auth.users:
+            raise ValueError("RTSP authentication is required but no user holds the media role")
     stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth, bind_host=options.bind_host)
 
     control = Controller(
@@ -458,6 +486,10 @@ def build(options: Options) -> Stack:
             mac = selected_mac()
             return control.poll_position(mac) if mac else False
 
+        def selected_stop(pan_tilt: bool, zoom: bool) -> bool:
+            mac = selected_mac()
+            return control.stop_motion(mac, pan_tilt, zoom) if mac else False
+
         def selected_snapshot() -> bytes | None:
             mac = selected_mac()
             if mac is None:
@@ -510,6 +542,7 @@ def build(options: Options) -> Stack:
             set_preset=selected_set,
             remove_preset=selected_remove,
             refresh_position=selected_refresh,
+            stop=selected_stop,
             move_refusal=selected_refusal,
             set_encoder=selected_encoder,
             recover_ptz=selected_recover,
@@ -525,11 +558,22 @@ def build(options: Options) -> Stack:
         secrets_path=os.environ.get("OSPREY_SECRETS_FILE"),
         frigate_path=os.environ.get("OSPREY_FRIGATE_CONFIG_FILE"),
     ) if options.setup_mode else None
+    interface_hw = (
+        identity.interface_mac(options.discovery_interface) if options.discovery_interface else None
+    )
+    northbound = {
+        "identity": options.onvif_identity,
+        "name": options.name,
+        "interface_mac": interface_hw,
+        "extra_scopes": options.discovery_scopes,
+    }
     services = onvif.Services(
         backend, host=options.host, port=options.onvif_port,
         auth=onvif.AdminAuth.from_environment(),
-        onvif_auth=onvif.OnvifAuth.from_environment(), setup=setup,
+        onvif_auth=onvif_auth, setup=setup,
         frigate_url=options.frigate_url,
+        identity=options.onvif_identity, name=options.name,
+        interface_mac=interface_hw, extra_scopes=options.discovery_scopes,
     )
     north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry, bind_host=options.bind_host)
     # The service addresses it advertises must match where it is really listening.
@@ -547,6 +591,7 @@ def build(options: Options) -> Stack:
             port=options.onvif_read_only_port,
             onvif_auth=services.onvif_auth,
             read_only=True,
+            **northbound,  # type: ignore[arg-type]
         )
         read_only_north = onvif.OnvifServer(
             read_only_services, port=options.onvif_read_only_port,
@@ -588,11 +633,20 @@ def build(options: Options) -> Stack:
             step=mqtt_step, zoom=mqtt_zoom, goto_preset=mqtt_goto, home=mqtt_home,
         )
 
-    identity = discovery.identity_for(
-        options.host, north.port, onvif.DEVICE_PATH, options.name, ptz=False
-    )
+    def announced(name: str, ptz: bool) -> discovery.Identity:
+        return discovery.identity_for(
+            options.host, north.port, onvif.DEVICE_PATH, name, ptz=ptz,
+            hardware=services.device_identity().model, extra_scopes=options.discovery_scopes,
+        )
+
     finder = discovery.DiscoveryServer(
-        identity, port=options.discovery_port, multicast=options.announce
+        announced(options.name, False), port=options.discovery_port, multicast=options.announce,
+        interface_address=discovery.multicast_address(
+            options.discovery_address, options.discovery_interface,
+            options.bind_host, options.host,
+        ),
+        interface_name=options.discovery_interface,
+        hello_interval=options.hello_interval if options.announce else 0.0,
     )
 
     def adopted(camera: Camera) -> None:
@@ -603,12 +657,14 @@ def build(options: Options) -> Stack:
             camera_services = onvif.Services(
                 backend_for(camera.mac), host=options.host, port=north.port,
                 auth=services.auth, onvif_auth=services.onvif_auth,
+                **northbound,  # type: ignore[arg-type]
             )
             registry.register(camera_services)
         if read_only_north is not None and read_only_registry.get(onvif.canonical_camera_id(camera)) is None:
             read_only_services = onvif.Services(
                 backend_for(camera.mac), host=options.host, port=read_only_north.port,
                 auth=services.auth, onvif_auth=services.onvif_auth, read_only=True,
+                **northbound,  # type: ignore[arg-type]
             )
             read_only_registry.register(read_only_services)
         log.info(
@@ -618,10 +674,7 @@ def build(options: Options) -> Stack:
             camera.tilt_range.minimum, camera.tilt_range.maximum,
         )
         # Re-announce now that we know whether to claim PTZ.
-        finder.identity = discovery.identity_for(
-            options.host, north.port, onvif.DEVICE_PATH,
-            camera.name or options.name, ptz=camera.is_ptz,
-        )
+        finder.identity = announced(camera.name or options.name, camera.is_ptz)
         if options.announce:
             finder.say_hello()
 
