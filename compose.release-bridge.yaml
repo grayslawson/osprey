@@ -1,0 +1,43 @@
+# Osprey release deployment with BRIDGE networking. Use compose.release.yaml
+# (host networking) unless your platform forbids it.
+#
+#   docker compose -f compose.release-bridge.yaml up -d
+#
+# Requirements and limits:
+# - Every camera-facing TCP port must be published on the host's LAN address
+#   (OSPREY_BIND) at the SAME port number, because Osprey advertises
+#   OSPREY_HOST:<port> to the camera. OSPREY_HOST must be that LAN address,
+#   never the container's bridge IP.
+# - WS-Discovery multicast does not cross the bridge, so announcements are
+#   disabled; add the camera to Frigate/your NVR by address. UDP 3702 is still
+#   published for directed (unicast) probes.
+# - Never publish on 0.0.0.0 on an untrusted host.
+name: osprey
+services:
+  osprey:
+    image: ${OSPREY_IMAGE:?Set OSPREY_IMAGE to an immutable release tag or digest}
+    pull_policy: missing
+    environment:
+      OSPREY_HOST: ${OSPREY_HOST:?Set OSPREY_HOST to this host's LAN address}
+      OSPREY_SETUP: ${OSPREY_SETUP:-0}
+      OSPREY_ANNOUNCE: "false"
+      OSPREY_ADMIN_PASSWORD_FILE: ${OSPREY_ADMIN_PASSWORD_FILE:-}
+    volumes:
+      - osprey-state:/var/lib/osprey
+    ports:
+      - {name: camera-control, target: 7442, published: "7442", protocol: tcp, host_ip: "${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}"}
+      - {name: camera-snapshot, target: 7444, published: "7444", protocol: tcp, host_ip: "${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}"}
+      - {name: camera-ingest, target: 7550, published: "7550", protocol: tcp, host_ip: "${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}"}
+      - {name: onvif, target: 8000, published: "8000", protocol: tcp, host_ip: "${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}"}
+      - {name: rtsp, target: 8554, published: "8554", protocol: tcp, host_ip: "${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}"}
+      - {name: ws-discovery, target: 3702, published: "3702", protocol: udp, host_ip: "${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}"}
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp:mode=1777]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: false
+    stop_grace_period: 10s
+volumes:
+  osprey-state:
