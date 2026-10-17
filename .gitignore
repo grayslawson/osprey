@@ -25,3 +25,7 @@ osprey-secrets.env
 rtsp-password
 onvif-password
 *.pem
+
+# Packaging and lint caches.
+/dist/
+.ruff_cache/
