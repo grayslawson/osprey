@@ -106,6 +106,12 @@ def ask(service: onvif.Services, action: str, body: str = "") -> str:
     return service.handle(request(action, body))
 
 
+def subscription_id(body: str) -> str:
+    address = text_of(body, "Address")
+    assert address is not None and "?sub=" in address
+    return address.partition("?sub=")[2]
+
+
 def text_of(xml: str, local: str) -> str | None:
     root = ElementTree.fromstring(xml)
     for element in root.iter():
@@ -125,12 +131,15 @@ def attributes_of(xml: str, local: str) -> dict[str, str]:
 # ------------------------------------------------------------------------ device
 
 
-def test_device_information_comes_from_the_camera() -> None:
+def test_device_information_is_osprey_not_the_physical_camera() -> None:
     service, _ = services()
     body = ask(service, "GetDeviceInformation")
-    assert text_of(body, "Model") == "UVC G5 PTZ"
+    assert text_of(body, "Manufacturer") == "Osprey"
+    assert text_of(body, "Model") == "Osprey UVC G5 PTZ"
     assert text_of(body, "FirmwareVersion") == "5.3.95"
-    assert text_of(body, "SerialNumber") == "AABBCCDDEEFF"
+    serial = text_of(body, "SerialNumber")
+    assert serial is not None and serial.startswith("OSP")
+    assert "AABBCCDDEEFF" not in body, "the physical camera's MAC must never be our identity"
 
 
 def test_capabilities_point_at_our_own_services() -> None:
@@ -706,19 +715,21 @@ def test_subscription_reference_carries_its_own_identifier() -> None:
     service, _ = services()
     body = ask(service, "CreatePullPointSubscription")
     address = text_of(body, "Address")
-    assert address is not None and "?sub=sub1" in address
+    assert address is not None and "?sub=" in address
+    identifier = address.partition("?sub=")[2]
+    assert len(identifier) >= 16, "subscription ids are unguessable"
     assert service.subscriptions.count == 1
 
 
 def test_motion_events_reach_a_subscriber_and_are_drained_once() -> None:
     service, _ = services()
-    ask(service, "CreatePullPointSubscription")
+    identifier = subscription_id(ask(service, "CreatePullPointSubscription"))
     camera = a_camera()
     service.subscriptions.publish(onvif.motion_event(camera, active=True))
-    body = service.pull_messages("sub1")
+    body = service.pull_messages(identifier)
     assert onvif.MOTION_TOPIC in body
     assert 'Value="true"' in body
-    assert "NotificationMessage" not in service.pull_messages("sub1"), "events are pulled once"
+    assert "NotificationMessage" not in service.pull_messages(identifier), "events are pulled once"
 
 
 def test_unsubscribe_forgets_the_subscription() -> None:
@@ -736,6 +747,7 @@ def test_event_properties_advertise_the_motion_topic() -> None:
 def test_a_slow_subscriber_backlog_is_bounded() -> None:
     subscriptions = onvif.Subscriptions()
     identifier = subscriptions.create()
+    assert identifier is not None
     camera = a_camera()
     for _ in range(onvif.Subscriptions.DEPTH * 2):
         subscriptions.publish(onvif.motion_event(camera, active=True))
@@ -747,6 +759,7 @@ def test_a_slow_subscriber_backlog_is_bounded() -> None:
 
 def test_a_real_client_can_talk_soap_to_us() -> None:
     service, recorder = services()
+    service.snapshots.min_interval = 0.0
     server = onvif.OnvifServer(service, port=0)
     server.start()
     try:
@@ -781,7 +794,7 @@ def test_pull_messages_uses_the_subscription_on_the_url() -> None:
     server = onvif.OnvifServer(service, port=0)
     server.start()
     try:
-        ask(service, "CreatePullPointSubscription")
+        identifier = subscription_id(ask(service, "CreatePullPointSubscription"))
         service.subscriptions.publish(onvif.motion_event(a_camera(), active=True))
         connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
         payload = onvif.envelope(
@@ -789,7 +802,7 @@ def test_pull_messages_uses_the_subscription_on_the_url() -> None:
             "<tev:Timeout>PT1S</tev:Timeout><tev:MessageLimit>10</tev:MessageLimit>"
             "</tev:PullMessages>"
         )
-        connection.request("POST", f"{onvif.EVENTS_PATH}?sub=sub1", body=payload.encode())
+        connection.request("POST", f"{onvif.EVENTS_PATH}?sub={identifier}", body=payload.encode())
         body = connection.getresponse().read().decode()
         assert onvif.MOTION_TOPIC in body
         connection.close()

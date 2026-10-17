@@ -71,3 +71,57 @@ of this compatibility test.
   and northbound ONVIF/RTSP boundary.
 - [`cuckoo/tests/test_stack.py`](../cuckoo/tests/test_stack.py) exercises the
   fake-camera session and ONVIF/RTSP faces without hardware.
+
+## Running Frigate and Protect together
+
+Osprey can serve both clients at once. Each one gets its own principal in the
+users file (see [authentication](authentication.md#multiple-onvif-principals)):
+
+| Client | Endpoint | Roles | What it gets |
+|---|---|---|---|
+| Frigate | `:8000` ONVIF, `:8554` RTSP | `media`, `events`, `ptz` | Video, events, autotracking PTZ |
+| UniFi Protect | `:8000` ONVIF, `:8554` RTSP | `media`, `events` | Live view, recording, motion events |
+| Operator | `:8000` ONVIF | `admin` | Everything, including encoder writes |
+
+Protect never gets PTZ. Its `protect` principal is denied on every PTZ call
+with `ter:NotAuthorized`, so Frigate keeps sole control of the head.
+
+Adoption steps (Protect 7.2 or later; pin the console version and re-test after
+each Protect update):
+
+1. Create the `frigate` and `protect` users, with a separate password for each,
+   and set `"allow_from"` on `protect` to the Protect console's address.
+2. In Protect, use **Settings → System → Discover Third-Party Cameras**. If
+   Osprey is on another subnet, use **Advanced Adoption** and enter the Osprey
+   host and port `8000` by IP, because WS-Discovery is link-local multicast.
+3. Enter the `protect` credentials. Choose the H.264 stream (`video1` for HQ, or
+   `video2` if bandwidth is limited). Protect pulls one profile, and changing it
+   later needs a remove and re-add.
+4. Confirm live view, a recording, and a motion event before relying on it.
+   Frigate should keep the same frame rate and detect latency it had before.
+
+Keep the clock on Osprey and the console correct. WS-Security rejects a
+timestamp more than 300 seconds from the server's clock.
+
+### Keeping the physical G5 out of Protect
+
+The G5 stays on the main LAN, so there is no camera VLAN. Use these controls
+instead, and verify each one:
+
+- **Firewall the console away from the physical camera.** Block the Protect
+  console's address from TCP `7442` and `7550` on the G5, and from UDP `10001`
+  if the router allows it. Osprey's address must stay allowed. This stops
+  Protect from natively adopting the physical camera while Osprey is its only
+  controller.
+- **Check the identity before adopting.** Osprey reports its model as
+  `Osprey <camera model>`, a serial that starts with `OSP`, and a stable,
+  locally administered MAC. Refuse any Adopt prompt whose MAC or serial is not
+  one of Osprey's, or that is not an ONVIF device on the Osprey host and port.
+- **Osprey never reports the G5's MAC or serial.** `GetNetworkInterfaces` and
+  the device serial come from Osprey's own identity, so Protect cannot merge
+  the two records. Set `onvif.identity.mac` explicitly if the derived MAC clashes
+  with another device on the LAN.
+- **If the physical camera is adopted by mistake,** Osprey loses its controller
+  session. Stop the Protect adoption from the console, then restore Osprey's
+  control from the Osprey admin console. Do this with a plan, because the
+  step changes custody of the production camera.
