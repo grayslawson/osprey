@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qs, quote, unquote
 
+import ptz
 import websecurity
 from model import Camera, Position
 
@@ -54,7 +55,6 @@ MAX_THUMBNAIL_BYTES: Final = 2 * 1024 * 1024
 CONTINUOUS_FOV_FRACTION: Final = 0.25
 CONTINUOUS_SPAN_FRACTION: Final = 0.03
 CONTINUOUS_ZOOM_FRACTION: Final = 0.05
-GOTO_SPEED: Final = 1000
 
 _STATIC_TYPES: Final = {
     ".html": "text/html; charset=utf-8",
@@ -551,8 +551,17 @@ class WebApp:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", f"{key} must be between {low:g} and {high:g}")
         return float(value)
 
-    def _dispatch(self, services: "Services", target: Position) -> tuple[HTTPStatus, dict[str, object]]:
-        if not services.backend.move_absolute(target):
+    @staticmethod
+    def _g5_speed(services: "Services", fraction: float | None) -> int:
+        """A speed fraction mapped onto the G5 scale; None means the ceiling."""
+        ceiling = services.backend.max_speed
+        if fraction is None:
+            return ceiling
+        return ptz.speed_from_normalised(fraction, ceiling)
+
+    def _dispatch(self, services: "Services", target: Position,
+                  speed: int | None = None) -> tuple[HTTPStatus, dict[str, object]]:
+        if not services.backend.move_absolute(target, services.backend.max_speed if speed is None else speed):
             refusal = services.backend.move_refusal()
             code = "ptz_busy" if "moving" in refusal else "ptz_unavailable"
             raise ApiError(HTTPStatus.CONFLICT, code, refusal,
@@ -606,6 +615,10 @@ class WebApp:
         fields = self._fields(data, {"mode", "pan", "tilt", "zoom", "speed"}, {"mode"})
         mode = fields["mode"]
         camera = self._ptz_camera(services)
+        # The optional speed is a fraction of the configured ceiling (ONVIF
+        # GenericSpeedSpace); absent means full speed.
+        speed_fraction = self._float(fields, "speed", 0.0, 1.0)
+        speed = self._g5_speed(services, speed_fraction)
         if mode == "relative":
             pan = self._float(fields, "pan", -1.0, 1.0) or 0.0
             tilt = self._float(fields, "tilt", -1.0, 1.0) or 0.0
@@ -615,8 +628,7 @@ class WebApp:
             pan = self._float(fields, "pan", -1.0, 1.0) or 0.0
             tilt = self._float(fields, "tilt", -1.0, 1.0) or 0.0
             zoom = self._float(fields, "zoom", -1.0, 1.0) or 0.0
-            speed = self._float(fields, "speed", 0.0, 1.0)
-            scale = 1.0 if speed is None else speed
+            scale = 1.0 if speed_fraction is None else speed_fraction
             # The camera has no continuous verb: velocity becomes one bounded
             # step, so a held joystick re-issues it as each step completes.
             zoom_step = zoom * CONTINUOUS_ZOOM_FRACTION * scale
@@ -639,7 +651,7 @@ class WebApp:
             )
         else:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "mode must be relative, absolute or continuous")
-        return self._dispatch(services, target)
+        return self._dispatch(services, target, speed)
 
     def ptz_center(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
         fields = self._fields(data, {"x", "y", "zoom"}, {"x", "y"})
@@ -780,7 +792,7 @@ class WebApp:
 
     def preset_goto(self, services: "Services", token: int) -> tuple[HTTPStatus, dict[str, object]]:
         self._named(services, token)
-        if not services.backend.goto_preset(token, GOTO_SPEED):
+        if not services.backend.goto_preset(token, services.backend.max_speed):
             refusal = services.backend.move_refusal()
             raise ApiError(HTTPStatus.CONFLICT, "ptz_busy" if "moving" in refusal else "ptz_unavailable", refusal)
         self._wake()
