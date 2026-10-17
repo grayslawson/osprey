@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import http.client
+import json
 import logging
 from logbuffer import LogBuffer, redact
 import subprocess
@@ -77,15 +78,20 @@ class Recorder:
         return True
 
 
+def open_auth() -> onvif.AdminAuth:
+    """The explicit development opt-out; the default console is locked."""
+    return onvif.AdminAuth(allow_anonymous=True)
+
+
 def services(camera: Camera | None = None) -> tuple[onvif.Services, Recorder]:
     recorder = Recorder(camera if camera is not None else a_camera())
-    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000), recorder
+    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000, auth=open_auth()), recorder
 
 
 def services_before_adoption() -> tuple[onvif.Services, Recorder]:
     """No camera has connected yet — the front end still has to answer."""
     recorder = Recorder(None)
-    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000), recorder
+    return onvif.Services(recorder.backend(), host="10.0.0.1", port=8000, auth=open_auth()), recorder
 
 
 def request(
@@ -986,6 +992,11 @@ def test_preview_streams_an_adopted_known_track_and_caps_clients(monkeypatch: py
         server.stop()
 
 
+def session_cookie_header(headers: list[tuple[str, str]]) -> str:
+    return next(value for name, value in headers
+                if name.lower() == "set-cookie" and value.startswith(f"{onvif.SESSION_COOKIE}="))
+
+
 def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
     recorder = Recorder(a_camera())
     auth = onvif.AdminAuth(onvif.AdminAuth.hash_password("correct horse"))
@@ -994,7 +1005,7 @@ def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
     server.start()
     try:
         connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
-        connection.request("GET", "/")
+        connection.request("GET", onvif.LEGACY_PATH)
         response = connection.getresponse()
         assert response.status == 303
         response.read()
@@ -1022,8 +1033,19 @@ def test_admin_panel_requires_login_and_csrf_when_configured() -> None:
         response = connection.getresponse()
         assert response.status == 403
         response.read()
-        csrf = next(value.split("=", 1)[1].split(";", 1)[0] for name, value in cookies
-                    if name.lower() == "set-cookie" and value.startswith("osprey_csrf="))
+        assert not any(value.startswith("osprey_csrf=") for name, value in cookies
+                       if name.lower() == "set-cookie")
+        assert "HttpOnly" in session_cookie_header(cookies) and "SameSite=Strict" in session_cookie_header(cookies)
+        # A cookie alone is not a CSRF token: the header is mandatory.
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body='{"axis":"pan","direction":1}',
+                           headers={"Content-Type": "application/json",
+                                    "Cookie": f"{session_cookie}; osprey_csrf=whatever"})
+        response = connection.getresponse()
+        assert response.status == 403
+        response.read()
+        connection.request("GET", "/api/v1/session", headers={"Cookie": session_cookie})
+        response = connection.getresponse()
+        csrf = json.loads(response.read())["csrf"]
         connection.request("POST", onvif.CONTROL_STEP_PATH, body='{"axis":"pan","direction":1}',
                            headers={"Content-Type": "application/json", "Cookie": cookie,
                                     "X-CSRF-Token": csrf})
@@ -1168,11 +1190,20 @@ def test_control_http_requires_json_and_rejects_malformed_payload() -> None:
     server.start()
     try:
         connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
-        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{}", headers={"Content-Type": "text/plain"})
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{}", headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        assert response.status == HTTPStatus.FORBIDDEN  # no X-CSRF-Token, even without a password
+        response.read()
+        principal = service.auth.principal("")
+        assert principal is not None
+        token = principal[1]
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{}",
+                           headers={"Content-Type": "text/plain", "X-CSRF-Token": token})
         response = connection.getresponse()
         assert response.status == HTTPStatus.UNSUPPORTED_MEDIA_TYPE
         response.read()
-        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{bad", headers={"Content-Type": "application/json"})
+        connection.request("POST", onvif.CONTROL_STEP_PATH, body=b"{bad",
+                           headers={"Content-Type": "application/json", "X-CSRF-Token": token})
         response = connection.getresponse()
         assert response.status == HTTPStatus.BAD_REQUEST
         response.read()

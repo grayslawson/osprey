@@ -25,6 +25,8 @@ matches the task.
 - [PTZ health](ptz-health.md) — motion state rules, watchdog recovery, `/healthz`,
   and the persisted `home` preset.
 - [Security](security.md) — trust boundaries, authentication, and exposure rules.
+- [Operator app](operator-ui.md) — the browser app, its JSON API, and Home
+  Assistant ingress.
 - [Protect dual adoption](protect-dual-adoption.md) — limitations of the
   read-only media persona.
 
