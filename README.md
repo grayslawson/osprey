@@ -173,4 +173,5 @@ before review. The full contribution contract is in
 ## License
 
 Osprey is available under the [MIT License](LICENSE). Upstream components keep
-their own license notices.
+their own license notices; see [`NOTICE`](NOTICE) for attribution and
+the statement that Osprey is not affiliated with Ubiquiti Inc.
