@@ -1,0 +1,29 @@
+Osprey
+Copyright (c) 2026 Osprey contributors
+
+This product is licensed under the MIT License (see LICENSE).
+
+It includes code derived from the Cuckoo and pyunifiwire projects
+(https://github.com/rjmotion/cuckoo, https://github.com/rjmotion/pyunifiwire),
+Copyright (c) 2026 flock contributors, also under the MIT License. Those
+notices are preserved in LICENSE, cuckoo/LICENSE and pyunifiwire/LICENSE.
+
+Interoperability and non-affiliation
+------------------------------------
+
+Osprey and pyunifiwire are independent projects. They are not affiliated
+with, endorsed by, sponsored by, or supported by Ubiquiti Inc. "Ubiquiti",
+"UniFi", "UniFi Protect" and "G5" are trademarks of Ubiquiti Inc. and are used
+here only to identify the hardware that Osprey interoperates with.
+
+The UniFi camera wire protocol implemented in pyunifiwire/ was documented by
+observing traffic between devices that the authors own, for the sole purpose
+of interoperability. No Ubiquiti firmware, software or other copyrighted
+material is distributed with Osprey. Protocol behaviour can change with any
+camera firmware update; use Osprey at your own risk, and only with cameras you
+own or are authorised to manage.
+
+Osprey does not bundle Frigate, FFmpeg, OpenSSL or Python. Container images
+built from docker/Dockerfile include Debian packages (including FFmpeg and
+OpenSSL) and paho-mqtt under their own licenses; the image SBOM published with
+each release lists them.

@@ -1,13 +1,20 @@
 # Package integrations
 
-Osprey is distributed as an OCI image. These integrations provide lightweight
-launchers and package-manager discovery; they do not contain a native Osprey
-daemon and require Docker or Podman. The launcher exposes the read-only
-`doctor` diagnostic and points operators to `compose.release.yaml` for the
-controller, as described in the installation guide.
+Osprey ships as an OCI image, a Python distribution (`osprey-ptz`), a NixOS
+flake, Proxmox LXC scripts, and a Home Assistant add-on. The directories here
+hold the integrations that are not built by the main release workflow.
 
-The npm package is named `@osprey-ptz/cli`. The Homebrew formula and Chocolatey
-manifest are maintained with the source release and can be copied into the
-registry or tap used by your organization. Update all three to the matching
-release tag before publishing; verify the release archive checksum when
-publishing a formula to a tap.
+| Path | What it is | Status |
+|---|---|---|
+| `homebrew/osprey.rb` | Formula that installs the local `scripts/osprey` doctor launcher. It does not start a controller. | Copy into a tap; add the release archive checksum when publishing. |
+| `proxmox/` | Community-scripts style LXC pair (`ct/` and `install/`). | Pending a real Proxmox run. |
+| `homeassistant-repo/` | Scaffold for a separate Home Assistant app repository. | See its README. |
+| `pypi/` | Launcher package that the root `pyproject.toml` wheel uses as its `osprey` entry point. | Transitional until Phase 0 (`specs/002-python-package-cli`). |
+
+Removed: the npm (`@osprey-ptz/cli`) and Chocolatey wrappers. They only started
+the container image for `osprey doctor` and added version upkeep without
+adding capability.
+
+The release version lives in the root `VERSION` file. `scripts/validate-repo.sh`
+fails when the Home Assistant manifest, the Homebrew formula, or pyunifiwire
+disagree with it.

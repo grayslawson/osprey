@@ -2,7 +2,9 @@
 # separately by the user and is not part of this override.
 services:
   osprey:
-    command: ["python3", "main.py", "--host", "${OSPREY_HOST:?set OSPREY_HOST}", "--cert", "/state/osprey.pem", "--expected-camera-mac", "${OSPREY_CAMERA_MAC:?set OSPREY_CAMERA_MAC}"]
+    environment:
+      OSPREY_HOST: ${OSPREY_HOST:?set OSPREY_HOST}
+    command: ["run", "--expected-camera-mac", "${OSPREY_CAMERA_MAC:?set OSPREY_CAMERA_MAC}"]
     ports:
       - name: camera-control
         target: 7442
