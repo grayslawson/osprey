@@ -304,12 +304,25 @@ def test_watchdog_recycles_after_thirty_seconds_of_silence() -> None:
     assert ctl.ptz_health(control.camera.mac)["watchdog_recycles"] == 1
 
 
-def test_watchdog_counts_ondemand_polls_from_frigate() -> None:
-    """GetStatus refreshes (Frigate) count as outstanding requests too."""
-    ctl, control, _, ptz_session, _ = _ptz_pair()
-    for _ in range(3):
+def test_rapid_ondemand_polls_from_frigate_coalesce() -> None:
+    """A burst of GetStatus refreshes is one outstanding request, not many.
+
+    Frigate polls several times a second while tracking; a camera that answers
+    in half a second must not be recycled for it.
+    """
+    ctl, control, _, ptz_session, ptz_wire = _ptz_pair()
+    for _ in range(5):
         assert ctl.poll_position(control.camera.mac)
-    assert ptz_session.unanswered_polls == 3
+    assert ptz_session.unanswered_polls == 1
+    assert ptz_wire.names().count(ptz.GET_POSITION) == 1
+    ctl._watch_ptz(ptz_session.position_requested_at + 1.0)
+    assert _live(ctl, ptz_wire)
+
+
+def test_ondemand_polls_still_trip_the_silence_bound() -> None:
+    """Coalesced GetStatus refreshes still count toward the silence bound."""
+    ctl, control, _, ptz_session, _ = _ptz_pair()
+    assert ctl.poll_position(control.camera.mac)
     ctl._watch_ptz(ptz_session.position_requested_at + ctl.watchdog.reply_timeout_sec)
     assert ctl._ptz_session(control.camera.mac) is None
 
