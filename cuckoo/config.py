@@ -41,6 +41,8 @@ import json
 from typing import Any, Final
 import re
 
+import ptz
+
 DEFAULT_CONFIG_PATH: Final = "cuckoo.json"
 
 
@@ -114,6 +116,10 @@ def validate_runtime(value: dict[str, Any]) -> None:
             raise ValueError("track names must contain only letters, digits, '.', '_' or '-'")
         if not isinstance(codec, str) or codec.lower() not in {"h264", "h265", "mjpg"}:
             raise ValueError(f'tracks[{name!r}] must be h264, h265, or mjpg')
+    ptz_section = value.get("ptz", {})
+    if not isinstance(ptz_section, dict):
+        raise ValueError('"ptz" must be an object')
+    ptz.validate_max_speed(ptz_section.get("max_speed", ptz.DEFAULT_MAX_SPEED))
     ports = value.get("ports")
     if not isinstance(ports, dict):
         raise ValueError('"ports" must be an object')
@@ -145,6 +151,9 @@ DEFAULTS: Final[dict[str, Any]] = {
     # channel -> codec. Default H.264 everywhere so an ONVIF client (Home
     # Assistant) always finds a profile it can decode; set any to "h265".
     "tracks": {"video1": "h264", "video2": "h264", "video3": "h264"},
+    # PTZ speed ceiling on the G5 scale (1..10000). ONVIF speeds map onto
+    # 1..max_speed. 1000 is what Protect sends; higher values are unverified.
+    "ptz": {"max_speed": ptz.DEFAULT_MAX_SPEED},
     # Optional operator integration; remains inert unless explicitly enabled.
     "mqtt": {"enabled": False},
     "ports": {
