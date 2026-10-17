@@ -46,6 +46,9 @@ class LogBuffer(logging.Handler):
         super().__init__(level=logging.INFO)
         self._records: deque[dict[str, object]] = deque(maxlen=max_records)
         self._lock = threading.Lock()
+        # Monotonic per-buffer sequence so live viewers (SSE) can resume with
+        # Last-Event-ID instead of re-reading the whole window.
+        self._seq = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -66,6 +69,8 @@ class LogBuffer(logging.Handler):
                 "message": message,
             }
             with self._lock:
+                self._seq += 1
+                entry["seq"] = self._seq
                 self._records.append(entry)
         except Exception:  # pragma: no cover - logging must never break callers
             self.handleError(record)
@@ -81,6 +86,37 @@ class LogBuffer(logging.Handler):
                 >= minimum
             ]
         return list(reversed(records[-limit:]))
+
+    def since(self, seq: int, minimum: int = logging.INFO,
+              limit: int = 100) -> list[dict[str, object]]:
+        """Return records newer than ``seq``, oldest first, for live streams."""
+        limit = max(1, min(limit, DEFAULT_LIMIT))
+        with self._lock:
+            records = [
+                dict(entry)
+                for entry in self._records
+                if int(str(entry.get("seq", 0))) > seq
+                and logging._nameToLevel.get(str(entry["level"]), logging.INFO) >= minimum
+            ]
+        return records[-limit:]
+
+    def before(self, seq: int, limit: int = 100,
+               minimum: int = logging.INFO) -> list[dict[str, object]]:
+        """Return up to ``limit`` records older than ``seq``, newest first."""
+        limit = max(1, min(limit, DEFAULT_LIMIT))
+        with self._lock:
+            records = [
+                dict(entry)
+                for entry in self._records
+                if int(str(entry.get("seq", 0))) < seq
+                and logging._nameToLevel.get(str(entry["level"]), logging.INFO) >= minimum
+            ]
+        return list(reversed(records[-limit:]))
+
+    @property
+    def last_seq(self) -> int:
+        with self._lock:
+            return self._seq
 
     def summary(self) -> dict[str, int]:
         """Return counts useful for an alert badge without exposing log text."""
