@@ -886,7 +886,8 @@ OPERATIONS: Final[tuple[Operation, ...]] = tuple(
     + [Operation(TPTZ, "GetServiceCapabilities", "_get_ptz_service_capabilities", PRE_AUTH)]
     + _ops(TPTZ, ROLE_PTZ, "GetNodes", "GetNode", "GetConfigurations", "GetConfiguration",
            "GetConfigurationOptions", "GetStatus", "GetPresets", "AbsoluteMove",
-           "RelativeMove", "ContinuousMove", "Stop", "GotoPreset", "SetPreset", "RemovePreset")
+           "RelativeMove", "ContinuousMove", "Stop", "GotoPreset", "SetPreset", "RemovePreset",
+           "GotoHomePosition", "SetHomePosition")
     + [Operation(TIMG, "GetServiceCapabilities", "_get_imaging_service_capabilities", PRE_AUTH)]
     + _ops(TIMG, ROLE_MEDIA, "GetImagingSettings", "GetOptions")
     + [Operation(TEV, "GetServiceCapabilities", "_get_events_service_capabilities", PRE_AUTH)]
@@ -2940,7 +2941,8 @@ class _Handler(BaseHTTPRequestHandler):
                         break
                     remaining -= len(chunk)
             except OSError:
-                return
+                # A client that stalls mid-body still gets its 413 below.
+                pass
         try:
             self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, b"request too large", "text/plain")
         except OSError:
