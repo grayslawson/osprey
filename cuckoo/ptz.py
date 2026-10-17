@@ -21,6 +21,32 @@ PTZ_SUBPROTOCOL: Final = "ptz1"
 DEFAULT_SPEED: Final = 1000
 SCRATCH_INDEX: Final = 99  # reused for arbitrary moves, which have no slot of their own
 
+# The G5 speed scale. 1000 is what Protect sends and the only value measured on
+# hardware; anything above it is accepted by validation but unverified.
+MIN_SPEED: Final = 1
+MAX_SPEED_LIMIT: Final = 10000
+DEFAULT_MAX_SPEED: Final = DEFAULT_SPEED
+
+
+def validate_max_speed(value: object) -> int:
+    """The ceiling of the G5 speed scale, as configured. Rejects non-integers."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"max_speed must be an integer from {MIN_SPEED} to {MAX_SPEED_LIMIT}")
+    if not MIN_SPEED <= value <= MAX_SPEED_LIMIT:
+        raise ValueError(f"max_speed must be an integer from {MIN_SPEED} to {MAX_SPEED_LIMIT}")
+    return value
+
+
+def speed_from_normalised(fraction: float, max_speed: int = DEFAULT_MAX_SPEED) -> int:
+    """Map an ONVIF GenericSpeedSpace value (0..1) linearly onto 1..max_speed.
+
+    Out-of-range fractions are clamped, so a client cannot exceed the ceiling.
+    0 maps to the slowest step rather than to a stop, because a move always has
+    to make progress.
+    """
+    clamped = max(0.0, min(1.0, float(fraction)))
+    return MIN_SPEED + round(clamped * (max_speed - MIN_SPEED))
+
 
 def enable(controller_url: str) -> dict[str, Any]:
     """Ask the camera to open its PTZ channel back to us.

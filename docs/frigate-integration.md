@@ -51,7 +51,10 @@ limitation, see [Protect and Osprey](protect-dual-adoption.md).
 ## Named-position discovery and refresh
 
 Osprey returns every saved named position from the ONVIF `GetPresets` response;
-the `home` position is not privileged on the wire. Frigate discovers that list
+the `home` position is not privileged on the wire. Named positions persist across
+Osprey restarts, and when no `home` exists Osprey saves the camera's current view
+as `home` on first connection so a `return_preset: home` is valid (disable with
+`ptz.auto_home: false`; see [PTZ health](ptz-health.md)). Frigate discovers that list
 when its ONVIF controller initializes a camera and then keeps the list in memory.
 Consequently, a position saved in Osprey after Frigate connected will not appear
 in Frigate's live-view preset menu immediately.

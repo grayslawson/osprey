@@ -32,7 +32,11 @@ Commands are JSON and use QoS 1:
 | `osprey/driveway/command/home` | `{}` |
 
 Osprey publishes a structured, non-retained result or error on
-`osprey/driveway/event/control`. Retained command messages are deliberately
+`osprey/driveway/event/control`. PTZ state is published on
+`osprey/driveway/state/ptz` whenever it changes and at most once per second
+while it is unchanged, for example
+`{"camera":"g5-ptz-…","state":"UNKNOWN","pan_tilt":"UNKNOWN","zoom":"UNKNOWN","error":"motor state timeout","position":{…},"at":…}`
+(see [PTZ health](ptz-health.md)). Retained command messages are deliberately
 ignored so reconnecting never replays camera movement. MQTT commands enter the
 same movement gate as console, sentry, and tracking producers; contention is
 reported as an error instead of bypassing camera safety.
