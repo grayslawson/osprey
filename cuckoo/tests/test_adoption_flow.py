@@ -327,6 +327,7 @@ def test_ptz_recovery_retries_with_backoff_then_stops(
         ptz.ENABLE_PTZ,
         ptz.DISABLE_PTZ,
         ptz.ENABLE_PTZ,
+        ptz.REBOOT,
     ]
     assert ctl._ptz_recovery[control.camera.mac].exhausted
     assert "PTZ recovery callback timed out" in caplog.text

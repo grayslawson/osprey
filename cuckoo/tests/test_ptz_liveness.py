@@ -381,6 +381,7 @@ def test_an_exhausted_recovery_is_rearmed_after_the_cooldown(
     recovery = ctl._ptz_recovery[mac]
     ctl._recover_ptz(recovery.next_attempt_at)
     assert recovery.exhausted
+    assert wire.names()[-1] == ptz.REBOOT
     sent = len(wire.names())
 
     ctl._recover_ptz(recovery.exhausted_at + 1)
