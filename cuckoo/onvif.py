@@ -73,6 +73,9 @@ CONTROL_RECOVER_PATH: Final = "/control/ptz/recover"
 # counters only: no MAC, address, preset name, or credential.
 HEALTH_PATH: Final = "/healthz"
 MANUAL_STEP_FRACTION: Final = 0.04
+CONTINUOUS_FOV_FRACTION: Final = 0.28
+CONTINUOUS_STEP_FRACTION: Final = 0.08
+CONTINUOUS_ZOOM_FRACTION: Final = 0.16
 LOGIN_PATH: Final = "/login"
 FRIGATE_API_PATH: Final = "/api/frigate"
 LOGS_API_PATH: Final = "/api/logs"
@@ -539,6 +542,7 @@ class Backend:
     # Each move carries the G5 speed (1..max_speed) the client asked for.
     move_absolute: Callable[[Position, int], bool] = lambda _p, _s: False
     move_relative: Callable[[Position, int], bool] = lambda _p, _s: False
+    move_continuous: Callable[[Position, Position, int], bool] | None = None
     goto_preset: Callable[[int, int], bool] = lambda _i, _s: False
     set_preset: Callable[[str, int | None], int | None] = lambda _n, _i: None
     remove_preset: Callable[[int], bool] = lambda _i: False
@@ -2431,11 +2435,54 @@ class Services:
             return fault(self.backend.move_refusal())
         return envelope("<tptz:RelativeMoveResponse/>")
 
-    def _continuous_move(self, call: Call) -> str:
-        """The camera has no continuous verb, so velocity becomes one relative step.
+    def _continuous_step_from(self, call: Call, camera: Camera) -> tuple[Position, Position]:
+        current = camera.motion.step_origin()
+        pan_tilt = call.vector("PanTilt")
+        zoom = call.vector("Zoom")
+        if pan_tilt is not None:
+            pan_tilt = (pan_tilt[0], -pan_tilt[1])
+        pan_delta = 0
+        tilt_delta = 0
+        if pan_tilt is not None:
+            span_pan = camera.pan_range.maximum - camera.pan_range.minimum
+            span_tilt = camera.tilt_range.maximum - camera.tilt_range.minimum
+            vx = max(-1.0, min(1.0, pan_tilt[0]))
+            vy = max(-1.0, min(1.0, pan_tilt[1]))
+            geometry = camera.field_of_view
+            if geometry is not None:
+                zoom_factor = (
+                    camera.zoom_range.to_normalised(current.zoom) + 1.0
+                ) / 2.0
+                horizontal, vertical = geometry.at_zoom(zoom_factor)
+                pan_delta = round(
+                    vx * CONTINUOUS_FOV_FRACTION * horizontal * span_pan / geometry.pan_degrees
+                )
+                tilt_delta = round(
+                    vy * CONTINUOUS_FOV_FRACTION * vertical * span_tilt / geometry.tilt_degrees
+                )
+            else:
+                pan_delta = round(vx * CONTINUOUS_STEP_FRACTION * span_pan / 2)
+                tilt_delta = round(vy * CONTINUOUS_STEP_FRACTION * span_tilt / 2)
+        zoom_delta = 0
+        if zoom is not None:
+            span = camera.zoom_range.maximum - camera.zoom_range.minimum
+            vz = max(-1.0, min(1.0, zoom[0]))
+            zoom_delta = round(vz * CONTINUOUS_ZOOM_FRACTION * span)
+        target = Position(
+            pan=camera.pan_range.clamp(current.pan + pan_delta),
+            tilt=camera.tilt_range.clamp(current.tilt + tilt_delta),
+            zoom=camera.zoom_range.clamp(current.zoom + zoom_delta),
+            focus=current.focus,
+        )
+        delta = Position(pan=pan_delta, tilt=tilt_delta, zoom=zoom_delta, focus=0)
+        return target, delta
 
-        A client holding an arrow key sends these repeatedly, which gives the same
-        felt behaviour without pretending to a mode the camera does not have.
+    def _continuous_move(self, call: Call) -> str:
+        """The camera has no continuous verb, so velocity dispatches chained FOV steps.
+
+        Clients like Frigate send a single ContinuousMove on button press and a
+        single Stop on release. Each step is sized to settle quickly with zero
+        overshoot, and the controller chains subsequent steps until Stop arrives.
         """
         if not self.ptz_enabled:
             return fault("PTZ is disabled on this ONVIF endpoint")
@@ -2443,11 +2490,14 @@ class Services:
         if camera is None:
             return fault("no camera")
         try:
-            target = self._target_from(call, camera, relative=True)
+            target, delta = self._continuous_step_from(call, camera)
             speed = self._requested_speed(call)
         except ValueError as exc:
             return fault(str(exc))
-        moved = self.backend.move_absolute(target, speed)
+        if self.backend.move_continuous is not None:
+            moved = self.backend.move_continuous(target, delta, speed)
+        else:
+            moved = self.backend.move_absolute(target, speed)
         if not moved:
             return fault(self.backend.move_refusal())
         return envelope("<tptz:ContinuousMoveResponse/>")

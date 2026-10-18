@@ -272,6 +272,22 @@ def test_g5_ignored_activity_at_the_new_target_settles_the_new_move() -> None:
     assert camera.motion.begin(Position(pan=19635, tilt=12334, zoom=723, focus=115))
 
 
+def test_g5_ignored_activity_after_halt_does_not_latch_moving() -> None:
+    """After halt() clears _target, a terminal ignoreActivity frame at a new pose stays IDLE."""
+    camera = _ptz_camera()
+    camera.motion.connect()
+    camera.motion.update(Position(pan=10626, tilt=12369, zoom=0, focus=53), activity=0)
+    assert camera.motion.begin(Position(pan=19376, tilt=12369, zoom=0, focus=53))
+    camera.motion.halt()
+    camera.motion.update(
+        Position(pan=13385, tilt=12369, zoom=0, focus=53),
+        activity=16,
+        ignore_activity=True,
+    )
+    assert camera.motion.status == "IDLE"
+    assert camera.motion.begin(Position(pan=14000, tilt=12369, zoom=0, focus=53))
+
+
 def test_unflagged_activity_at_a_target_does_not_settle_a_reserved_move() -> None:
     """Keep genuine motor motion from releasing a move prematurely."""
     camera = _ptz_camera()

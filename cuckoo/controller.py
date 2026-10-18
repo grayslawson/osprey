@@ -58,8 +58,18 @@ PTZ_RECOVERY_REARM_SEC: Final = 300.0
 # reply shape for `Preset` config is not fully characterised, so a missing ack
 # is logged but not treated as a refusal; an explicit error reply is.
 PRESET_ACK_TIMEOUT_SEC: Final = 2.0
+CONTINUOUS_MOVE_MAX_SEC: Final = 10.0
 
 log = logging.getLogger("cuckoo.control")
+
+
+@dataclass
+class ContinuousMove:
+    """An active ONVIF ContinuousMove step chain until Stop or deadline."""
+
+    delta: Position
+    speed: int
+    deadline: float
 
 
 @dataclass(frozen=True)
@@ -312,6 +322,7 @@ class Controller:
         self._recover_requests: queue.Queue[str] = queue.Queue()
         self._acks: dict[int, tuple[threading.Event, list[Envelope]]] = {}
         self._acks_lock = threading.Lock()
+        self._continuous_moves: dict[str, ContinuousMove] = {}
         self._selector: selectors.BaseSelector | None = None
         self.on_adopted: Callable[[Camera], None] | None = None
         self.on_motion: Callable[[Camera], None] | None = None
@@ -499,6 +510,7 @@ class Controller:
         with self._sessions_lock:
             session = self._sessions.pop(sock, None)
             if session is not None and session.is_ptz_channel:
+                self._continuous_moves.pop(session.camera.mac, None)
                 has_replacement = any(
                     candidate.camera.mac == session.camera.mac and candidate.is_ptz_channel
                     for candidate in self._sessions.values()
@@ -620,6 +632,8 @@ class Controller:
                     log.warning("PTZ motor state fresh again: mac=%s", session.camera.mac)
                 if name == ptz.GET_POSITION and session.is_ptz_channel:
                     self._maybe_auto_home(session)
+                if session.is_ptz_channel and motion.settled:
+                    self._advance_continuous(session)
                 if self.on_motion is not None:
                     self.on_motion(session.camera)
             if name == ptz.EVENT_MOTOR_STATE:
@@ -983,6 +997,7 @@ class Controller:
         if session is None:
             return False
         with session.move_lock:
+            self._continuous_moves.pop(mac, None)
             if not session.camera.motion.begin(position):
                 return False
             try:
@@ -992,19 +1007,111 @@ class Controller:
                 return False
             return True
 
-    def stop_motion(self, mac: str, pan_tilt: bool = True, zoom: bool = True) -> bool:
-        """Halt an in-flight move by re-targeting the head at its reported pose.
-
-        The PTZ channel has no stop verb; writing the scratch preset at the
-        current position and going there is the closest real equivalent.
-        Stopping an idle head is a successful no-op. Returns False only when no
-        PTZ channel is available or the command could not be written.
-        """
+    def move_continuous(
+        self,
+        mac: str,
+        target: Position,
+        delta: Position,
+        speed: int = ptz.DEFAULT_SPEED,
+    ) -> bool:
+        """Start or update a chained continuous move in small FOV steps."""
         session = self._ptz_session(mac)
         if session is None:
             return False
         with session.move_lock:
-            motion = session.camera.motion
+            if delta.pan == 0 and delta.tilt == 0 and delta.zoom == 0:
+                self._continuous_moves.pop(mac, None)
+                return True
+            if not session.camera.motion.begin(
+                target, continuous=True, supersede=True
+            ):
+                return False
+            if session.camera.motion.activity != 0:
+                self._continuous_moves[mac] = ContinuousMove(
+                    delta=delta,
+                    speed=speed,
+                    deadline=time.monotonic() + CONTINUOUS_MOVE_MAX_SEC,
+                )
+            else:
+                self._continuous_moves.pop(mac, None)
+            try:
+                session.request_many(ptz.PRESET, ptz.move_to(target, speed))
+            except (OSError, ssl.SSLError):
+                self._continuous_moves.pop(mac, None)
+                session.camera.motion.cancel()
+                return False
+            return True
+
+    def _advance_continuous(self, session: Session) -> None:
+        """Chain the next step while a ContinuousMove remains active."""
+        mac = session.camera.mac
+        with session.move_lock:
+            chain = self._continuous_moves.get(mac)
+            if chain is None:
+                return
+            if time.monotonic() >= chain.deadline:
+                self._continuous_moves.pop(mac, None)
+                return
+            camera = session.camera
+            current = camera.motion.position
+            next_target = Position(
+                pan=camera.pan_range.clamp(current.pan + chain.delta.pan),
+                tilt=camera.tilt_range.clamp(current.tilt + chain.delta.tilt),
+                zoom=camera.zoom_range.clamp(current.zoom + chain.delta.zoom),
+                focus=current.focus,
+            )
+            if next_target.same_view_as(current):
+                self._continuous_moves.pop(mac, None)
+                return
+            if not camera.motion.begin(
+                next_target, continuous=True, supersede=True
+            ):
+                self._continuous_moves.pop(mac, None)
+                return
+            try:
+                session.request_many(ptz.PRESET, ptz.move_to(next_target, chain.speed))
+            except (OSError, ssl.SSLError):
+                self._continuous_moves.pop(mac, None)
+                camera.motion.cancel()
+
+    def stop_motion(self, mac: str, pan_tilt: bool = True, zoom: bool = True) -> bool:
+        """Halt an in-flight move by re-targeting the head at its reported pose.
+
+        For a chained ContinuousMove, Stop ends the step chain and lets the
+        small in-flight step finish naturally so the motor never reverses back
+        toward an earlier pose. For a non-continuous move, the controller
+        refreshes GetCurrentPosition first (when the selector loop is running)
+        and re-targets the head at its latest pose.
+        """
+        session = self._ptz_session(mac)
+        if session is None:
+            return False
+        motion = session.camera.motion
+        if not motion.available:
+            return False
+        if (
+            motion.activity != 0
+            and not motion.is_continuous
+            and self._selector is not None
+        ):
+            self._request_acked(
+                session, ptz.GET_POSITION, ptz.get_position(), timeout=0.2
+            )
+        with session.move_lock:
+            chain = self._continuous_moves.get(mac)
+            if chain is not None:
+                new_delta = Position(
+                    pan=0 if pan_tilt else chain.delta.pan,
+                    tilt=0 if pan_tilt else chain.delta.tilt,
+                    zoom=0 if zoom else chain.delta.zoom,
+                    focus=0,
+                )
+                if new_delta.pan == 0 and new_delta.tilt == 0 and new_delta.zoom == 0:
+                    self._continuous_moves.pop(mac, None)
+                else:
+                    chain.delta = new_delta
+            if motion.is_continuous:
+                return True
             was_moving = motion.activity != 0
             hold = motion.halt(pan_tilt, zoom)
             if hold is None:
@@ -1025,6 +1132,7 @@ class Controller:
         preset = session.camera.presets.get(index)
         target = preset.position if preset is not None else None
         with session.move_lock:
+            self._continuous_moves.pop(mac, None)
             if not session.camera.motion.begin(target):
                 return False
             try:
@@ -1101,7 +1209,11 @@ class Controller:
             self.preset_store.save(camera.mac, dict(camera.presets))
 
     def _request_acked(
-        self, session: Session, name: str, payload: dict[str, Any]
+        self,
+        session: Session,
+        name: str,
+        payload: dict[str, Any],
+        timeout: float | None = None,
     ) -> bool | None:
         """Send one request and wait briefly for its reply.
 
@@ -1109,6 +1221,7 @@ class Controller:
         within `preset_ack_timeout`. Never call this from the control loop
         thread, which is the one that would deliver the reply.
         """
+        wait_timeout = self.preset_ack_timeout if timeout is None else timeout
         event = threading.Event()
         replies: list[Envelope] = []
         try:
@@ -1120,7 +1233,7 @@ class Controller:
         except (OSError, ssl.SSLError):
             return False
         try:
-            if not event.wait(self.preset_ack_timeout):
+            if not event.wait(wait_timeout):
                 return None
         finally:
             with self._acks_lock:
