@@ -6,7 +6,6 @@ import { html } from "./components/html.js";
 import { Loading, Toasts } from "./components/common.js";
 import { Locked, Login } from "./components/session.js";
 import { LivePage } from "./components/live.js";
-import { PresetsPage } from "./components/presets.js";
 import { HealthPage } from "./components/health.js";
 import { LogsPage } from "./components/logs.js";
 import { SettingsPage } from "./components/settings.js";
@@ -17,7 +16,6 @@ import {
 
 const VIEWS = [
   ["live", "Live"],
-  ["presets", "Presets"],
   ["health", "Health"],
   ["logs", "Logs"],
   ["settings", "Settings"],
@@ -80,8 +78,6 @@ function Nav() {
 
 function View() {
   switch (route.value.view) {
-    case "presets":
-      return html`<${PresetsPage} />`;
     case "health":
       return html`<${HealthPage} />`;
     case "logs":
