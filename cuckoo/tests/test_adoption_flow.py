@@ -392,6 +392,62 @@ def test_ignored_motor_activity_at_target_releases_the_next_calibration_move() -
     )
 
 
+def test_continuous_move_chains_steps_until_stop_without_reversing() -> None:
+    """ContinuousMove chains short steps on settle and Stop never reverses to start."""
+    ctl, session, wire = _ptz_harness()
+    start = Position(pan=11000, tilt=13000, zoom=0, focus=50)
+    session.camera.motion.update(start, activity=0)
+    step1 = Position(pan=12000, tilt=13000, zoom=0, focus=50)
+    delta = Position(pan=1000, tilt=0, zoom=0, focus=0)
+
+    assert ctl.move_continuous("AABBCCDDEEFF", step1, delta)
+    # First step settled with G5's terminal ignoreActivity=True frame -> chains step 2.
+    ctl._dispatch(
+        session,
+        _from_camera(
+            ptz.EVENT_MOTOR_STATE,
+            {
+                "ignoreActivity": True,
+                "state": {
+                    "activity": 16,
+                    "position": {"pan": 12000, "tilt": 13000, "zoom": 0, "focus": 50},
+                },
+            },
+            8,
+        ),
+    )
+    configs = [
+        m.payload["items"][0]["pan"]
+        for m in wire.sent()
+        if m.function_name == ptz.PRESET and m.payload.get("action") == "config"
+    ]
+    assert configs == [12000, 13000]
+
+    # Stop arrives while step 2 (12000 -> 13000) is in flight: must not send a reverse move_to(12000).
+    sent_before_stop = len(wire.sent())
+    assert ctl.stop_motion("AABBCCDDEEFF")
+    assert len(wire.sent()) == sent_before_stop
+
+    # When step 2 finishes, motion settles to IDLE at 13000 with no step 3 chained.
+    ctl._dispatch(
+        session,
+        _from_camera(
+            ptz.EVENT_MOTOR_STATE,
+            {
+                "ignoreActivity": True,
+                "state": {
+                    "activity": 16,
+                    "position": {"pan": 13000, "tilt": 13000, "zoom": 0, "focus": 50},
+                },
+            },
+            9,
+        ),
+    )
+    assert session.camera.motion.status == "IDLE"
+    assert session.camera.motion.position.pan == 13000
+    assert len(wire.sent()) == sent_before_stop
+
+
 def test_move_is_not_misrouted_to_the_management_channel() -> None:
     ctl, _, wire = _harness()
 

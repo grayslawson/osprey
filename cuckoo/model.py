@@ -195,6 +195,7 @@ class Motion:
     _needs_poll: bool = field(default=False, init=False, repr=False)
     _pan_tilt_pending: bool = field(default=False, init=False, repr=False)
     _zoom_pending: bool = field(default=False, init=False, repr=False)
+    _continuous: bool = field(default=False, init=False, repr=False)
     _connected_once: bool = field(default=False, init=False, repr=False)
     _last_reply_at: float = field(default=0.0, init=False, repr=False)
     _timeouts: int = field(default=0, init=False, repr=False)
@@ -207,6 +208,21 @@ class Motion:
         with self._lock:
             self._expire_if_needed()
             return self.activity == 0
+
+    @property
+    def is_continuous(self) -> bool:
+        """True while a ContinuousMove step is in flight."""
+        with self._lock:
+            self._expire_if_needed()
+            return self.activity != 0 and self._continuous
+
+    def step_origin(self) -> Position:
+        """Base pose for a continuous step, chaining onto an in-flight step."""
+        with self._lock:
+            self._expire_if_needed()
+            if self.activity != 0 and self._continuous and self._target is not None:
+                return self._target
+            return self.position
 
     @property
     def status(self) -> str:
@@ -245,6 +261,7 @@ class Motion:
     def _release(self, settled_at: Position | None) -> None:
         self.activity = 0
         self._target = None
+        self._continuous = False
         self._start_position = None
         self._settled_position = settled_at
         self._seen_activity = False
@@ -319,15 +336,25 @@ class Motion:
             self.updated_at = time.time()
 
     def begin(
-        self, target: Position | None, timeout: float = MOTION_EVENT_TIMEOUT_SEC
+        self,
+        target: Position | None,
+        timeout: float = MOTION_EVENT_TIMEOUT_SEC,
+        *,
+        continuous: bool = False,
+        supersede: bool = False,
     ) -> bool:
-        """Atomically reserve one move; overlapping commands are rejected."""
+        """Atomically reserve one move; overlapping commands are rejected unless superseding."""
         with self._lock:
             self._expire_if_needed()
-            if not self.available or self.activity != 0:
+            if not self.available:
                 return False
+            if self.activity != 0 and not (supersede or self._continuous):
+                return False
+            was_moving = self.activity != 0
+            prev_target = self._target
             self.activity = 1
             self._target = target
+            self._continuous = continuous
             self._start_position = self.position
             self._seen_activity = False
             self._at_target_since = 0.0
@@ -340,6 +367,13 @@ class Motion:
                 self._zoom_pending = True
             else:
                 self._set_pending_axes(target, self.position)
+                if (
+                    was_moving
+                    and prev_target is not None
+                    and not self._pan_tilt_pending
+                    and not self._zoom_pending
+                ):
+                    self._set_pending_axes(target, prev_target)
                 if not self._pan_tilt_pending and not self._zoom_pending:
                     # A move to where the head already is has nothing to wait
                     # for. Holding the reservation would report IDLE while
@@ -371,6 +405,7 @@ class Motion:
                 return None
             here = self.position
             target = self._target
+            self._continuous = False
             if target is None:
                 pan_tilt = zoom = True
             hold = Position(
@@ -463,15 +498,19 @@ class Motion:
                 )
                 self._release(position)
             elif activity != 0:
-                if (
-                    self._target is None
-                    and self._settled_position is not None
-                    and position.same_view_as(self._settled_position)
+                if self._target is None and (
+                    ignore_activity
+                    or (
+                        self._settled_position is not None
+                        and position.same_view_as(self._settled_position)
+                    )
                 ):
-                    # The G5 repeats ignoreActivity motor frames after a target
-                    # has already been confirmed. They are lens noise, not a new
-                    # reservation, and must not make the next move fail busy.
+                    # The G5 emits ignoreActivity=true / activity=16 on terminal
+                    # motor frames and repeats them after a target or halt has
+                    # settled. They are lens noise, not a new reservation, and
+                    # must not make the next move fail busy.
                     self.activity = 0
+                    self._settled_position = position
                     self._pan_tilt_pending = False
                     self._zoom_pending = False
                     self.updated_at = time.time()

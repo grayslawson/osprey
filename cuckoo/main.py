@@ -478,6 +478,10 @@ def build(options: Options) -> Stack:
             mac = selected_mac()
             return control.move(mac, position, speed) if mac else False
 
+        def selected_move_continuous(target: Position, delta: Position, speed: int) -> bool:
+            mac = selected_mac()
+            return control.move_continuous(mac, target, delta, speed) if mac else False
+
         def selected_goto(index: int, speed: int) -> bool:
             mac = selected_mac()
             return control.goto_preset(mac, index, speed) if mac else False
@@ -546,6 +550,7 @@ def build(options: Options) -> Stack:
             snapshot=selected_snapshot,
             move_absolute=selected_move,
             move_relative=selected_move,
+            move_continuous=selected_move_continuous,
             goto_preset=selected_goto,
             set_preset=selected_set,
             remove_preset=selected_remove,
