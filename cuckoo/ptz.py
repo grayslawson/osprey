@@ -13,6 +13,7 @@ from model import AxisRange, Camera, Position, Preset
 PRESET: Final = "Preset"
 ENABLE_PTZ: Final = "EnablePtzControl"
 DISABLE_PTZ: Final = "DisablePtzControl"
+REBOOT: Final = "Reboot"
 GET_POSITION: Final = "GetCurrentPosition"
 EVENT_MOTOR_STATE: Final = "EventMotorState"
 
@@ -58,6 +59,11 @@ def enable(controller_url: str) -> dict[str, Any]:
 
 
 def disable() -> dict[str, Any]:
+    return {}
+
+
+def reboot() -> dict[str, Any]:
+    """Ask the camera to reboot when its internal PTZ daemon is wedged."""
     return {}
 
 
