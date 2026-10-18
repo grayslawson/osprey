@@ -48,6 +48,9 @@ PTZ_RECOVERY_CALLBACK_TIMEOUT_SEC: Final = 15.0
 PTZ_RECOVERY_INITIAL_BACKOFF_SEC: Final = 2.0
 PTZ_RECOVERY_MAX_BACKOFF_SEC: Final = 30.0
 PTZ_RECOVERY_MAX_ATTEMPTS: Final = 5
+# Pause briefly between DisablePtzControl and EnablePtzControl so the camera
+# tears down its previous ptz1 WebSocket client before starting a new handshake.
+PTZ_RECOVERY_DISABLE_SETTLE_SEC: Final = 0.2
 # An exhausted recovery is not permanent: a camera that rebooted or recovered
 # its network gets another bounded sequence after this long.
 PTZ_RECOVERY_REARM_SEC: Final = 300.0
@@ -179,6 +182,17 @@ class Session:
     def ping(self) -> None:
         with self._write_lock:
             self._write_frame(b"", ws.Opcode.PING)
+
+    def close_frame(self) -> None:
+        """Send a best-effort WebSocket CLOSE frame before tearing down the socket."""
+        with self._write_lock:
+            if self.broken or self.closing:
+                return
+            self.closing = True
+            try:
+                ws.send(self.sock, b"", ws.Opcode.CLOSE)
+            except OSError:
+                self.broken = True
 
     def pong(self, payload: bytes) -> None:
         with self._write_lock:
@@ -333,8 +347,30 @@ class Controller:
                 self._drain_ready(sel)
                 self._tick(sel)
         finally:
+            self._close_sessions(sel)
             sel.close()
             listener.close()
+
+    def _close_sessions(self, sel: selectors.BaseSelector) -> None:
+        """Cleanly close open camera sessions on controller shutdown."""
+        with self._sessions_lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
+            if not session.is_ptz_channel and session.camera.is_ptz:
+                try:
+                    session.request(ptz.DISABLE_PTZ, ptz.disable())
+                except (OSError, ssl.SSLError):
+                    pass
+            session.close_frame()
+            try:
+                sel.unregister(session.sock)
+            except (KeyError, ValueError):
+                pass
+            try:
+                session.sock.close()
+            except OSError:
+                pass
 
     def _spawn_accept(self, listener: socket.socket, context: ssl.SSLContext) -> None:
         try:
@@ -479,6 +515,7 @@ class Controller:
                         None,
                     )
         if session is not None:
+            session.close_frame()
             log.info("%s channel closed", session.upgrade.subprotocol or "?")
         if recovery_control is not None:
             self._request_ptz_recovery(recovery_control, time.monotonic())
@@ -743,11 +780,15 @@ class Controller:
                 recovery.exhausted_at = now
                 log.error(
                     "PTZ recovery timed out: mac=%s after %d attempts; "
-                    "retrying in %.0fs (or use Recover PTZ)",
+                    "requesting camera reboot and retrying in %.0fs (or use Recover PTZ)",
                     mac,
                     recovery.attempts,
                     PTZ_RECOVERY_REARM_SEC,
                 )
+                try:
+                    session.request(ptz.REBOOT, ptz.reboot())
+                except (OSError, ssl.SSLError):
+                    pass
                 continue
             recovery.attempts += 1
             log.warning(
@@ -758,6 +799,8 @@ class Controller:
             )
             try:
                 session.request(ptz.DISABLE_PTZ, ptz.disable())
+                if PTZ_RECOVERY_DISABLE_SETTLE_SEC > 0:
+                    time.sleep(PTZ_RECOVERY_DISABLE_SETTLE_SEC)
                 session.request(ptz.ENABLE_PTZ, ptz.enable(self._ptz_url()))
             except (OSError, ssl.SSLError):
                 # The control socket will be dropped by the read loop; do not
