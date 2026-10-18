@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { html } from "./html.js";
 import { Badge, Card, PTZ_LABEL, toneForPtz } from "./common.js";
-import { act, errorText } from "../actions.js";
-import { ApiError, cameraPath, pageUrl, post } from "../api.js";
+import { act, errorText, refreshState } from "../actions.js";
+import { ApiError, cameraPath, del, pageUrl, post, put } from "../api.js";
 import { cam, cameras, snapshot, toast } from "../store.js";
 
 const SNAPSHOT_MS = 5000;
@@ -428,16 +428,93 @@ function Streams({ streams }) {
     </${Card}>`;
 }
 
-function QuickPresets({ presets }) {
-  const list = (presets || []).slice(0, 9);
-  if (!list.length) return null;
+function PresetsPanel({ presets, ptz }) {
+  const list = presets || [];
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const ptzAvailable = !!ptz && !!ptz.supported && ptz.status !== "UNKNOWN";
+
+  async function save(event) {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Enter a name for this position.");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    const result = await act(
+      camPost("/presets", { name: trimmed }),
+      (r) => `Saved ${r.preset ? r.preset.name : trimmed}.`,
+    );
+    setSaving(false);
+    if (result) {
+      setName("");
+      await refreshState().catch(() => {});
+    }
+  }
+
+  async function update(preset) {
+    const result = await act(
+      put(cameraPath(cam.value, `/presets/${preset.token}`)),
+      `Updated ${preset.name} to the current view.`,
+    );
+    if (result) await refreshState().catch(() => {});
+  }
+
+  async function remove(preset) {
+    if (!window.confirm(`Delete the preset "${preset.name}"? This cannot be undone.`)) return;
+    const result = await act(
+      del(cameraPath(cam.value, `/presets/${preset.token}`)),
+      `Deleted ${preset.name}.`,
+    );
+    if (result) await refreshState().catch(() => {});
+  }
+
+  if (!ptz || !ptz.supported) return null;
+
   return html`
-    <${Card} id="quick-presets" title="Presets">
-      <div class="row">
-        ${list.map((preset, index) => html`<button type="button" key=${preset.token}
-          aria-label=${`Go to preset ${preset.name} (key ${index + 1})`}
-          onClick=${() => act(camPost(`/presets/${preset.token}/goto`), `Going to ${preset.name}.`)}>
-          <span class="mono">${index + 1}</span> ${preset.name}</button>`)}
+    <${Card} id="live-presets" title="Presets">
+      <div class="stack">
+        <form class="row" onSubmit=${save} noValidate>
+          <input name="preset-name" maxLength="64" value=${name} required
+            placeholder="Preset name (e.g. Driveway)"
+            aria-label="Preset name"
+            aria-describedby="preset-error" aria-invalid=${error ? "true" : "false"}
+            onInput=${(event) => setName(event.currentTarget.value)} />
+          <button class="primary" type="submit" disabled=${!ptzAvailable || saving}>
+            ${saving ? "Saving…" : "Save current view"}</button>
+        </form>
+        ${error ? html`<p id="preset-error" class="field-error" role="alert">${error}</p>` : null}
+        <p class="muted">Move the camera in the live view above, then save a new preset or update an existing one. Keys 1–9 jump to the first nine presets.</p>
+        ${list.length === 0
+          ? html`<p class="muted">No positions saved yet.</p>`
+          : html`<ul class="preset-grid" role="list">
+              ${list.map((preset, index) => html`
+                <li class="preset" key=${preset.token}>
+                  <div class="thumb">
+                    ${preset.thumbnail
+                      ? html`<img alt="" src=${pageUrl(cameraPath(cam.value, `/presets/${preset.token}/thumbnail.jpg`))} />`
+                      : html`<span>No thumbnail</span>`}
+                  </div>
+                  <div class="body">
+                    <div class="row">
+                      ${index < 9 ? html`<span class="pill mono">#${index + 1}</span>` : null}
+                      <h3>${preset.name}</h3>
+                    </div>
+                    ${preset.home ? html`<span class="pill tone-ok">Home · Frigate return target</span>` : null}
+                  </div>
+                  <div class="actions">
+                    <button type="button" class="primary"
+                      aria-label=${`Go to preset ${preset.name}${index < 9 ? ` (key ${index + 1})` : ""}`}
+                      onClick=${() => act(camPost(`/presets/${preset.token}/goto`), `Going to ${preset.name}.`)}
+                      disabled=${!ptz.supported}>Go to</button>
+                    <button type="button" onClick=${() => update(preset)} disabled=${!ptzAvailable}>Update to current view</button>
+                    <button type="button" class="danger" onClick=${() => remove(preset)} disabled=${!ptz.supported}>Delete</button>
+                  </div>
+                </li>`)}
+            </ul>`}
       </div>
     </${Card}>`;
 }
@@ -471,12 +548,12 @@ export function LivePage() {
           Waiting for the camera to connect and be adopted. Live video starts after that.</div>` : null}
         <${Stage} name=${name} ptz=${ptz} onHelp=${() => setHelpOpen(true)} announce=${setNote} />
         <p class="sr-only" aria-live="polite">${note}</p>
+        <${PresetsPanel} presets=${state.presets} ptz=${ptz} />
         <${Streams} streams=${state.streams} />
       </div>
       <aside class="stack" aria-label="Controls">
         <${PtzHealth} ptz=${ptz} />
         ${ptz && ptz.supported ? html`<${Card} id="controls-title" title="Controls"><${Controls} onHelp=${() => setHelpOpen(true)} /></${Card}>` : null}
-        <${QuickPresets} presets=${state.presets} />
       </aside>
       <dialog ref=${dialog} aria-labelledby="help-title" onClose=${() => setHelpOpen(false)}>
         <h2 id="help-title">Keyboard shortcuts</h2>

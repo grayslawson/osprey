@@ -538,6 +538,24 @@ def test_watchdog_health_signal_is_surfaced(served: Any) -> None:
     watchdog = next(c for c in checks if c["id"] == "ptz_watchdog")
     assert watchdog == {"id": "ptz_watchdog", "label": "PTZ watchdog", "status": "bad",
                         "detail": "no motor reply for 90 s", "actions": ["recover"]}
+    service.backend.ptz_health = lambda: {
+        "ptz": True,
+        "channel": "up",
+        "state": "IDLE",
+        "error": None,
+        "healthy": True,
+        "last_motor_reply_age_sec": 4.2,
+        "unanswered_position_requests": 0,
+        "motion_timeouts": 0,
+        "watchdog_recycles": 1,
+        "recovery": {"active": False, "attempts": 0, "max_attempts": 3, "waiting_for_callback": False, "exhausted": False},
+    }
+    checks = Client(server).json("GET", "/api/v1/cameras/default/health")[1]["checks"]
+    watchdog = next(c for c in checks if c["id"] == "ptz_watchdog")
+    assert watchdog["status"] == "ok"
+    assert "last motor reply 4.2 s ago" in watchdog["detail"]
+    assert "1 recycle(s)" in watchdog["detail"]
+    assert watchdog["actions"] == []
 
 
 # --------------------------------------------------------------- presets
