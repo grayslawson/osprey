@@ -210,8 +210,39 @@ def health_checks(services: "Services") -> list[dict[str, object]]:
         except Exception:  # pragma: no cover - a diagnostic must never break the API
             value = None
         if isinstance(value, dict):
-            check("ptz_watchdog", "PTZ watchdog", str(value.get("status", "unknown")),
-                  str(value.get("detail", "")), tuple(str(a) for a in value.get("actions", ()) or ()))
+            if "status" in value:
+                check("ptz_watchdog", "PTZ watchdog", str(value.get("status", "unknown")),
+                      str(value.get("detail", "")), tuple(str(a) for a in value.get("actions", ()) or ()))
+            elif "healthy" in value and (value.get("ptz") is not False or value.get("error") == "no camera"):
+                rec = value.get("recovery") if isinstance(value.get("recovery"), dict) else {}
+                recycles = int(value.get("watchdog_recycles", 0) or 0)
+                unanswered = int(value.get("unanswered_position_requests", 0) or 0)
+                age = value.get("last_motor_reply_age_sec")
+                if value.get("healthy"):
+                    w_status = "warn" if unanswered > 0 else "ok"
+                    parts = [f"last motor reply {age} s ago" if age is not None else "channel active"]
+                    if unanswered:
+                        parts.append(f"{unanswered} unanswered poll(s)")
+                    if recycles:
+                        parts.append(f"{recycles} recycle(s)")
+                    w_detail = f"Healthy ({', '.join(parts)})."
+                    w_actions: tuple[str, ...] = ("recover",) if unanswered > 0 else ()
+                else:
+                    w_status = "warn" if rec.get("active") and not rec.get("exhausted") else "bad"
+                    if rec.get("active"):
+                        w_detail = (
+                            f"Recovering PTZ channel "
+                            f"(attempt {rec.get('attempts', 0)}/{rec.get('max_attempts', 0)})."
+                        )
+                    elif value.get("error"):
+                        w_detail = f"PTZ unhealthy: {value.get('error')}."
+                    else:
+                        w_detail = (
+                            f"PTZ channel {value.get('channel', 'down')}; "
+                            f"state {value.get('state', 'UNKNOWN')}."
+                        )
+                    w_actions = ("recover",)
+                check("ptz_watchdog", "PTZ watchdog", w_status, w_detail, w_actions)
     streams = stream_stats(services)
     for name, stat in streams.items():
         if stat["playable"]:
