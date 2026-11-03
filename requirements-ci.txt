@@ -1,7 +1,7 @@
 # Pinned CI and development tools. Bumped by Dependabot (pip ecosystem).
 build==1.6.1
 git-cliff==2.14.2
-hatchling==1.32.4
+hatchling==1.33.0
 mypy==2.4.0
 paho-mqtt==2.1.0
 pytest==9.1.1
