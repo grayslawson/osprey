@@ -214,7 +214,9 @@ def health_checks(services: "Services") -> list[dict[str, object]]:
                 check("ptz_watchdog", "PTZ watchdog", str(value.get("status", "unknown")),
                       str(value.get("detail", "")), tuple(str(a) for a in value.get("actions", ()) or ()))
             elif "healthy" in value and (value.get("ptz") is not False or value.get("error") == "no camera"):
-                rec = value.get("recovery") if isinstance(value.get("recovery"), dict) else {}
+                rec = value.get("recovery")
+                if not isinstance(rec, dict):
+                    rec = {}
                 recycles = int(value.get("watchdog_recycles", 0) or 0)
                 unanswered = int(value.get("unanswered_position_requests", 0) or 0)
                 age = value.get("last_motor_reply_age_sec")
@@ -1071,10 +1073,12 @@ class WebApp:
             h.wfile.flush()
 
         logs = services.logs
+        # Take the log cursor before the state snapshot: a record logged while
+        # the snapshot is built or sent is then delivered, not skipped.
+        seq = logs.last_seq if last_seq is None else last_seq
         state = self.state(camera_id, services)
         write(b"retry: 3000\n\n")
         write(sse_frame("state", state))
-        seq = logs.last_seq if last_seq is None else last_seq
         last_ptz = state["ptz"]
         last_health = state["health"]
         last_presets = state["presets"]

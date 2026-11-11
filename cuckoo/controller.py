@@ -54,6 +54,13 @@ PTZ_RECOVERY_DISABLE_SETTLE_SEC: Final = 0.2
 # An exhausted recovery is not permanent: a camera that rebooted or recovered
 # its network gets another bounded sequence after this long.
 PTZ_RECOVERY_REARM_SEC: Final = 300.0
+# Each further exhaustion doubles the re-arm wait up to this ceiling; a motor
+# reply (camera healthy again) resets it.
+PTZ_RECOVERY_REARM_MAX_SEC: Final = 3600.0
+# A reboot is the last resort for a wedged PTZ daemon (video may still work):
+# at most this many requests per rolling hour per camera.
+REBOOT_MAX_PER_HOUR: Final = 2
+REBOOT_WINDOW_SEC: Final = 3600.0
 # How long a preset write waits for the camera's acknowledgement. The G5's
 # reply shape for `Preset` config is not fully characterised, so a missing ack
 # is logged but not treated as a refusal; an explicit error reply is.
@@ -80,12 +87,16 @@ class PtzWatchdog:
     process has stopped answering. Socket liveness therefore proves nothing:
     only a motor-state push or a GetCurrentPosition reply does. The ptz1 socket
     is recycled, so the bounded Disable/Enable recovery re-establishes it, when
-    either `max_unanswered` position requests have gone unanswered, or the
-    oldest unanswered request is `reply_timeout_sec` old (silence).
+    both `max_unanswered` position requests have gone unanswered and the
+    oldest has been silent for `min_silence_sec` (a camera mid-move or booting
+    answers late, and probes arrive every couple of seconds), or the oldest
+    unanswered request is `reply_timeout_sec` old (silence alone). The first
+    path is skipped while video is flowing; the silence path never is.
     """
 
     reply_timeout_sec: float = 30.0
     max_unanswered: int = 3
+    min_silence_sec: float = 10.0
     # While state is UNKNOWN (motor timeout, fresh channel) or a request is
     # outstanding, re-ask at most this often.
     probe_interval_sec: float = 2.0
@@ -96,6 +107,8 @@ class PtzWatchdog:
     def __post_init__(self) -> None:
         if not 0.5 <= self.reply_timeout_sec <= 300:
             raise ValueError("ptz watchdog reply timeout must be 0.5..300 s")
+        if not 0 <= self.min_silence_sec <= 300:
+            raise ValueError("ptz watchdog min silence must be 0..300 s")
         if not 1 <= self.max_unanswered <= 20:
             raise ValueError("ptz watchdog max_unanswered must be 1..20")
         if not 0.1 <= self.probe_interval_sec <= 60:
@@ -123,6 +136,7 @@ class PtzRecovery:
     next_attempt_at: float = 0.0
     exhausted: bool = False
     exhausted_at: float = 0.0
+    rearm_sec: float = PTZ_RECOVERY_REARM_SEC
 
 
 @dataclass
@@ -319,6 +333,12 @@ class Controller:
         # but never answers is backed off rather than recycled every 5 s.
         self._watchdog_strikes: dict[str, int] = {}
         self._watchdog_recycles: dict[str, int] = {}
+        # Reboot throttle: request times (monotonic) in the rolling window, the
+        # next re-arm wait, and lifetime counters for /metrics.
+        self._reboot_times: dict[str, list[float]] = {}
+        self._rearm_sec: dict[str, float] = {}
+        self.reboot_requests_total = 0
+        self.reboot_suppressed_total = 0
         self._recover_requests: queue.Queue[str] = queue.Queue()
         self._acks: dict[int, tuple[threading.Event, list[Envelope]]] = {}
         self._acks_lock = threading.Lock()
@@ -628,6 +648,7 @@ class Controller:
                     ignore_activity=bool(message.payload.get("ignoreActivity")),
                 )
                 session.note_motor_reply()
+                self._rearm_sec.pop(session.camera.mac, None)
                 if self._watchdog_strikes.pop(session.camera.mac, 0) or was_unknown:
                     log.warning("PTZ motor state fresh again: mac=%s", session.camera.mac)
                 if name == ptz.GET_POSITION and session.is_ptz_channel:
@@ -763,10 +784,10 @@ class Controller:
                 del self._ptz_recovery[mac]
                 continue
             if recovery.exhausted:
-                if now - recovery.exhausted_at < PTZ_RECOVERY_REARM_SEC:
+                if now - recovery.exhausted_at < recovery.rearm_sec:
                     continue
                 log.warning(
-                    "PTZ recovery re-armed after %.0fs: mac=%s", PTZ_RECOVERY_REARM_SEC, mac
+                    "PTZ recovery re-armed after %.0fs: mac=%s", recovery.rearm_sec, mac
                 )
                 self._watchdog_strikes.pop(mac, None)
                 recovery.exhausted = False
@@ -792,17 +813,16 @@ class Controller:
             if recovery.attempts >= PTZ_RECOVERY_MAX_ATTEMPTS:
                 recovery.exhausted = True
                 recovery.exhausted_at = now
+                recovery.rearm_sec = self._rearm_sec.get(mac, PTZ_RECOVERY_REARM_SEC)
+                self._rearm_sec[mac] = min(recovery.rearm_sec * 2, PTZ_RECOVERY_REARM_MAX_SEC)
                 log.error(
                     "PTZ recovery timed out: mac=%s after %d attempts; "
-                    "requesting camera reboot and retrying in %.0fs (or use Recover PTZ)",
+                    "retrying in %.0fs (or use Recover PTZ)",
                     mac,
                     recovery.attempts,
-                    PTZ_RECOVERY_REARM_SEC,
+                    recovery.rearm_sec,
                 )
-                try:
-                    session.request(ptz.REBOOT, ptz.reboot())
-                except (OSError, ssl.SSLError):
-                    pass
+                self._maybe_reboot(session, mac, now)
                 continue
             recovery.attempts += 1
             log.warning(
@@ -822,6 +842,25 @@ class Controller:
                 recovery.next_attempt_at = now + PTZ_RECOVERY_INITIAL_BACKOFF_SEC
                 continue
             self._wait_for_ptz_callback(mac, now)
+
+    def _maybe_reboot(self, session: Session, mac: str, now: float) -> None:
+        """Ask the camera to reboot unless the hourly cap is reached."""
+        recent = [t for t in self._reboot_times.get(mac, []) if now - t < REBOOT_WINDOW_SEC]
+        self._reboot_times[mac] = recent
+        if len(recent) >= REBOOT_MAX_PER_HOUR:
+            self.reboot_suppressed_total += 1
+            log.warning(
+                "camera reboot skipped: mac=%s: already requested %d reboot(s) in the last hour (cap %d)",
+                mac, len(recent), REBOOT_MAX_PER_HOUR,
+            )
+            return
+        self._reboot_times[mac].append(now)
+        self.reboot_requests_total += 1
+        log.error("requesting camera reboot: mac=%s", mac)
+        try:
+            session.request(ptz.REBOOT, ptz.reboot())
+        except (OSError, ssl.SSLError):
+            pass
 
     # --------------------------------------------------------------------- timers
 
@@ -868,8 +907,13 @@ class Controller:
             motion = session.camera.motion
             outstanding = session.unanswered_polls
             silent_for = now - session.position_requested_at if outstanding else 0.0
-            if outstanding >= config.max_unanswered or (
-                outstanding > 0 and silent_for >= config.reply_timeout_sec
+            if outstanding > 0 and (
+                silent_for >= config.reply_timeout_sec
+                or (
+                    outstanding >= config.max_unanswered
+                    and silent_for >= config.min_silence_sec
+                    and not self._video_flowing()
+                )
             ):
                 self._recycle_ptz(
                     session,
@@ -895,6 +939,10 @@ class Controller:
                 session.request_position(now)
             except (OSError, ssl.SSLError) as exc:
                 log.warning("PTZ position probe failed: mac=%s: %s", session.camera.mac, exc)
+
+    def _video_flowing(self) -> bool:
+        """True while any track is live (a frame within media.STALE_AFTER)."""
+        return self.hub is not None and any(s.live for s in list(self.hub.streams.values()))
 
     def _recycle_ptz(
         self,
@@ -1312,6 +1360,10 @@ class Controller:
         except (OSError, ssl.SSLError):
             return False
         return True
+
+    def is_connected(self, mac: str) -> bool:
+        """Whether the camera's management socket is up."""
+        return self._control_session(mac) is not None
 
     def _control_session(self, mac: str) -> Session | None:
         """The management socket for a camera — where settings changes go (not PTZ)."""

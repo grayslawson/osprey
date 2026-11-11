@@ -371,7 +371,7 @@ def build(options: Options) -> Stack:
         )
         if not rtsp_auth.users:
             raise ValueError("RTSP authentication is required but no user holds the media role")
-    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth, bind_host=options.bind_host)
+    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth, bind_host=options.bind_host, known_tracks=options.tracks)
 
     control = Controller(
         cert=options.cert,
@@ -391,6 +391,7 @@ def build(options: Options) -> Stack:
         auto_home=bool(options.ptz.get("auto_home", True)),
         watchdog=PtzWatchdog(
             reply_timeout_sec=float(options.ptz.get("reply_timeout_sec", 30.0)),
+            min_silence_sec=float(options.ptz.get("min_silence_sec", 10.0)),
             max_unanswered=int(options.ptz.get("max_unanswered", 3)),
             probe_interval_sec=float(options.ptz.get("probe_interval_sec", 2.0)),
             idle_probe_sec=float(options.ptz.get("idle_probe_sec", 60.0)),
@@ -560,6 +561,11 @@ def build(options: Options) -> Stack:
             set_encoder=selected_encoder,
             recover_ptz=selected_recover,
             ptz_health=selected_health,
+            camera_connected=lambda: (mac := selected_mac()) is not None and control.is_connected(mac),
+            reboot_counters=lambda: {
+                "requests": control.reboot_requests_total,
+                "suppressed": control.reboot_suppressed_total,
+            },
             telemetry=lambda: rtsp.telemetry(hub, stream),
             max_speed=options.ptz_max_speed,
         )

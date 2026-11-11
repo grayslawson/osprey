@@ -41,9 +41,9 @@ test camera/NVR interoperability before inserting it into the camera path.
 
 ### Health endpoint
 
-`GET /healthz` on the ONVIF port is intentionally unauthenticated so monitoring
-can poll it. It returns PTZ state, error text, reply ages, and recovery counters
-only; it never includes MAC or IP addresses, preset names, or credentials. It
+`GET /healthz` and `GET /metrics` on the ONVIF port are intentionally unauthenticated so monitoring
+can poll it. They return PTZ state, error text, reply and frame ages, and recovery
+counters only; it never includes MAC or IP addresses, preset names, or credentials. They
 cannot change state. Restrict the ONVIF port as described above if even that
 operational state should not be visible to the LAN.
 
