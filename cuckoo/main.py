@@ -391,6 +391,7 @@ def build(options: Options) -> Stack:
         auto_home=bool(options.ptz.get("auto_home", True)),
         watchdog=PtzWatchdog(
             reply_timeout_sec=float(options.ptz.get("reply_timeout_sec", 30.0)),
+            min_silence_sec=float(options.ptz.get("min_silence_sec", 10.0)),
             max_unanswered=int(options.ptz.get("max_unanswered", 3)),
             probe_interval_sec=float(options.ptz.get("probe_interval_sec", 2.0)),
             idle_probe_sec=float(options.ptz.get("idle_probe_sec", 60.0)),

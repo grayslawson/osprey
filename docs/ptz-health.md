@@ -37,9 +37,10 @@ answering, the state stayed stuck until Osprey was restarted.
 Osprey counts every position request it sends on `ptz1`, whether it came from
 the watchdog or from an ONVIF `GetStatus` call made by Frigate. Any motor reply
 or push resets the count. Osprey recycles the `ptz1` socket when
-`max_unanswered` requests (default 3) have gone unanswered, or when the oldest
-unanswered request is more than `reply_timeout_sec` old (default 30 s of
-silence). The existing recovery then
+`max_unanswered` requests (default 3) have gone unanswered **and** the oldest
+has been silent for at least `min_silence_sec` (default 10 s) while no video
+track is live, or when the oldest unanswered request is more than
+`reply_timeout_sec` old (default 30 s of silence, regardless of video). The existing recovery then
 sends Disable/Enable PTZ on the management channel. Recovery retries are
 bounded and back off exponentially (up to 5 attempts, at most 30 s apart). A
 camera that reconnects but still never answers uses up the same attempt
@@ -58,6 +59,7 @@ All of these values can be set in `cuckoo.json`:
   "ptz": {
     "auto_home": true,
     "reply_timeout_sec": 30.0,
+    "min_silence_sec": 10.0,
     "max_unanswered": 3,
     "probe_interval_sec": 2.0,
     "idle_probe_sec": 60.0,

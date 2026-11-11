@@ -13,6 +13,7 @@ import logging
 import selectors
 import threading
 import time
+import types
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ import pytest
 
 import adoption
 import controller
+import media
 import model
 import ptz
 from model import Camera, Position, Preset
@@ -273,16 +275,18 @@ def test_watchdog_recycles_after_three_unanswered_position_requests(
     now = time.monotonic()
     for offset in (0.0, 2.0):
         ptz_session.request_position(now + offset)
-    ctl._watch_ptz(now + 4.5)
+    ctl._watch_ptz(now + 10.5)
     assert _live(ctl, ptz_wire), "two unanswered requests are not yet enough"
 
     ptz_session.request_position(now + 4.0)
     ctl._watch_ptz(now + 4.5)
+    assert _live(ctl, ptz_wire), "three probes in a few seconds is a busy camera, not a dead one"
+    ctl._watch_ptz(now + ctl.watchdog.min_silence_sec)
 
     assert not _live(ctl, ptz_wire)
     assert control.camera.motion.status == "UNKNOWN"
     assert "not responding" in (control.camera.motion.error or "")
-    ctl._recover_ptz(now + 5.1)
+    ctl._recover_ptz(now + 11.1)
     assert control_wire.names() == [ptz.DISABLE_PTZ, ptz.ENABLE_PTZ]
     health = ctl.ptz_health(mac)
     assert health["watchdog_recycles"] == 1
@@ -302,6 +306,22 @@ def test_watchdog_recycles_after_thirty_seconds_of_silence() -> None:
     ctl._watch_ptz(now + ctl.watchdog.reply_timeout_sec)
     assert not _live(ctl, ptz_wire)
     assert ctl.ptz_health(control.camera.mac)["watchdog_recycles"] == 1
+
+
+def test_flowing_video_defers_the_unanswered_count_but_not_the_silence_bound() -> None:
+    hub = media.Hub()
+    ctl, control, _, ptz_session, ptz_wire = _ptz_pair(hub=hub)
+    stream = hub.stream("video1")
+    stream.parameters = types.SimpleNamespace(complete=True)  # type: ignore[assignment]
+    stream.last_frame_at = time.monotonic()
+    assert stream.live
+    now = time.monotonic()
+    for offset in (0.0, 2.0, 4.0):
+        ptz_session.request_position(now + offset)
+    ctl._watch_ptz(now + 11.0)
+    assert _live(ctl, ptz_wire), "video is flowing: count plus short silence is not enough"
+    ctl._watch_ptz(now + ctl.watchdog.reply_timeout_sec)
+    assert not _live(ctl, ptz_wire), "30 s of silence recycles even with video"
 
 
 def test_rapid_ondemand_polls_from_frigate_coalesce() -> None:
@@ -352,11 +372,11 @@ def test_repeated_recycles_back_off_and_share_the_attempt_budget() -> None:
     for offset in (0.0, 2.0, 4.0):
         ptz_session.request_position(now + offset)
 
-    ctl._watch_ptz(now + 6)
+    ctl._watch_ptz(now + 11)
 
     recovery = ctl._ptz_recovery[mac]
     assert recovery.attempts == 2
-    assert recovery.next_attempt_at > now + 6 + controller.PTZ_RECOVERY_INITIAL_BACKOFF_SEC
+    assert recovery.next_attempt_at > now + 11 + controller.PTZ_RECOVERY_INITIAL_BACKOFF_SEC
 
 
 def test_a_reply_after_recovery_resets_the_strike_count() -> None:
