@@ -312,7 +312,7 @@ def test_flowing_video_defers_the_unanswered_count_but_not_the_silence_bound() -
     hub = media.Hub()
     ctl, control, _, ptz_session, ptz_wire = _ptz_pair(hub=hub)
     stream = hub.stream("video1")
-    stream.parameters = types.SimpleNamespace(complete=True)  # type: ignore[assignment]
+    stream.parameters = types.SimpleNamespace(complete=True)
     stream.last_frame_at = time.monotonic()
     assert stream.live
     now = time.monotonic()
@@ -454,7 +454,7 @@ def test_a_motor_reply_resets_the_rearm_backoff() -> None:
 def test_no_reboot_while_video_is_flowing() -> None:
     hub = media.Hub()
     stream = hub.stream("video1")
-    stream.parameters = types.SimpleNamespace(complete=True)  # type: ignore[assignment]
+    stream.parameters = types.SimpleNamespace(complete=True)
     stream.last_frame_at = time.monotonic()
     ctl, control, wire = _harness()
     ctl.hub = hub

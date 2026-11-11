@@ -1366,6 +1366,10 @@ class Controller:
             return False
         return True
 
+    def is_connected(self, mac: str) -> bool:
+        """Whether the camera's management socket is up."""
+        return self._control_session(mac) is not None
+
     def _control_session(self, mac: str) -> Session | None:
         """The management socket for a camera — where settings changes go (not PTZ)."""
         with self._sessions_lock:
