@@ -631,6 +631,11 @@ def build(options: Options) -> Stack:
             bind_host=options.bind_host,
         )
         read_only_services.port = read_only_north.port
+        log.warning(
+            "read-only ONVIF persona on :%d for an NVR such as UniFi Protect. If Protect runs on "
+            "this network, block the physical camera from it first: `osprey protect-guard` "
+            "(docs/protect-guard.md)", read_only_north.port,
+        )
     movement_gate = MovementGate()
 
     def mqtt_result(status: HTTPStatus, result: dict[str, object]) -> dict[str, object]:

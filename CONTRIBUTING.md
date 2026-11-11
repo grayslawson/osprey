@@ -39,8 +39,10 @@ Security reports should follow [`SECURITY.md`](SECURITY.md), not a public issue.
 
 ## Releasing
 
-Releases are tag-driven. The tag must be `vMAJOR.MINOR.PATCH`, equal to the
-`VERSION` file, and point at a commit on `main`.
+Releases are tag-driven. The tag must be `vMAJOR.MINOR.PATCH`, or a PEP 440
+pre-release such as `v0.9.0b1`, equal to the `VERSION` file, and point at a
+commit on `main`. Pre-release tags publish a GitHub pre-release, PyPI
+pre-release and image tags `0.9.0b1`/`v0.9.0b1`, without moving `latest`.
 
 1. Set `VERSION`, and the matching `version:` in `homeassistant/addon/osprey/config.yaml`,
    `packaging/homebrew/osprey.rb`, `pyunifiwire/pyproject.toml` and

@@ -1,5 +1,12 @@
 # Security policy
 
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| 0.9.x (beta) | Yes, latest pre-release only |
+| < 0.9 | No |
+
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities through the repository's GitHub

@@ -4,6 +4,8 @@
 #   run [FLAGS...]     start the controller (default)
 #   doctor [OPTS...]   read-only deployment diagnostics
 #   probe [OPTS...]    read-only data bundle for an unsupported camera model
+#   protect-guard ...  check/create the UniFi firewall policy that keeps
+#                      Protect from adopting the physical camera
 #   healthcheck        exit 0 when GET /healthz on the ONVIF listener returns 200
 #   version            print the packaged Osprey version
 #   -<flag> ...        shorthand for `run -<flag> ...`
@@ -70,6 +72,7 @@ case "$1" in
     -*) run_controller "$@" ;;
     doctor) shift; exec /opt/osprey/scripts/osprey-doctor.sh --config "$OSPREY_CONFIG_FILE" "$@" ;;
     probe) shift; exec python3 /opt/osprey/osprey/probe.py "$@" ;;
+    protect-guard) shift; exec python3 /opt/osprey/osprey/protect_guard.py "$@" ;;
     healthcheck) shift; exec python3 /usr/local/bin/osprey-healthcheck "$@" ;;
     version) cat /opt/osprey/VERSION ;;
     *) exec "$@" ;;
