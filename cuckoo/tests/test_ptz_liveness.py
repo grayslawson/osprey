@@ -411,6 +411,59 @@ def test_an_exhausted_recovery_is_rearmed_after_the_cooldown(
     assert wire.names()[-2:] == [ptz.DISABLE_PTZ, ptz.ENABLE_PTZ]
 
 
+def _exhaust(ctl: controller.Controller, mac: str, now: float) -> controller.PtzRecovery:
+    ctl._ptz_recovery[mac] = controller.PtzRecovery(
+        attempts=controller.PTZ_RECOVERY_MAX_ATTEMPTS, next_attempt_at=now
+    )
+    ctl._recover_ptz(now)
+    return ctl._ptz_recovery[mac]
+
+
+def test_reboots_are_capped_per_hour_and_the_rearm_wait_backs_off(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ctl, control, wire = _harness()  # no hub: media state unknown, so not "flowing"
+    adoption.apply_hello(control.camera, HELLO_PAYLOAD)
+    mac = control.camera.mac
+    now = 1000.0
+    waits = []
+    for i in range(4):
+        recovery = _exhaust(ctl, mac, now)
+        waits.append(recovery.rearm_sec)
+        now += recovery.rearm_sec
+    assert waits == [300.0, 600.0, 1200.0, 2400.0]
+    # Exhaustions at t=1000, 1300 (cap reached), 1900, 3100: only the first two reboot.
+    assert wire.names().count(ptz.REBOOT) == 2
+    assert ctl.reboot_requests_total == 2
+    assert ctl.reboot_suppressed_total == 2
+    assert "camera reboot skipped" in caplog.text
+    # An hour after the first request the window has room again; the wait is capped.
+    recovery = _exhaust(ctl, mac, 1000.0 + controller.REBOOT_WINDOW_SEC + 1)
+    assert wire.names().count(ptz.REBOOT) == 3
+    assert recovery.rearm_sec == controller.PTZ_RECOVERY_REARM_MAX_SEC
+    assert _exhaust(ctl, mac, 9000.0).rearm_sec == controller.PTZ_RECOVERY_REARM_MAX_SEC
+
+
+def test_a_motor_reply_resets_the_rearm_backoff() -> None:
+    ctl, control, _, ptz_session, _ = _ptz_pair()
+    ctl._rearm_sec[control.camera.mac] = 1200.0
+    ctl._dispatch(ptz_session, _position_reply(ptz_session))
+    assert control.camera.mac not in ctl._rearm_sec
+
+
+def test_no_reboot_while_video_is_flowing() -> None:
+    hub = media.Hub()
+    stream = hub.stream("video1")
+    stream.parameters = types.SimpleNamespace(complete=True)  # type: ignore[assignment]
+    stream.last_frame_at = time.monotonic()
+    ctl, control, wire = _harness()
+    ctl.hub = hub
+    adoption.apply_hello(control.camera, HELLO_PAYLOAD)
+    _exhaust(ctl, control.camera.mac, time.monotonic())
+    assert ptz.REBOOT not in wire.names()
+    assert ctl.reboot_suppressed_total == 1
+
+
 def test_operator_recovery_recycles_the_live_channel() -> None:
     ctl, control, control_wire, _, ptz_wire = _ptz_pair()
     mac = control.camera.mac
