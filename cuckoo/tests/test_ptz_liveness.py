@@ -272,7 +272,7 @@ def test_watchdog_recycles_after_three_unanswered_position_requests(
     caplog.set_level(logging.INFO, logger="cuckoo.control")
     ctl, control, control_wire, ptz_session, ptz_wire = _ptz_pair()
     mac = control.camera.mac
-    now = time.monotonic()
+    now = float(int(time.monotonic()))  # whole seconds: (now + 30) - now is exact (a fractional clock can round just under 30)
     for offset in (0.0, 2.0):
         ptz_session.request_position(now + offset)
     ctl._watch_ptz(now + 10.5)
@@ -298,7 +298,7 @@ def test_watchdog_recycles_after_three_unanswered_position_requests(
 def test_watchdog_recycles_after_thirty_seconds_of_silence() -> None:
     """A single unanswered request is recycled only once it has been silent long enough."""
     ctl, control, _, ptz_session, ptz_wire = _ptz_pair()
-    now = time.monotonic()
+    now = float(int(time.monotonic()))  # whole seconds: (now + 30) - now is exact (a fractional clock can round just under 30)
     ptz_session.request_position(now)
     ctl._watch_ptz(now + ctl.watchdog.reply_timeout_sec - 0.5)
     assert _live(ctl, ptz_wire), "not before the silence bound"
@@ -315,7 +315,7 @@ def test_flowing_video_defers_the_unanswered_count_but_not_the_silence_bound() -
     stream.parameters = types.SimpleNamespace(complete=True)
     stream.last_frame_at = time.monotonic()
     assert stream.live
-    now = time.monotonic()
+    now = float(int(time.monotonic()))  # whole seconds: (now + 30) - now is exact (a fractional clock can round just under 30)
     for offset in (0.0, 2.0, 4.0):
         ptz_session.request_position(now + offset)
     ctl._watch_ptz(now + 11.0)
@@ -343,7 +343,8 @@ def test_ondemand_polls_still_trip_the_silence_bound() -> None:
     """Coalesced GetStatus refreshes still count toward the silence bound."""
     ctl, control, _, ptz_session, _ = _ptz_pair()
     assert ctl.poll_position(control.camera.mac)
-    ctl._watch_ptz(ptz_session.position_requested_at + ctl.watchdog.reply_timeout_sec)
+    # +1 s: float rounding of a real clock can put an exact +30 s just under the bound
+    ctl._watch_ptz(ptz_session.position_requested_at + ctl.watchdog.reply_timeout_sec + 1.0)
     assert ctl._ptz_session(control.camera.mac) is None
 
 

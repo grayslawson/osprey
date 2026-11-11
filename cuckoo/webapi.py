@@ -1073,10 +1073,12 @@ class WebApp:
             h.wfile.flush()
 
         logs = services.logs
+        # Take the log cursor before the state snapshot: a record logged while
+        # the snapshot is built or sent is then delivered, not skipped.
+        seq = logs.last_seq if last_seq is None else last_seq
         state = self.state(camera_id, services)
         write(b"retry: 3000\n\n")
         write(sse_frame("state", state))
-        seq = logs.last_seq if last_seq is None else last_seq
         last_ptz = state["ptz"]
         last_health = state["health"]
         last_presets = state["presets"]
