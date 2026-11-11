@@ -9,8 +9,8 @@ installs the same code and the same version.
 
 ## Background
 
-Today the controller is a set of flat modules under `cuckoo/` (`config`, `media`, `events`,
-`model`, ...) that run as `python3 cuckoo/main.py` with `PYTHONPATH` set by the caller. The
+Today the controller is a set of flat modules under `osprey/` (`config`, `media`, `events`,
+`model`, ...) that run as `python3 osprey/main.py` with `PYTHONPATH` set by the caller. The
 wire library lives in `pyunifiwire/` as a separate project. Flat top-level names cannot be
 installed into `site-packages` without colliding, so no packaging path can produce a clean
 install today. The release-era transitional wheel (`osprey-ptz`, built from the root
@@ -101,7 +101,7 @@ credentials directory, and I can probe liveness and readiness without credential
 - **FR-007**: Only `run`, `setup`, `manage` and `custody` may change camera, Frigate or Protect
   state, and each does so only when invoked explicitly. `doctor`, `healthcheck`, `version` and
   `config validate` are read-only.
-- **FR-008**: Existing `OSPREY_*` variables, the `--config` flag and `cuckoo.json` upgrade
+- **FR-008**: Existing `OSPREY_*` variables, the `--config` flag and `osprey.json` upgrade
   handling keep working for at least one minor release after the switch, with a warning.
 
 ## Out of Scope
@@ -120,7 +120,7 @@ credentials directory, and I can probe liveness and readiness without credential
 
 - **SC-001**: A clean `pip install` of the built wheel runs `osprey --help`, `osprey version` and
   `osprey run` from `/` without `PYTHONPATH`.
-- **SC-002**: The existing test suites (`cuckoo/tests`, `pyunifiwire/tests`) pass against the
+- **SC-002**: The existing test suites (`osprey/tests`, `pyunifiwire/tests`) pass against the
   installed wheel, not only against the source tree.
 - **SC-003**: `systemd-analyze security osprey` scores 2.0 or lower with the packaged unit.
 - **SC-004**: Each release version is written in one place (the tag, or `VERSION` until hatch-vcs

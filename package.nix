@@ -1,4 +1,4 @@
-# Osprey package for the current source layout (cuckoo/ + pyunifiwire/).
+# Osprey package for the current source layout (osprey/ + pyunifiwire/).
 #
 # Phase 0 (specs/002-python-package-cli) replaces this with a
 # buildPythonApplication of the osprey-ptz wheel and an `osprey` entry point.
@@ -24,7 +24,7 @@ stdenvNoCC.mkDerivation {
       ./VERSION
       ./LICENSE
       ./NOTICE
-      ./cuckoo
+      ./osprey
       ./pyunifiwire/src
       ./pyunifiwire/LICENSE
     ];
@@ -38,16 +38,16 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     share=$out/share/osprey
     mkdir -p $share/pyunifiwire $out/bin
-    cp -r cuckoo $share/cuckoo
+    cp -r osprey $share/osprey
     cp -r pyunifiwire/src $share/pyunifiwire/src
-    rm -rf $share/cuckoo/tests $share/cuckoo/harness
+    rm -rf $share/osprey/tests $share/osprey/harness
     cp VERSION LICENSE NOTICE $share/
     cp pyunifiwire/LICENSE $share/pyunifiwire/LICENSE
-    ${pythonEnv.interpreter} -m compileall -q $share/cuckoo $share/pyunifiwire/src
+    ${pythonEnv.interpreter} -m compileall -q $share/osprey $share/pyunifiwire/src
 
     # unifiwire.certs shells out to openssl; the operator preview uses ffmpeg.
     makeWrapper ${pythonEnv.interpreter} $out/bin/osprey \
-      --add-flags $share/cuckoo/main.py \
+      --add-flags $share/osprey/main.py \
       --set PYTHONPATH $share/pyunifiwire/src \
       --set PYTHONDONTWRITEBYTECODE 1 \
       --prefix PATH : ${lib.makeBinPath [ openssl ffmpeg-headless ]}

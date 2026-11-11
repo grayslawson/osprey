@@ -17,7 +17,7 @@ let
   });
 
   # Secret files, keyed by systemd credential name. The environment variable
-  # names are the ones the controller reads (cuckoo/onvif.py, cuckoo/main.py).
+  # names are the ones the controller reads (osprey/onvif.py, osprey/main.py).
   secrets = {
     admin-password = { file = cfg.adminPasswordFile; env = "OSPREY_ADMIN_PASSWORD_FILE"; };
     onvif-password = { file = cfg.onvifPasswordFile; env = "OSPREY_ONVIF_PASSWORD_FILE"; };

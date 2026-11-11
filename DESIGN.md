@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: "Cuckoo operator surface"
+name: "Osprey operator surface"
 description: "A dense, calm local control surface for supervising one camera without obscuring live operational state."
 colors:
   background: "#f6f7f9"
@@ -31,7 +31,7 @@ components:
   control-button: {}
 ---
 
-# Cuckoo operator surface
+# Osprey operator surface
 
 ## Overview
 
@@ -41,17 +41,17 @@ The UI should feel like a well-labelled piece of field equipment: current state 
 
 ### Product context
 
-- **Audience and job:** A trusted local operator supervises an adopted Cuckoo camera, checks its streams, frames its PTZ home view, and makes limited supported configuration changes.
+- **Audience and job:** A trusted local operator supervises an adopted Osprey camera, checks its streams, frames its PTZ home view, and makes limited supported configuration changes.
 - **Usage scene:** Desktop or tablet on the same trusted network, occasionally under time pressure. The page is a compact single-camera dashboard, not a public marketing surface or a general camera-management product.
 - **Register:** Product/operator. Dense cards and technical details are appropriate; buttons use plain verbs and state messages explain what failed.
 - **Signature:** Telemetry and control live in the same restrained slate-and-blue instrument panel, with a snapshot as the primary visual anchor.
 - **Restraint:** Do not introduce decorative hero art, gradients, dashboard widgets without real data, or controls for unsupported camera settings.
 - **Security boundary:** The telemetry page is a trusted-network operator surface and must remain behind authenticated application routes in a release deployment.
-- **Token ownership/runtime mapping:** `cuckoo/onvif.py` owns the current inline CSS variables. The frontmatter records those tokens so a later shared web application can migrate them deliberately rather than copy values ad hoc.
+- **Token ownership/runtime mapping:** `osprey/onvif.py` owns the current inline CSS variables. The frontmatter records those tokens so a later shared web application can migrate them deliberately rather than copy values ad hoc.
 
 ## Colors
 
-Light mode uses `background`, `panel`, `foreground`, `muted`, and `line` for quiet, high-contrast operational reading. `accent` is reserved for actionable technical values and graph traces; `success` and `warning` communicate stream/adoption state, never status alone. Dark mode preserves the same semantic roles with the existing `prefers-color-scheme` values in `cuckoo/onvif.py`.
+Light mode uses `background`, `panel`, `foreground`, `muted`, and `line` for quiet, high-contrast operational reading. `accent` is reserved for actionable technical values and graph traces; `success` and `warning` communicate stream/adoption state, never status alone. Dark mode preserves the same semantic roles with the existing `prefers-color-scheme` values in `osprey/onvif.py`.
 
 ## Typography
 

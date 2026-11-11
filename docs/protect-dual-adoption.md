@@ -55,7 +55,7 @@ never expose them outside the trusted LAN.
 Run the fake-camera stack tests before trying a real NVR:
 
 ```sh
-./cuckoo/test.sh
+./osprey/test.sh
 ```
 
 For a disposable client, verify that the normal endpoint exposes PTZ and the
@@ -67,9 +67,9 @@ of this compatibility test.
 
 - [`pyunifiwire/SPEC.md`](../pyunifiwire/SPEC.md) records the measured camera
   control and media channels.
-- [`cuckoo/ARCHITECTURE.md`](../cuckoo/ARCHITECTURE.md) documents the custody
+- [`osprey/ARCHITECTURE.md`](../osprey/ARCHITECTURE.md) documents the custody
   and northbound ONVIF/RTSP boundary.
-- [`cuckoo/tests/test_stack.py`](../cuckoo/tests/test_stack.py) exercises the
+- [`osprey/tests/test_stack.py`](../osprey/tests/test_stack.py) exercises the
   fake-camera session and ONVIF/RTSP faces without hardware.
 
 ## Running Frigate and Protect together

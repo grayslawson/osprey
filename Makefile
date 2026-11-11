@@ -3,18 +3,18 @@
 PYTHON ?= python3
 
 test:
-	./cuckoo/test.sh
+	./osprey/test.sh
 	./pyunifiwire/test.sh
 
 typecheck:
-	$(PYTHON) -m mypy --config-file cuckoo/mypy.ini cuckoo
+	$(PYTHON) -m mypy --config-file osprey/mypy.ini osprey
 	(cd pyunifiwire && $(PYTHON) -m mypy .)
 
 lint:
 	ruff check .
 
 compile:
-	$(PYTHON) -m compileall -q cuckoo pyunifiwire/src
+	$(PYTHON) -m compileall -q osprey pyunifiwire/src
 
 validate:
 	./scripts/validate-repo.sh
@@ -34,4 +34,4 @@ dist:
 check: lint test compile validate
 
 clean:
-	rm -rf .pytest_cache .mypy_cache cuckoo/__pycache__ cuckoo/tests/__pycache__ pyunifiwire/.pytest_cache pyunifiwire/src/unifiwire/__pycache__ pyunifiwire/tests/__pycache__
+	rm -rf .pytest_cache .mypy_cache osprey/__pycache__ osprey/tests/__pycache__ pyunifiwire/.pytest_cache pyunifiwire/src/unifiwire/__pycache__ pyunifiwire/tests/__pycache__

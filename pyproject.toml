@@ -1,6 +1,6 @@
 # Transitional distribution metadata for the `osprey-ptz` PyPI project.
 #
-# The controller is not yet an installable package: cuckoo/ is a set of flat
+# The controller is not yet an installable package: osprey/ is a set of flat
 # modules and pyunifiwire/ is a separate project. This wheel bundles both under
 # osprey_ptz/_app/ and exposes one `osprey` command. Phase 0 of the packaging
 # plan (specs/002-python-package-cli) replaces it with a src/osprey layout.
@@ -49,10 +49,10 @@ pattern = '^(?P<version>\d+\.\d+\.\d+)\s*$'
 
 [tool.hatch.build.targets.wheel]
 packages = ["packaging/pypi/osprey_ptz"]
-exclude = ["**/__pycache__", "cuckoo/tests", "cuckoo/harness"]
+exclude = ["**/__pycache__", "osprey/tests", "osprey/harness"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"cuckoo" = "osprey_ptz/_app/cuckoo"
+"osprey" = "osprey_ptz/_app/osprey"
 "pyunifiwire/src/unifiwire" = "osprey_ptz/_app/unifiwire"
 "pyunifiwire/LICENSE" = "osprey_ptz/_app/LICENSE-pyunifiwire"
 
@@ -63,9 +63,9 @@ include = [
   "/README.md",
   "/LICENSE",
   "/NOTICE",
-  "/cuckoo",
+  "/osprey",
   "/pyunifiwire/src",
   "/pyunifiwire/LICENSE",
   "/packaging/pypi",
 ]
-exclude = ["cuckoo/tests", "cuckoo/harness", "**/__pycache__"]
+exclude = ["osprey/tests", "osprey/harness", "**/__pycache__"]

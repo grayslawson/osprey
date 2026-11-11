@@ -2,7 +2,7 @@
 
 Osprey serves a browser app at `/` on the ONVIF port (8000 by default). It is
 a static, no-build application: Preact, htm and signals are vendored under
-`cuckoo/web/vendor` with pinned versions, licences and checksums, and nothing
+`osprey/web/vendor` with pinned versions, licences and checksums, and nothing
 is loaded from a CDN.
 
 ## Where things are
@@ -59,7 +59,7 @@ python3 scripts/verify-web-vendor.py          # offline: checksums and file list
 python3 scripts/verify-web-vendor.py --fetch  # also re-download the npm tarballs
 ```
 
-`make test` runs the offline check through `cuckoo/tests/test_webapi.py`.
+`make test` runs the offline check through `osprey/tests/test_webapi.py`.
 
 ## Not yet included
 

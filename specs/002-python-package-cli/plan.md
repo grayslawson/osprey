@@ -4,7 +4,7 @@
 
 ## Summary
 
-Move `cuckoo/*.py` into `src/osprey/` as a real package with relative imports, add one `osprey`
+Move `osprey/*.py` into `src/osprey/` as a real package with relative imports, add one `osprey`
 console entry point with the subcommands in spec User Story 2, derive the version from tags with
 hatch-vcs, and replace the transitional `osprey_ptz/_app` launcher in the root `pyproject.toml`.
 The change is mechanical for the controller and must not change protocol behaviour.
@@ -14,9 +14,9 @@ The change is mechanical for the controller and must not change protocol behavio
 - **Language**: Python 3.13, standard library at runtime (`paho-mqtt` and `uiprotect` as extras).
 - **Build**: hatchling with hatch-vcs (`version_scheme = "guess-next-dev"`,
   `local_scheme = "no-local-version"`), writing `src/osprey/_version.py`.
-- **Tests**: existing `cuckoo/tests` and `pyunifiwire/tests`, plus wheel-install tests that run
+- **Tests**: existing `osprey/tests` and `pyunifiwire/tests`, plus wheel-install tests that run
   the same suites against an installed wheel in a clean virtual environment.
-- **Lint and types**: ruff (`ruff.toml`), mypy (`cuckoo/mypy.ini`, `pyunifiwire`).
+- **Lint and types**: ruff (`ruff.toml`), mypy (`osprey/mypy.ini`, `pyunifiwire`).
 - **Packaging consumers**: OCI image (`docker/Dockerfile`), NixOS (`package.nix`, `nix/osprey.nix`),
   Proxmox (`packaging/proxmox`), Home Assistant (`homeassistant/addon`).
 
@@ -24,17 +24,17 @@ The change is mechanical for the controller and must not change protocol behavio
 
 | Area | State |
 |---|---|
-| Source layout | Flat modules in `cuckoo/`, imported via `PYTHONPATH`; `cuckoo/` is also the test root. |
-| Wheel | Transitional: root `pyproject.toml` bundles `cuckoo/` and `pyunifiwire/src/unifiwire` under `osprey_ptz/_app/`, with `packaging/pypi/osprey_ptz/launcher.py` as the entry point. |
+| Source layout | Flat modules in `osprey/`, imported via `PYTHONPATH`; `osprey/` is also the test root. |
+| Wheel | Transitional: root `pyproject.toml` bundles `osprey/` and `pyunifiwire/src/unifiwire` under `osprey_ptz/_app/`, with `packaging/pypi/osprey_ptz/launcher.py` as the entry point. |
 | Version | `VERSION` file; checked by `scripts/validate-repo.sh`. |
 | Nix | Package builds with `makeWrapper` (openssl and ffmpeg on PATH, paho-mqtt in the Python env). |
-| Ruff | Enabled for every path except `cuckoo/` (17 findings, see `ruff.toml`). |
+| Ruff | Enabled for every path except `osprey/` (17 findings, see `ruff.toml`). |
 
 ## Steps
 
-1. **Move the package.** `git mv cuckoo/*.py src/osprey/` (excluding `tests/` and `harness/`),
-   rewrite flat imports as relative imports, keep `cuckoo/` as a compatibility shim for one
-   release. Update `cuckoo/mypy.ini` and the test runner to the new paths.
+1. **Move the package.** `git mv osprey/*.py src/osprey/` (excluding `tests/` and `harness/`),
+   rewrite flat imports as relative imports, keep `osprey/` as a compatibility shim for one
+   release. Update `osprey/mypy.ini` and the test runner to the new paths.
 2. **Entry point.** Add `src/osprey/cli.py` with `run`, `setup`, `doctor`, `healthcheck`,
    `manage`, `custody`, `cert`, `config validate`, `version`. `run` is the default. The shell
    `doctor` is ported check for check and keeps its output prefixes.
@@ -56,7 +56,7 @@ The change is mechanical for the controller and must not change protocol behavio
   example a module that relied on the current directory). Mitigation: the wheel-install test in
   step 7 is required before the transitional launcher is removed.
 - `pyunifiwire` is bundled, so a protocol fix needs an Osprey release. Accepted by the owner.
-- Other branches edit `cuckoo/` concurrently (ptz-watchdog, onvif, rtsp, web-ui). The move must
+- Other branches edit `osprey/` concurrently (ptz-watchdog, onvif, rtsp, web-ui). The move must
   land after those branches merge, or be rebased mechanically with `git mv` detection.
 
 ## Not in this plan

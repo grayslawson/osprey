@@ -86,7 +86,7 @@ saving. Full installation and upgrade paths are in
 [`docs/installation.md`](docs/installation.md).
 
 The ONVIF/operator endpoint uses port `8000`; RTSP uses `8554`. Configure the
-camera identity and any additional cameras in `cuckoo.json` as described in
+camera identity and any additional cameras in `osprey.json` as described in
 [`docs/multi-camera.md`](docs/multi-camera.md). Keep credentials in a secret
 manager or an untracked deployment file.
 
@@ -159,7 +159,7 @@ protocol research and code are credited under the applicable license notices.
 
 ## Contributing
 
-Run `./cuckoo/test.sh` and `./pyunifiwire/test.sh` before submitting changes.
+Run `./osprey/test.sh` and `./pyunifiwire/test.sh` before submitting changes.
 When reporting an issue, include the Osprey version, host platform, camera
 model, Frigate version, and a redacted reproducible log. Never include
 credentials, private addresses, MAC addresses, or video from someone else’s
