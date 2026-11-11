@@ -113,13 +113,42 @@ tag or digest, can install the selected runtime with `apt-get`, writes the
 Compose file under `/var/lib/osprey`, and starts only that service. It does not
 create or modify a Proxmox VM/LXC and never contains camera credentials.
 
+## pip (PyPI)
+
+The `osprey-ptz` wheel bundles the controller and pyunifiwire and installs one
+`osprey` command. It needs Python 3.13. FFmpeg on `PATH` is optional: only the
+console's MJPEG live preview uses it. MQTT is an extra.
+
+```sh
+python3.13 -m venv ~/.local/osprey && . ~/.local/osprey/bin/activate
+pip install --pre "osprey-ptz==0.9.0b1"        # add [mqtt] for MQTT commands
+osprey --host 192.0.2.10 --config ~/.config/osprey/osprey.json --cert ~/.config/osprey/osprey.pem
+osprey probe --help                              # tools ship in the same command
+```
+
+Run it under a service manager (systemd unit, launchd) as an unprivileged
+user. The camera ports (7442, 7444, 7550) are above 1024, so no root or
+capabilities are needed.
+
 ## Home Assistant
 
-An alpha add-on is in [`homeassistant/addon/osprey`](../homeassistant/addon/osprey/README.md).
-It runs Osprey with host networking and Home Assistant ingress. Frigate may be
-another Home Assistant add-on or an external container/host; Osprey does not
-manage it. Follow the add-on guide for custom repository installation and
-architecture image requirements.
+Osprey runs as a Home Assistant **app** (formerly "add-on") with host
+networking and ingress. It is in
+[`homeassistant/addon/osprey`](../homeassistant/addon/osprey/README.md).
+Frigate may be another app or an external host; Osprey does not manage it.
+
+Install it from the Osprey app repository: **Settings > Apps > App store >
+⋮ > Repositories**, add the repository URL from the add-on guide, then
+install **Osprey**. Home Assistant reads `repository.yaml` from the root of
+a public Git repository, so the app is published from a separate repository
+(see [`packaging/homeassistant-repo`](../packaging/homeassistant-repo/README.md)).
+
+Home Assistant 2026.11 moved HACS into Core as **Settings > Marketplace**. The
+Marketplace covers integrations, dashboard cards, themes and templates, not
+apps, so it does not change how Osprey installs. Osprey needs no custom
+integration: Home Assistant's built-in ONVIF integration can use Osprey's
+ONVIF endpoint directly. Custom Marketplace repositories must be public GitHub
+repositories, which also applies to the app repository.
 
 ## NixOS
 

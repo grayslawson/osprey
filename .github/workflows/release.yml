@@ -15,6 +15,10 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+      # PEP 440 pre-releases, e.g. v0.9.0b1 (published as GitHub pre-releases).
+      - 'v[0-9]+.[0-9]+.[0-9]+a[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+b[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+rc[0-9]+'
 
 permissions:
   contents: read
@@ -29,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
       created: ${{ steps.check.outputs.created }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -53,6 +58,10 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *a*|*b*|*rc*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
           echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
   test:
@@ -118,9 +127,15 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # pep440 understands 0.9.0b1; pre-releases get only the full version
+          # tag, and `latest` moves only for final releases.
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=pep440,pattern={{version}}
+            # v-prefixed twin: the docs and scripts/osprey-update.sh pin vX.Y.Z tags.
+            type=pep440,pattern=v{{version}}
+            type=pep440,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ needs.verify.outputs.prerelease == 'false' }}
       - id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -193,13 +208,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease == 'true' && '1' || '' }}
         run: |
           set -euo pipefail
           gh release create "$TAG" dist/* compose.release.yaml \
             --repo "$GITHUB_REPOSITORY" \
             --title "Osprey $TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" \
-            --verify-tag
+            --verify-tag \
+            ${PRERELEASE:+--prerelease}
 
   homeassistant:
     name: Home Assistant add-on

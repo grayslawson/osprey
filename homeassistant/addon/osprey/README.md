@@ -1,13 +1,16 @@
 # Osprey Home Assistant add-on
 
-Osprey bridges a Ubiquiti G5 PTZ camera to an existing Frigate installation
+Osprey bridges a UniFi G5 PTZ camera to an existing Frigate installation
 through ONVIF and RTSP. It does not bundle, install, or manage Frigate.
 
 ## Install
 
-1. Open **Settings → Add-ons → Add-on store**.
+1. Open **Settings → Apps → App store** (before Home Assistant 2026: **Add-ons → Add-on store**).
 2. Open the three-dot menu, choose **Repositories**, and add
-   `https://github.com/grayslawson/osprey`.
+   `https://github.com/grayslawson/osprey-ha-apps`. This is the separate public app
+   repository built from [`packaging/homeassistant-repo`](../../../packaging/homeassistant-repo/README.md).
+   The main Osprey repository URL does not work here: Home Assistant needs
+   `repository.yaml` at the repository root.
 3. Install **Osprey**, then set `advertised_host` to the Home Assistant host
    address reachable by the camera. Optionally set `camera_ip` and
    `camera_mac` as identity guards.
