@@ -787,7 +787,7 @@ class Controller:
                 del self._ptz_recovery[mac]
                 continue
             if recovery.exhausted:
-                if now - recovery.exhausted_at < recovery.rearm_sec:
+                if now < recovery.exhausted_at + recovery.rearm_sec:  # same float sum as callers compute
                     continue
                 log.warning(
                     "PTZ recovery re-armed after %.0fs: mac=%s", recovery.rearm_sec, mac
