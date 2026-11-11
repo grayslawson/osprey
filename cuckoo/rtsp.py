@@ -47,7 +47,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Final, Iterator, cast
+from typing import Collection, Final, Iterator, cast
 
 import media
 import videofmt
@@ -59,6 +59,10 @@ AUDIO_PAYLOAD_TYPE: Final = 97
 VIDEO_CLOCK: Final = 90_000
 MTU_PAYLOAD: Final = 1400
 
+# Track names the controller arms by default; their absence means "not pushed
+# yet", so RTSP answers 503 + Retry-After rather than 404.
+DEFAULT_TRACKS: Final = ("video1", "video2", "video3")
+RETRY_AFTER_SEC: Final = 5
 VIDEO_TRACK: Final = 0
 AUDIO_TRACK: Final = 1
 
@@ -913,10 +917,17 @@ class _Handler(socketserver.BaseRequestHandler):
             return
         self._send(sock, response("501 Not Implemented", request.cseq))
 
+    @staticmethod
+    def _missing(server: RtspServer, request: Request) -> bytes:
+        """A configured track the camera has not pushed yet is 503 (retry), not 404."""
+        if request.stream_name in server.known_tracks:
+            return response("503 Service Unavailable", request.cseq, {"Retry-After": str(RETRY_AFTER_SEC)})
+        return response("404 Not Found", request.cseq)
+
     def _describe(self, server: RtspServer, sock: socket.socket, request: Request) -> None:
         stream = server.hub.get(request.stream_name)
         if stream is None:
-            self._send(sock, response("404 Not Found", request.cseq))
+            self._send(sock, self._missing(server, request))
             return
         if not stream.live:
             # Honest: no parameter sets yet, or the camera is not pushing this
@@ -934,7 +945,7 @@ class _Handler(socketserver.BaseRequestHandler):
         track = request.track if request.track is not None else VIDEO_TRACK
         transport = parse_transport(request.headers.get("transport", ""), track)
         if stream is None:
-            self._send(sock, response("404 Not Found", request.cseq))
+            self._send(sock, self._missing(server, request))
             return
         if transport is None:
             self._send(sock, response("461 Unsupported Transport", request.cseq))
@@ -1166,8 +1177,10 @@ class RtspServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
     def __init__(self, hub: media.Hub, advertise_host: str, port: int = RTSP_PORT,
-                 auth: RtspAuth | None = None, bind_host: str = "0.0.0.0") -> None:
+                 auth: RtspAuth | None = None, bind_host: str = "0.0.0.0",
+                 known_tracks: Collection[str] = DEFAULT_TRACKS) -> None:
         self.hub = hub
+        self.known_tracks = frozenset(known_tracks)
         self.advertise_host = advertise_host
         self.auth = auth
         self.bind_host = bind_host

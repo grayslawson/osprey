@@ -72,6 +72,9 @@ CONTROL_RECOVER_PATH: Final = "/control/ptz/recover"
 # Unauthenticated, read-only liveness for monitoring. It carries PTZ state and
 # counters only: no MAC, address, preset name, or credential.
 HEALTH_PATH: Final = "/healthz"
+METRICS_PATH: Final = "/metrics"
+# An adopted camera with no video frame on any track for this long is degraded.
+HEALTH_VIDEO_STALE_SEC: Final = 30.0
 MANUAL_STEP_FRACTION: Final = 0.04
 CONTINUOUS_FOV_FRACTION: Final = 0.28
 CONTINUOUS_STEP_FRACTION: Final = 0.08
@@ -563,6 +566,10 @@ class Backend:
     recover_ptz: Callable[[], bool] | None = None
     # Machine-readable PTZ liveness (see Controller.ptz_health).
     ptz_health: Callable[[], dict[str, object]] = dict
+    # Whether the camera's management socket is up right now (for /healthz, /metrics).
+    camera_connected: Callable[[], bool] = lambda: True
+    # Lifetime reboot counters: {"requests": n, "suppressed": n} (for /metrics).
+    reboot_counters: Callable[[], dict[str, int]] = dict
     # Ceiling of the G5 speed scale; ONVIF speeds map linearly onto 1..max_speed.
     max_speed: int = ptz.DEFAULT_MAX_SPEED
 
@@ -1221,23 +1228,72 @@ class Services:
         }
 
     def health(self) -> tuple[HTTPStatus, dict[str, object]]:
-        """Liveness for monitoring: 200 when usable, 503 when PTZ is degraded."""
+        """Liveness for monitoring: 200 when usable, 503 when PTZ or video is degraded."""
         camera = self.backend.camera()
         if camera is None:
             return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "waiting", "camera": False}
         body: dict[str, object] = {
             "status": "ok",
             "camera": True,
+            "camera_connected": self.backend.camera_connected(),
             "adopted": camera.adopted,
             "uptime_sec": int(time.time() - self.started_at),
         }
+        ages = self.frame_ages()
+        seen = [a for a in ages.values() if a is not None]
+        video_age = min(seen) if seen else None
+        body["tracks"] = {name: {"last_frame_age": round(age, 1) if age is not None else None} for name, age in ages.items()}
+        body["video_frame_age_sec"] = round(video_age, 1) if video_age is not None else None
+        degraded = False
         if camera.is_ptz and not self.read_only:
             ptz_state = self.backend.ptz_health()
             body["ptz"] = ptz_state
-            if not ptz_state.get("healthy"):
-                body["status"] = "degraded"
-                return HTTPStatus.SERVICE_UNAVAILABLE, body
+            degraded = not ptz_state.get("healthy")
+        # Never having had a frame counts as stalled once we have been up that long.
+        if camera.adopted and (
+            video_age > HEALTH_VIDEO_STALE_SEC
+            if video_age is not None
+            else time.time() - self.started_at > HEALTH_VIDEO_STALE_SEC
+        ):
+            degraded = True
+        if degraded:
+            body["status"] = "degraded"
+            return HTTPStatus.SERVICE_UNAVAILABLE, body
         return HTTPStatus.OK, body
+
+    def frame_ages(self) -> dict[str, float | None]:
+        """Seconds since each track's newest frame (None: none yet)."""
+        out: dict[str, float | None] = {}
+        for name, stats in self.backend.telemetry().items():
+            age = stats.get("last_frame_age")
+            out[name] = float(age) if isinstance(age, (int, float)) else None
+        return out
+
+    def metrics(self) -> str:
+        """Prometheus text exposition of the same liveness state as /healthz."""
+        camera = self.backend.camera()
+        ptz_state = self.backend.ptz_health() if camera is not None and camera.is_ptz else {}
+        reboots = self.backend.reboot_counters()
+        lines: list[str] = []
+
+        def metric(name: str, kind: str, help_text: str, value: float | int) -> None:
+            lines.extend((f"# HELP osprey_{name} {help_text}", f"# TYPE osprey_{name} {kind}", f"osprey_{name} {value}"))
+
+        metric("camera_connected", "gauge", "1 when the camera management socket is up.", int(camera is not None and self.backend.camera_connected()))
+        metric("camera_adopted", "gauge", "1 when a camera is adopted.", int(camera is not None and camera.adopted))
+        lines.extend((
+            "# HELP osprey_track_last_frame_age_seconds Seconds since the newest frame on a track.",
+            "# TYPE osprey_track_last_frame_age_seconds gauge",
+        ))
+        for name, age in sorted(self.frame_ages().items()):
+            if age is not None:  # a track with no frame yet has no age to report
+                lines.append(f'osprey_track_last_frame_age_seconds{{track="{name}"}} {age:.3f}')
+        metric("ptz_channel_up", "gauge", "1 when the PTZ channel is up.", int(ptz_state.get("channel") == "up"))
+        metric("ptz_watchdog_recycles_total", "counter", "PTZ channel recycles by the watchdog.", int(ptz_state.get("watchdog_recycles") or 0))  # type: ignore[call-overload]
+        metric("camera_reboot_requests_total", "counter", "Camera reboot requests sent.", reboots.get("requests", 0))
+        metric("camera_reboot_requests_suppressed_total", "counter", "Camera reboot requests skipped (hourly cap).", reboots.get("suppressed", 0))
+        metric("uptime_seconds", "gauge", "Seconds since the service started.", int(time.time() - self.started_at))
+        return "\n".join(lines) + "\n"
 
     def control_codec(self, data: object) -> tuple[HTTPStatus, dict[str, object]]:
         if not isinstance(data, dict) or set(data) != {"track", "codec"}:
@@ -2967,6 +3023,9 @@ class _Handler(BaseHTTPRequestHandler):
         if root == HEALTH_PATH:
             status, health = self.services.health()
             self._send(status, json.dumps(health, separators=(",", ":")).encode(), "application/json")
+            return
+        if root == METRICS_PATH:
+            self._send(HTTPStatus.OK, self.services.metrics().encode(), "text/plain; version=0.0.4; charset=utf-8")
             return
         if root == FRIGATE_API_PATH:
             if self.services.read_only:

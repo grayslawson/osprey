@@ -13,6 +13,7 @@ import logging
 import selectors
 import threading
 import time
+import types
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ import pytest
 
 import adoption
 import controller
+import media
 import model
 import ptz
 from model import Camera, Position, Preset
@@ -270,19 +272,21 @@ def test_watchdog_recycles_after_three_unanswered_position_requests(
     caplog.set_level(logging.INFO, logger="cuckoo.control")
     ctl, control, control_wire, ptz_session, ptz_wire = _ptz_pair()
     mac = control.camera.mac
-    now = time.monotonic()
+    now = float(int(time.monotonic()))  # whole seconds: (now + 30) - now is exact (a fractional clock can round just under 30)
     for offset in (0.0, 2.0):
         ptz_session.request_position(now + offset)
-    ctl._watch_ptz(now + 4.5)
+    ctl._watch_ptz(now + 10.5)
     assert _live(ctl, ptz_wire), "two unanswered requests are not yet enough"
 
     ptz_session.request_position(now + 4.0)
     ctl._watch_ptz(now + 4.5)
+    assert _live(ctl, ptz_wire), "three probes in a few seconds is a busy camera, not a dead one"
+    ctl._watch_ptz(now + ctl.watchdog.min_silence_sec)
 
     assert not _live(ctl, ptz_wire)
     assert control.camera.motion.status == "UNKNOWN"
     assert "not responding" in (control.camera.motion.error or "")
-    ctl._recover_ptz(now + 5.1)
+    ctl._recover_ptz(now + 11.1)
     assert control_wire.names() == [ptz.DISABLE_PTZ, ptz.ENABLE_PTZ]
     health = ctl.ptz_health(mac)
     assert health["watchdog_recycles"] == 1
@@ -294,7 +298,7 @@ def test_watchdog_recycles_after_three_unanswered_position_requests(
 def test_watchdog_recycles_after_thirty_seconds_of_silence() -> None:
     """A single unanswered request is recycled only once it has been silent long enough."""
     ctl, control, _, ptz_session, ptz_wire = _ptz_pair()
-    now = time.monotonic()
+    now = float(int(time.monotonic()))  # whole seconds: (now + 30) - now is exact (a fractional clock can round just under 30)
     ptz_session.request_position(now)
     ctl._watch_ptz(now + ctl.watchdog.reply_timeout_sec - 0.5)
     assert _live(ctl, ptz_wire), "not before the silence bound"
@@ -302,6 +306,22 @@ def test_watchdog_recycles_after_thirty_seconds_of_silence() -> None:
     ctl._watch_ptz(now + ctl.watchdog.reply_timeout_sec)
     assert not _live(ctl, ptz_wire)
     assert ctl.ptz_health(control.camera.mac)["watchdog_recycles"] == 1
+
+
+def test_flowing_video_defers_the_unanswered_count_but_not_the_silence_bound() -> None:
+    hub = media.Hub()
+    ctl, control, _, ptz_session, ptz_wire = _ptz_pair(hub=hub)
+    stream = hub.stream("video1")
+    stream.parameters = types.SimpleNamespace(complete=True)
+    stream.last_frame_at = time.monotonic()
+    assert stream.live
+    now = float(int(time.monotonic()))  # whole seconds: (now + 30) - now is exact (a fractional clock can round just under 30)
+    for offset in (0.0, 2.0, 4.0):
+        ptz_session.request_position(now + offset)
+    ctl._watch_ptz(now + 11.0)
+    assert _live(ctl, ptz_wire), "video is flowing: count plus short silence is not enough"
+    ctl._watch_ptz(now + ctl.watchdog.reply_timeout_sec)
+    assert not _live(ctl, ptz_wire), "30 s of silence recycles even with video"
 
 
 def test_rapid_ondemand_polls_from_frigate_coalesce() -> None:
@@ -323,7 +343,8 @@ def test_ondemand_polls_still_trip_the_silence_bound() -> None:
     """Coalesced GetStatus refreshes still count toward the silence bound."""
     ctl, control, _, ptz_session, _ = _ptz_pair()
     assert ctl.poll_position(control.camera.mac)
-    ctl._watch_ptz(ptz_session.position_requested_at + ctl.watchdog.reply_timeout_sec)
+    # +1 s: float rounding of a real clock can put an exact +30 s just under the bound
+    ctl._watch_ptz(ptz_session.position_requested_at + ctl.watchdog.reply_timeout_sec + 1.0)
     assert ctl._ptz_session(control.camera.mac) is None
 
 
@@ -352,11 +373,11 @@ def test_repeated_recycles_back_off_and_share_the_attempt_budget() -> None:
     for offset in (0.0, 2.0, 4.0):
         ptz_session.request_position(now + offset)
 
-    ctl._watch_ptz(now + 6)
+    ctl._watch_ptz(now + 11)
 
     recovery = ctl._ptz_recovery[mac]
     assert recovery.attempts == 2
-    assert recovery.next_attempt_at > now + 6 + controller.PTZ_RECOVERY_INITIAL_BACKOFF_SEC
+    assert recovery.next_attempt_at > now + 11 + controller.PTZ_RECOVERY_INITIAL_BACKOFF_SEC
 
 
 def test_a_reply_after_recovery_resets_the_strike_count() -> None:
@@ -389,6 +410,59 @@ def test_an_exhausted_recovery_is_rearmed_after_the_cooldown(
     ctl._recover_ptz(recovery.exhausted_at + controller.PTZ_RECOVERY_REARM_SEC)
     assert not ctl._ptz_recovery[mac].exhausted
     assert wire.names()[-2:] == [ptz.DISABLE_PTZ, ptz.ENABLE_PTZ]
+
+
+def _exhaust(ctl: controller.Controller, mac: str, now: float) -> controller.PtzRecovery:
+    ctl._ptz_recovery[mac] = controller.PtzRecovery(
+        attempts=controller.PTZ_RECOVERY_MAX_ATTEMPTS, next_attempt_at=now
+    )
+    ctl._recover_ptz(now)
+    return ctl._ptz_recovery[mac]
+
+
+def test_reboots_are_capped_per_hour_and_the_rearm_wait_backs_off(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ctl, control, wire = _harness()
+    adoption.apply_hello(control.camera, HELLO_PAYLOAD)
+    mac = control.camera.mac
+    now = 1000.0
+    waits = []
+    for i in range(4):
+        recovery = _exhaust(ctl, mac, now)
+        waits.append(recovery.rearm_sec)
+        now += recovery.rearm_sec
+    assert waits == [300.0, 600.0, 1200.0, 2400.0]
+    # Exhaustions at t=1000, 1300 (cap reached), 1900, 3100: only the first two reboot.
+    assert wire.names().count(ptz.REBOOT) == 2
+    assert ctl.reboot_requests_total == 2
+    assert ctl.reboot_suppressed_total == 2
+    assert "camera reboot skipped" in caplog.text
+    # An hour after the first request the window has room again; the wait is capped.
+    recovery = _exhaust(ctl, mac, 1000.0 + controller.REBOOT_WINDOW_SEC + 1)
+    assert wire.names().count(ptz.REBOOT) == 3
+    assert recovery.rearm_sec == controller.PTZ_RECOVERY_REARM_MAX_SEC
+    assert _exhaust(ctl, mac, 9000.0).rearm_sec == controller.PTZ_RECOVERY_REARM_MAX_SEC
+
+
+def test_a_motor_reply_resets_the_rearm_backoff() -> None:
+    ctl, control, _, ptz_session, _ = _ptz_pair()
+    ctl._rearm_sec[control.camera.mac] = 1200.0
+    ctl._dispatch(ptz_session, _position_reply(ptz_session))
+    assert control.camera.mac not in ctl._rearm_sec
+
+
+def test_reboot_still_requested_while_video_is_flowing() -> None:
+    hub = media.Hub()
+    stream = hub.stream("video1")
+    stream.parameters = types.SimpleNamespace(complete=True)
+    stream.last_frame_at = time.monotonic()
+    ctl, control, wire = _harness()
+    ctl.hub = hub
+    adoption.apply_hello(control.camera, HELLO_PAYLOAD)
+    _exhaust(ctl, control.camera.mac, time.monotonic())
+    assert ptz.REBOOT in wire.names()
+    assert ctl.reboot_suppressed_total == 0
 
 
 def test_operator_recovery_recycles_the_live_channel() -> None:
