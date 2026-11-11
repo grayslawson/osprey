@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qs, quote, unquote
 
+import arbitration
 import ptz
 import websecurity
 from model import Camera, Position
@@ -390,7 +391,11 @@ class WebApp:
             raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "no such API resource")
         camera_id = unquote(match.group(1))
         services = self._resolve(camera_id)
-        self._camera_route(h, method, camera_id, services, match.group(2) or "/")
+        token = arbitration.source.set(arbitration.MANUAL)  # the operator console is a person
+        try:
+            self._camera_route(h, method, camera_id, services, match.group(2) or "/")
+        finally:
+            arbitration.source.reset(token)
 
     def _camera_route(self, h: "_Handler", method: str, camera_id: str,
                       services: "Services", rest: str) -> None:
