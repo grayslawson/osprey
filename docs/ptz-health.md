@@ -45,7 +45,12 @@ sends Disable/Enable PTZ on the management channel. Recovery retries are
 bounded and back off exponentially (up to 5 attempts, at most 30 s apart). A
 camera that reconnects but still never answers uses up the same attempt
 budget, so the loop is never tight. After recovery gives up, it starts again
-5 minutes later.
+5 minutes later; each further give-up doubles that wait (10, 20, 40 minutes, up
+to 1 hour) until the camera answers again, which resets it.
+
+When recovery gives up, Osprey also asks the camera to reboot, but only while
+no video track is live, and at most twice per rolling hour per camera. A reboot
+skipped for either reason is logged (`camera reboot skipped:`).
 
 While the state is `UNKNOWN`, or while a request is unanswered, Osprey asks for
 the position every `probe_interval_sec` (2 s). A healthy idle channel is asked
@@ -81,12 +86,18 @@ logged at DEBUG.
 ## Health endpoint
 
 `GET /healthz` on the ONVIF port needs no login and returns JSON. The status is
-`200` when Osprey is usable and `503` when no camera is connected or PTZ is
-degraded. The response holds state and counters only: no MAC address, IP
+`200` when Osprey is usable and `503` when no camera is connected, PTZ is
+degraded, or an adopted camera has delivered no video frame on any track for
+more than 30 s (`status` is `degraded`; a camera that has never sent a frame
+counts once Osprey has been up that long). `camera_connected` is whether the
+camera's management socket is up; `tracks` holds each track's `last_frame_age`
+in seconds and `video_frame_age_sec` is the smallest of them. The response holds state and counters only: no MAC address, IP
 address, preset name, or credential.
 
 ```json
-{"status":"degraded","camera":true,"adopted":true,"uptime_sec":5120,
+{"status":"degraded","camera":true,"camera_connected":true,"adopted":true,
+ "uptime_sec":5120,"video_frame_age_sec":0.4,
+ "tracks":{"video1":{"last_frame_age":0.4}},
  "ptz":{"ptz":true,"channel":"up","state":"UNKNOWN","error":"motor state timeout",
         "healthy":false,"last_motor_reply_age_sec":42.0,
         "unanswered_position_requests":2,"motion_timeouts":1,"watchdog_recycles":0,
@@ -94,6 +105,14 @@ address, preset name, or credential.
                     "waiting_for_callback":false,"exhausted":false},
         "presets":3,"home_preset":true}}
 ```
+
+`GET /metrics` on the same port is unauthenticated Prometheus text (no labels
+other than the track name): `osprey_camera_connected`, `osprey_camera_adopted`,
+`osprey_track_last_frame_age_seconds{track=...}`, `osprey_ptz_channel_up`,
+`osprey_ptz_watchdog_recycles_total`, `osprey_camera_reboot_requests_total`,
+`osprey_camera_reboot_requests_suppressed_total` and `osprey_uptime_seconds`.
+The container health check calls `/healthz` and treats anything but `200` as
+unhealthy.
 
 For multiple cameras, use `/cameras/{camera-id}/healthz`. When MQTT is enabled,
 the same state is also published to `osprey/<device>/state/ptz` (see

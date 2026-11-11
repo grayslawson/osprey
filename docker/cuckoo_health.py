@@ -1,8 +1,8 @@
-"""Container health check: the ONVIF/operator listener accepts TCP.
+"""Container health check: ``GET /healthz`` on the ONVIF/operator listener.
 
-This is a liveness probe only. It does not require a camera, so a freshly
-started container without an adopted camera reports healthy. A dedicated
-``/healthz`` endpoint is planned (see specs/002-python-package-cli).
+Healthy only on HTTP 200. Osprey answers 503 while it waits for a camera and
+when the camera, PTZ channel or video is degraded, so all of those mark the
+container unhealthy.
 
 The probe target follows the controller's own settings:
 
@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import sys
+import urllib.error
+import urllib.request
 
 DEFAULT_PORT = 8000
 WILDCARDS = {"", "0.0.0.0", "::", "[::]"}
@@ -49,9 +50,11 @@ def target() -> tuple[str, int]:
 def main() -> int:
     try:
         host, port = target()
-        with socket.create_connection((host, port), timeout=2.0):
-            pass
-    except (OSError, ValueError) as exc:
+        url = f"http://{f'[{host}]' if ':' in host else host}:{port}/healthz"
+        with urllib.request.urlopen(url, timeout=2.0) as reply:
+            if reply.status != 200:
+                raise OSError(f"/healthz returned {reply.status}")
+    except (OSError, ValueError) as exc:  # URLError and HTTPError (non-2xx) are OSErrors
         print(f"osprey healthcheck failed: {exc}", file=sys.stderr)
         return 1
     return 0
