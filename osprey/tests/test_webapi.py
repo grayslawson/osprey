@@ -341,7 +341,7 @@ def test_cameras_and_state_snapshot(served: Any) -> None:
     client = Client(server)
     status, body = client.json("GET", "/api/v1/cameras")
     assert status == 200
-    assert body["cameras"] == [{"id": "default", "name": "front gate", "model": "UVC G5 PTZ",
+    assert body["cameras"] == [{"id": "default", "name": "front gate", "model": "UVC G5 PTZ", "support": "supported",
                                 "adopted": True, "ptz": True, "status": "IDLE"}]
     status, state = client.json("GET", "/api/v1/cameras/default/state")
     assert status == 200
