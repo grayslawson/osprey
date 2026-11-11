@@ -1,0 +1,36 @@
+name: Camera model support
+description: Help Osprey support another UniFi PTZ camera
+labels: ["camera-model"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping. Please follow [docs/camera-models.md](https://github.com/grayslawson/osprey/blob/main/docs/camera-models.md)
+        to make a `probe.json` bundle with `osprey probe`. Read it before you attach it. Never attach the raw message dump, credentials or screenshots that show addresses.
+  - type: input
+    id: model
+    attributes:
+      label: Camera model and firmware
+      placeholder: "UVC G… PTZ, firmware 5.x.y"
+    validations:
+      required: true
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Probe bundle
+      description: Attach probe.json or paste it here.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What works and what does not
+      description: Adoption, live view, RTSP in Frigate, PTZ moves, presets, autotracking.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Osprey version and install path
+      placeholder: "0.9.0b1, Docker"
