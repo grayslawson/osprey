@@ -27,6 +27,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Final
 
+import arbitration
 import config
 import ptz
 from unifiwire import certs
@@ -84,6 +85,7 @@ class Options:
     frigate_url: str | None = None
     ptz: dict[str, Any] = field(default_factory=lambda: config.validate_ptz(None))
     onvif_identity: identity.IdentityConfig = field(default_factory=identity.IdentityConfig)
+    onvif_log_calls: bool = False
     discovery_interface: str | None = None
     discovery_address: str | None = None
     hello_interval: float = 300.0
@@ -280,6 +282,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
         frigate_url=frigate_url,
         ptz=ptz_settings,
         onvif_identity=identity.IdentityConfig.from_mapping(onvif_settings.get("identity")),
+        onvif_log_calls=bool(onvif_settings.get("log_calls", False)),
         discovery_interface=discovery_settings.get("interface"),
         discovery_address=discovery_settings.get("address"),
         hello_interval=float(discovery_settings.get("hello_interval", 300)),
@@ -400,6 +403,7 @@ def build(options: Options) -> Stack:
             probe_interval_sec=float(options.ptz.get("probe_interval_sec", 2.0)),
             idle_probe_sec=float(options.ptz.get("idle_probe_sec", 60.0)),
         ),
+        arbiter=arbitration.Arbiter(float(options.ptz.get("manual_hold_sec", arbitration.DEFAULT_HOLD_SEC))),
     )
     refusal_warning = RateLimitedWarning(log)
 
@@ -590,6 +594,8 @@ def build(options: Options) -> Stack:
         "name": options.name,
         "interface_mac": interface_hw,
         "extra_scopes": options.discovery_scopes,
+        "autotrack_users": frozenset(options.ptz["autotrack_users"]),
+        "log_calls": bool(options.onvif_log_calls),
     }
     services = onvif.Services(
         backend, host=options.host, port=options.onvif_port,
@@ -598,6 +604,8 @@ def build(options: Options) -> Stack:
         frigate_url=options.frigate_url,
         identity=options.onvif_identity, name=options.name,
         interface_mac=interface_hw, extra_scopes=options.discovery_scopes,
+        autotrack_users=frozenset(options.ptz["autotrack_users"]),
+        log_calls=bool(options.onvif_log_calls),
     )
     north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry, bind_host=options.bind_host)
     # The service addresses it advertises must match where it is really listening.

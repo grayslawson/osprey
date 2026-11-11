@@ -16,6 +16,8 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Callable, ContextManager, Final
 
+import arbitration
+
 log = logging.getLogger("osprey.sentry")
 
 MIN_INTERVAL_SEC: Final = 1.0
@@ -156,7 +158,11 @@ class SentryPatrol:
                         self._state, self._next_move_at = "busy", clock + 1.0
                         self._publish()
                         return False
-                    accepted = self.goto_preset(point.name)
+                    token = arbitration.source.set(arbitration.AUTO)  # a patrol yields to people
+                    try:
+                        accepted = self.goto_preset(point.name)
+                    finally:
+                        arbitration.source.reset(token)
             except BlockingIOError:
                 self._state, self._next_move_at = "busy", clock + 1.0
                 self._publish()

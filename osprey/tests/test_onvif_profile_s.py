@@ -408,3 +408,29 @@ def test_the_table_is_capped_globally() -> None:
     results = [subs.create(f"peer:{index}") for index in range(onvif.Subscriptions.MAX_TOTAL + 1)]
     assert results[-1] is None
     assert subs.count == onvif.Subscriptions.MAX_TOTAL
+
+
+# ------------------------------------------------------------- call log + arbitration tag
+
+
+def test_each_soap_call_is_logged_with_user_peer_and_ptz_source(caplog: pytest.LogCaptureFixture) -> None:
+    import arbitration
+    import logging
+
+    svc, recorder = service()
+    svc.log_calls = True
+    seen: list[str | None] = []
+    recorder_stop = recorder._stop
+
+    def stop(pan_tilt: bool, zoom: bool) -> bool:
+        seen.append(arbitration.source.get())
+        return recorder_stop(pan_tilt, zoom)
+
+    svc.backend.stop = stop
+    with caplog.at_level(logging.INFO, logger="osprey.onvif"):
+        call_as(svc, "frigate", STOP)
+        call_as(svc, "admin", STOP)
+    assert seen == [arbitration.AUTO, arbitration.MANUAL]
+    assert f"ONVIF call Stop user=frigate peer={PROTECT_PEER} ptz_source=auto" in caplog.text
+    assert "user=admin" in caplog.text and "ptz_source=manual" in caplog.text
+    assert arbitration.source.get() is None  # reset after the call

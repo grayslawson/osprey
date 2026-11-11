@@ -5,6 +5,12 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
 
 ## Unreleased
 
+### Features
+- **ptz:** Manual wins, then resume. A person's PTZ command (console, MQTT, a
+  non-autotrack ONVIF user such as Protect) overrides Frigate and holds it off for
+  `ptz.manual_hold_sec` (default 30 s). New `ptz.autotrack_users` setting.
+- **onvif:** `onvif.log_calls` logs every SOAP call with user, peer and PTZ source.
+
 ### Renamed: cuckoo to osprey
 - The controller source moved from `cuckoo/` to `osprey/`. Deployments that
   mount or run `cuckoo/main.py` directly must switch to `osprey/main.py`. The

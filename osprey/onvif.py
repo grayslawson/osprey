@@ -36,6 +36,7 @@ from collections.abc import Mapping
 from typing import Callable, ClassVar, Final
 from xml.etree import ElementTree
 
+import arbitration
 import discovery
 import identity as device_identity
 import ptz
@@ -1019,7 +1020,9 @@ class Services:
         name: str = "osprey",
         interface_mac: str | None = None,
         extra_scopes: tuple[str, ...] = (),
-        snapshot_interval: float = 1.0) -> None:
+        snapshot_interval: float = 1.0,
+        autotrack_users: frozenset[str] = frozenset({"frigate"}),
+        log_calls: bool = False) -> None:
         self.backend = backend
         self.host = host
         self.port = port
@@ -1038,6 +1041,9 @@ class Services:
         self.extra_scopes = extra_scopes
         self.snapshots = SnapshotCache(lambda: self.backend.snapshot(), snapshot_interval)
         self._caller = threading.local()
+        # PTZ arbitration (see arbitration.py) and per-call logging.
+        self.autotrack_users = autotrack_users
+        self.log_calls = log_calls
         # Capability tokens in snapshot URIs are HMACs under a per-process key,
         # so they become invalid on restart (InvalidAfterReboot=true).
         self._snapshot_key = secrets.token_bytes(32)
@@ -1670,8 +1676,26 @@ class Services:
             principal=result.principal, anonymous=result.anonymous, peer=peer,
             subscription=subscription,
         )
-        body = self.handle(call, caller)
+        kind = self.ptz_source(caller)
+        log.log(
+            logging.INFO if self.log_calls else logging.DEBUG,
+            "ONVIF call %s user=%s peer=%s ptz_source=%s",
+            call.action,
+            caller.principal.username if caller.principal is not None else "-",
+            peer or "?", kind,
+        )
+        token = arbitration.source.set(kind)
+        try:
+            body = self.handle(call, caller)
+        finally:
+            arbitration.source.reset(token)
         return fault_status(body), body
+
+    def ptz_source(self, caller: Caller) -> str:
+        """Autotrackers (listed users, or anonymous ONVIF) yield to manual control."""
+        if caller.principal is None or caller.principal.username in self.autotrack_users:
+            return arbitration.AUTO
+        return arbitration.MANUAL
 
     # ------------------------------------------------------------------ device
 
@@ -3194,7 +3218,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if not self._require_admin(csrf=True):
                 return
-            self._control_json(root)
+            token = arbitration.source.set(arbitration.MANUAL)  # legacy console: a person
+            try:
+                self._control_json(root)
+            finally:
+                arbitration.source.reset(token)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
