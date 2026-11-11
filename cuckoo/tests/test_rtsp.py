@@ -368,6 +368,9 @@ def test_describe_before_the_camera_sends_parameter_sets_is_honest() -> None:
         client = Client(server.port)
         assert "503" in client.send("DESCRIBE", "/video1")
         assert "404" in client.send("DESCRIBE", "/nosuchtrack")
+        # A known track the camera has not created yet is retryable, not missing.
+        not_yet = client.send("DESCRIBE", "/video2")
+        assert "503" in not_yet and "Retry-After: 5" in not_yet
     finally:
         if client is not None:
             client.close()
