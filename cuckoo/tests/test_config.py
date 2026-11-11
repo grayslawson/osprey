@@ -176,6 +176,7 @@ def test_ptz_defaults_enable_auto_home_and_a_bounded_watchdog() -> None:
     assert ptz["max_unanswered"] == 3
     watchdog = controller.PtzWatchdog(
         reply_timeout_sec=ptz["reply_timeout_sec"],
+        min_silence_sec=ptz["min_silence_sec"],
         max_unanswered=ptz["max_unanswered"],
         probe_interval_sec=ptz["probe_interval_sec"],
         idle_probe_sec=ptz["idle_probe_sec"],

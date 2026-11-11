@@ -80,12 +80,16 @@ class PtzWatchdog:
     process has stopped answering. Socket liveness therefore proves nothing:
     only a motor-state push or a GetCurrentPosition reply does. The ptz1 socket
     is recycled, so the bounded Disable/Enable recovery re-establishes it, when
-    either `max_unanswered` position requests have gone unanswered, or the
-    oldest unanswered request is `reply_timeout_sec` old (silence).
+    both `max_unanswered` position requests have gone unanswered and the
+    oldest has been silent for `min_silence_sec` (a camera mid-move or booting
+    answers late, and probes arrive every couple of seconds), or the oldest
+    unanswered request is `reply_timeout_sec` old (silence alone). The first
+    path is skipped while video is flowing; the silence path never is.
     """
 
     reply_timeout_sec: float = 30.0
     max_unanswered: int = 3
+    min_silence_sec: float = 10.0
     # While state is UNKNOWN (motor timeout, fresh channel) or a request is
     # outstanding, re-ask at most this often.
     probe_interval_sec: float = 2.0
@@ -96,6 +100,8 @@ class PtzWatchdog:
     def __post_init__(self) -> None:
         if not 0.5 <= self.reply_timeout_sec <= 300:
             raise ValueError("ptz watchdog reply timeout must be 0.5..300 s")
+        if not 0 <= self.min_silence_sec <= 300:
+            raise ValueError("ptz watchdog min silence must be 0..300 s")
         if not 1 <= self.max_unanswered <= 20:
             raise ValueError("ptz watchdog max_unanswered must be 1..20")
         if not 0.1 <= self.probe_interval_sec <= 60:
@@ -868,8 +874,13 @@ class Controller:
             motion = session.camera.motion
             outstanding = session.unanswered_polls
             silent_for = now - session.position_requested_at if outstanding else 0.0
-            if outstanding >= config.max_unanswered or (
-                outstanding > 0 and silent_for >= config.reply_timeout_sec
+            if outstanding > 0 and (
+                silent_for >= config.reply_timeout_sec
+                or (
+                    outstanding >= config.max_unanswered
+                    and silent_for >= config.min_silence_sec
+                    and not self._video_flowing()
+                )
             ):
                 self._recycle_ptz(
                     session,
@@ -895,6 +906,10 @@ class Controller:
                 session.request_position(now)
             except (OSError, ssl.SSLError) as exc:
                 log.warning("PTZ position probe failed: mac=%s: %s", session.camera.mac, exc)
+
+    def _video_flowing(self) -> bool:
+        """True while any track is live (a frame within media.STALE_AFTER)."""
+        return self.hub is not None and any(s.live for s in list(self.hub.streams.values()))
 
     def _recycle_ptz(
         self,

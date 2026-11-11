@@ -83,6 +83,7 @@ def validate_cameras(value: Any) -> list[dict[str, Any]]:
 
 PTZ_LIMITS: Final[dict[str, tuple[float, float]]] = {
     "reply_timeout_sec": (0.5, 300.0),
+    "min_silence_sec": (0.0, 300.0),
     "max_unanswered": (1, 20),
     "probe_interval_sec": (0.1, 60.0),
     "idle_probe_sec": (0.0, 3600.0),
@@ -245,9 +246,10 @@ DEFAULTS: Final[dict[str, Any]] = {
         # 1000 is what Protect sends; values above it are unverified on hardware.
         "max_speed": ptz.DEFAULT_MAX_SPEED,
         # Watchdog: recycle the ptz1 socket after `max_unanswered` position
-        # requests have gone unanswered, or the oldest has been silent for
-        # `reply_timeout_sec`.
+        # requests have gone unanswered and the oldest has been silent for
+        # `min_silence_sec`, or the oldest has been silent for `reply_timeout_sec`.
         "reply_timeout_sec": 30.0,
+        "min_silence_sec": 10.0,
         "max_unanswered": 3,
         "probe_interval_sec": 2.0,
         "idle_probe_sec": 60.0,
