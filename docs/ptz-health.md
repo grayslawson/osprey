@@ -48,9 +48,9 @@ budget, so the loop is never tight. After recovery gives up, it starts again
 5 minutes later; each further give-up doubles that wait (10, 20, 40 minutes, up
 to 1 hour) until the camera answers again, which resets it.
 
-When recovery gives up, Osprey also asks the camera to reboot, but only while
-no video track is live, and at most twice per rolling hour per camera. A reboot
-skipped for either reason is logged (`camera reboot skipped:`).
+When recovery gives up, Osprey also asks the camera to reboot (a wedged PTZ
+daemon can leave video working), at most twice per rolling hour per camera. A
+reboot skipped because of that cap is logged (`camera reboot skipped:`).
 
 While the state is `UNKNOWN`, or while a request is unanswered, Osprey asks for
 the position every `probe_interval_sec` (2 s). A healthy idle channel is asked

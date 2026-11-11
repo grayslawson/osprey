@@ -57,8 +57,8 @@ PTZ_RECOVERY_REARM_SEC: Final = 300.0
 # Each further exhaustion doubles the re-arm wait up to this ceiling; a motor
 # reply (camera healthy again) resets it.
 PTZ_RECOVERY_REARM_MAX_SEC: Final = 3600.0
-# A reboot is the last resort: at most this many requests per rolling hour per
-# camera, and only while video is also stalled.
+# A reboot is the last resort for a wedged PTZ daemon (video may still work):
+# at most this many requests per rolling hour per camera.
 REBOOT_MAX_PER_HOUR: Final = 2
 REBOOT_WINDOW_SEC: Final = 3600.0
 # How long a preset write waits for the camera's acknowledgement. The G5's
@@ -844,20 +844,15 @@ class Controller:
             self._wait_for_ptz_callback(mac, now)
 
     def _maybe_reboot(self, session: Session, mac: str, now: float) -> None:
-        """Ask the camera to reboot, only if video is stalled and the hourly cap allows."""
-        if self._video_flowing():
-            reason = "video is still flowing"
-        else:
-            recent = [t for t in self._reboot_times.get(mac, []) if now - t < REBOOT_WINDOW_SEC]
-            self._reboot_times[mac] = recent
-            reason = (
-                f"already requested {len(recent)} reboot(s) in the last hour (cap {REBOOT_MAX_PER_HOUR})"
-                if len(recent) >= REBOOT_MAX_PER_HOUR
-                else ""
-            )
-        if reason:
+        """Ask the camera to reboot unless the hourly cap is reached."""
+        recent = [t for t in self._reboot_times.get(mac, []) if now - t < REBOOT_WINDOW_SEC]
+        self._reboot_times[mac] = recent
+        if len(recent) >= REBOOT_MAX_PER_HOUR:
             self.reboot_suppressed_total += 1
-            log.warning("camera reboot skipped: mac=%s: %s", mac, reason)
+            log.warning(
+                "camera reboot skipped: mac=%s: already requested %d reboot(s) in the last hour (cap %d)",
+                mac, len(recent), REBOOT_MAX_PER_HOUR,
+            )
             return
         self._reboot_times[mac].append(now)
         self.reboot_requests_total += 1

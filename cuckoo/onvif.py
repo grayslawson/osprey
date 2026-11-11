@@ -1291,7 +1291,7 @@ class Services:
         metric("ptz_channel_up", "gauge", "1 when the PTZ channel is up.", int(ptz_state.get("channel") == "up"))
         metric("ptz_watchdog_recycles_total", "counter", "PTZ channel recycles by the watchdog.", int(ptz_state.get("watchdog_recycles") or 0))  # type: ignore[call-overload]
         metric("camera_reboot_requests_total", "counter", "Camera reboot requests sent.", reboots.get("requests", 0))
-        metric("camera_reboot_requests_suppressed_total", "counter", "Camera reboot requests skipped (cap or video flowing).", reboots.get("suppressed", 0))
+        metric("camera_reboot_requests_suppressed_total", "counter", "Camera reboot requests skipped (hourly cap).", reboots.get("suppressed", 0))
         metric("uptime_seconds", "gauge", "Seconds since the service started.", int(time.time() - self.started_at))
         return "\n".join(lines) + "\n"
 

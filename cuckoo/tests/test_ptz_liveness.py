@@ -422,7 +422,7 @@ def _exhaust(ctl: controller.Controller, mac: str, now: float) -> controller.Ptz
 def test_reboots_are_capped_per_hour_and_the_rearm_wait_backs_off(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    ctl, control, wire = _harness()  # no hub: media state unknown, so not "flowing"
+    ctl, control, wire = _harness()
     adoption.apply_hello(control.camera, HELLO_PAYLOAD)
     mac = control.camera.mac
     now = 1000.0
@@ -451,7 +451,7 @@ def test_a_motor_reply_resets_the_rearm_backoff() -> None:
     assert control.camera.mac not in ctl._rearm_sec
 
 
-def test_no_reboot_while_video_is_flowing() -> None:
+def test_reboot_still_requested_while_video_is_flowing() -> None:
     hub = media.Hub()
     stream = hub.stream("video1")
     stream.parameters = types.SimpleNamespace(complete=True)
@@ -460,8 +460,8 @@ def test_no_reboot_while_video_is_flowing() -> None:
     ctl.hub = hub
     adoption.apply_hello(control.camera, HELLO_PAYLOAD)
     _exhaust(ctl, control.camera.mac, time.monotonic())
-    assert ptz.REBOOT not in wire.names()
-    assert ctl.reboot_suppressed_total == 1
+    assert ptz.REBOOT in wire.names()
+    assert ctl.reboot_suppressed_total == 0
 
 
 def test_operator_recovery_recycles_the_live_channel() -> None:
