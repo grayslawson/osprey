@@ -48,8 +48,8 @@ from pathlib import Path
 
 root = Path.cwd()
 version = (root / "VERSION").read_text(encoding="utf-8").strip()
-if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-    raise SystemExit(f"VERSION must be MAJOR.MINOR.PATCH, got {version!r}")
+if not re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", version):
+    raise SystemExit(f"VERSION must be MAJOR.MINOR.PATCH with an optional PEP 440 pre-release (a1, b1, rc1), got {version!r}")
 checks = {
     "homeassistant/addon/osprey/config.yaml": r'^version: "([^"]+)"$',
     "packaging/homebrew/osprey.rb": r'^  version "([^"]+)"$',

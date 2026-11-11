@@ -23,6 +23,9 @@ material is distributed with Osprey. Protocol behaviour can change with any
 camera firmware update; use Osprey at your own risk, and only with cameras you
 own or are authorised to manage.
 
+The operator console bundles preact and @preact/signals (MIT) and htm
+(Apache-2.0). Their license texts are in osprey/web/vendor/.
+
 Osprey does not bundle Frigate, FFmpeg, OpenSSL or Python. Container images
 built from docker/Dockerfile include Debian packages (including FFmpeg and
 OpenSSL) and paho-mqtt under their own licenses; the image SBOM published with

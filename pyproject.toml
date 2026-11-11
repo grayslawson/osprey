@@ -45,7 +45,7 @@ Changelog = "https://github.com/grayslawson/osprey/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "VERSION"
-pattern = '^(?P<version>\d+\.\d+\.\d+)\s*$'
+pattern = '^(?P<version>\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?)\s*$'
 
 [tool.hatch.build.targets.wheel]
 packages = ["packaging/pypi/osprey_ptz"]

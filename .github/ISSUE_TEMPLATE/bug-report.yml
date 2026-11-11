@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in Osprey does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove credentials, IP and MAC addresses, serial numbers and video from anything you paste.
+        Security problems go through **Security > Report a vulnerability**, not here.
+  - type: input
+    id: version
+    attributes:
+      label: Osprey version
+      description: "`osprey-entrypoint version`, the image tag, or `pip show osprey-ptz`"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install path
+      options: [Docker / Compose, Podman, Home Assistant app, pip, NixOS, Proxmox, source checkout]
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera model and firmware
+      placeholder: "UVC G5 PTZ, 5.3.95"
+    validations:
+      required: true
+  - type: input
+    id: clients
+    attributes:
+      label: Frigate / Protect / other client versions
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs and `osprey doctor` output
+      render: text
