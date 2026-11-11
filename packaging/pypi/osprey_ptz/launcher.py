@@ -18,6 +18,10 @@ def main() -> int:
     # import certs``), so both bundled roots must be importable.
     sys.path[:0] = [str(_APP / "osprey"), str(_APP)]
     sys.argv[0] = "osprey"  # argparse prog name in --help
+    if sys.argv[1:2] == ["probe"]:
+        from probe import main as probe_main  # osprey/probe.py
+
+        return probe_main(sys.argv[2:])
     from main import main as controller_main  # osprey/main.py
 
     return controller_main()

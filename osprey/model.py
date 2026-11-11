@@ -139,6 +139,10 @@ G5_PTZ_FIELD_OF_VIEW: Final = FieldOfView(
     tele_vertical_degrees=25.4,
 )
 G5_PTZ_MODELS: Final[frozenset[str]] = frozenset({"uvc g5 ptz", "0xa59b"})
+# Fully supported models: lower-cased model name as the camera reports it ->
+# measured geometry. Adding a model is one entry here plus a hardware test; see
+# docs/camera-models.md. Every other PTZ model runs as experimental.
+SUPPORTED_MODELS: Final[dict[str, FieldOfView]] = {name: G5_PTZ_FIELD_OF_VIEW for name in G5_PTZ_MODELS}
 
 
 @dataclass
@@ -572,11 +576,19 @@ class Camera:
         return self.pan_range.maximum > self.pan_range.minimum
 
     @property
+    def support(self) -> str:
+        """``supported`` for measured models (the G5 PTZ), else ``experimental``.
+
+        An experimental PTZ still adopts and streams, and moves within the ranges
+        it reports in its hello, but FOV-relative moves and click-to-center are
+        off until its geometry is measured. ``osprey probe`` gathers that data.
+        """
+        return "supported" if self.model.strip().casefold() in SUPPORTED_MODELS else "experimental"
+
+    @property
     def field_of_view(self) -> FieldOfView | None:
         """Return geometry only for camera identities with a known calibration."""
-        if self.model.strip().casefold() in G5_PTZ_MODELS:
-            return G5_PTZ_FIELD_OF_VIEW
-        return None
+        return SUPPORTED_MODELS.get(self.model.strip().casefold())
 
     def range_for(self, axis: str) -> AxisRange:
         if axis == PAN:

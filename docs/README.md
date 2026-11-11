@@ -9,6 +9,7 @@ matches the task.
 - [Architecture](../osprey/ARCHITECTURE.md) — process boundaries, protocol layers,
   and runtime ownership.
 - [Design notes](../DESIGN.md) — user-facing design decisions and trade-offs.
+- [Camera models](camera-models.md): supported and experimental models, and `osprey probe`
 - [Multi-camera setup](multi-camera.md) — registering and operating more than one
   camera.
 

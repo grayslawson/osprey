@@ -705,6 +705,12 @@ def build(options: Options) -> Stack:
             camera.pan_range.minimum, camera.pan_range.maximum,
             camera.tilt_range.minimum, camera.tilt_range.maximum,
         )
+        if camera.is_ptz and camera.support != "supported":
+            log.warning(
+                "camera %s model %r is EXPERIMENTAL: PTZ uses its reported ranges only and "
+                "FOV-relative moves are off. Run `osprey probe` and open a model-support issue.",
+                camera.mac, camera.model or "?",
+            )
         # Re-announce now that we know whether to claim PTZ.
         finder.identity = announced(camera.name or options.name, camera.is_ptz)
         if options.announce:

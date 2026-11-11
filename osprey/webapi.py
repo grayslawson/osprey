@@ -507,6 +507,7 @@ class WebApp:
             "id": camera_id,
             "name": (camera.name if camera is not None else "") or camera_id,
             "model": camera.model if camera is not None else "",
+            "support": camera.support if camera is not None else "",
             "adopted": bool(camera is not None and camera.adopted),
             "ptz": services.ptz_enabled,
             "status": ptz_state(camera, enabled=services.ptz_enabled)["status"],
