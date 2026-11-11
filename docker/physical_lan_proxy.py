@@ -1,11 +1,11 @@
 """Forward only the expected G5's LAN TCP channels to loopback Docker ports.
 
 Windows/Docker Desktop fallback only. A native Linux host publishes the camera
-channels directly on CUCKOO_PHYSICAL_BIND and needs no relay. Docker Desktop
+channels directly on OSPREY_PHYSICAL_BIND and needs no relay. Docker Desktop
 under WSL mirrored networking reserves the published LAN ports but does not
 complete inbound connections from the camera, so this host-side relay binds the
 LAN address and forwards to the loopback ports published with
-``CUCKOO_PHYSICAL_BIND=127.0.0.1``. It does not inspect or log payloads.
+``OSPREY_PHYSICAL_BIND=127.0.0.1``. It does not inspect or log payloads.
 """
 
 import argparse
@@ -33,9 +33,10 @@ def read_env(path: Path) -> tuple[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        if key in {"CUCKOO_PHYSICAL_HOST", "G5_PTZ_IP"}:
-            values[key] = value.strip().strip('"').strip("'")
-    host = str(ipaddress.IPv4Address(values["CUCKOO_PHYSICAL_HOST"]))
+        key = "OSPREY_PHYSICAL_HOST" if key == "CUCKOO_PHYSICAL_HOST" else key  # pre-rename name
+        if key in {"OSPREY_PHYSICAL_HOST", "G5_PTZ_IP"}:
+            values.setdefault(key, value.strip().strip('"').strip("'"))
+    host = str(ipaddress.IPv4Address(values["OSPREY_PHYSICAL_HOST"]))
     camera = str(ipaddress.IPv4Address(values["G5_PTZ_IP"]))
     if host == camera or ipaddress.IPv4Address(host).is_loopback:
         raise ValueError("physical host must be a non-loopback address distinct from camera")

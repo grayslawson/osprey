@@ -1,13 +1,13 @@
 # Tasks: Installable Python Package and Single `osprey` CLI
 
 **Input**: [plan.md](plan.md), [spec.md](spec.md). Not started. Sequence after the ptz-watchdog,
-onvif-auth-profile-s, rtsp-hardening and web-ui branches merge, because they edit `cuckoo/`.
+onvif-auth-profile-s, rtsp-hardening and web-ui branches merge, because they edit `osprey/`.
 
 ## Phase 1: Package move (no behaviour change)
 
-- [ ] T001 Move `cuckoo/*.py` (excluding `tests/` and `harness/`) to `src/osprey/` with `git mv`
-- [ ] T002 Convert flat imports to relative imports; keep `cuckoo/` as a one-release shim
-- [ ] T003 Update `cuckoo/mypy.ini`, `cuckoo/test.sh`, and `.github/workflows/test.yml` paths
+- [ ] T001 Move `osprey/*.py` (excluding `tests/` and `harness/`) to `src/osprey/` with `git mv`
+- [ ] T002 Convert flat imports to relative imports; keep `osprey/` as a one-release shim
+- [ ] T003 Update `osprey/mypy.ini`, `osprey/test.sh`, and `.github/workflows/test.yml` paths
 - [ ] T004 Confirm `make check` passes on the source tree with no change in test count
 
 ## Phase 2: CLI and runtime contract

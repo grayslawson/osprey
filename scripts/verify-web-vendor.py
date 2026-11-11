@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the vendored browser modules in cuckoo/web/vendor.
+"""Verify the vendored browser modules in osprey/web/vendor.
 
 Default (offline): every file listed in manifest.json exists and matches its
 recorded sha256, and no unlisted file is present.
@@ -21,7 +21,7 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-VENDOR = Path(__file__).resolve().parent.parent / "cuckoo" / "web" / "vendor"
+VENDOR = Path(__file__).resolve().parent.parent / "osprey" / "web" / "vendor"
 
 
 def verify(fetch: bool = False, vendor: Path = VENDOR) -> list[str]:

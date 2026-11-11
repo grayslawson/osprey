@@ -5,7 +5,7 @@ set -eu
 repo_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 
-required='AGENTS.md CONTRIBUTING.md README.md SECURITY.md Makefile docs/README.md docs/quality.md cuckoo/test.sh pyunifiwire/test.sh'
+required='AGENTS.md CONTRIBUTING.md README.md SECURITY.md Makefile docs/README.md docs/quality.md osprey/test.sh pyunifiwire/test.sh'
 for path in $required; do
 	[ -f "$path" ] || { echo "missing required repository file: $path" >&2; exit 1; }
 done
@@ -70,7 +70,7 @@ git diff --check
 
 # Keep executable launchers executable; this catches accidental mode changes
 # that otherwise make a fresh checkout fail.
-for path in cuckoo/test.sh pyunifiwire/test.sh scripts/osprey scripts/osprey-doctor.sh; do
+for path in osprey/test.sh pyunifiwire/test.sh scripts/osprey scripts/osprey-doctor.sh; do
 	[ -x "$path" ] || { echo "launcher is not executable: $path" >&2; exit 1; }
 done
 

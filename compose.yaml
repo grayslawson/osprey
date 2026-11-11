@@ -13,8 +13,8 @@ services:
       OSPREY_ANNOUNCE: ${OSPREY_ANNOUNCE:-false}
     volumes:
       - type: bind
-        source: ./cuckoo
-        target: /opt/osprey/cuckoo
+        source: ./osprey
+        target: /opt/osprey/osprey
         read_only: true
       - type: bind
         source: ./pyunifiwire/src

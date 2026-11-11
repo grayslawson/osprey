@@ -6,7 +6,7 @@ matches the task.
 
 ## Product and architecture
 
-- [Architecture](../cuckoo/ARCHITECTURE.md) — process boundaries, protocol layers,
+- [Architecture](../osprey/ARCHITECTURE.md) — process boundaries, protocol layers,
   and runtime ownership.
 - [Design notes](../DESIGN.md) — user-facing design decisions and trade-offs.
 - [Multi-camera setup](multi-camera.md) — registering and operating more than one
@@ -32,12 +32,12 @@ matches the task.
 
 ## Development and validation
 
-- [Harnesses](../cuckoo/harness/README.md) — opt-in hardware and client acceptance
+- [Harnesses](../osprey/harness/README.md) — opt-in hardware and client acceptance
   checks.
 - [Repository sync](repository-sync.md) — Forgejo ownership, GitHub mirroring, and
   GHCR release responsibilities.
 - [NixOS](nixos.md) — declarative package and module usage.
-- [Tests](../cuckoo/tests/README.md) — test layout and focused commands.
+- [Tests](../osprey/tests/README.md) — test layout and focused commands.
 - [Quality map](quality.md) — domain-by-domain evidence and known limits.
 
 ## Maintenance rules

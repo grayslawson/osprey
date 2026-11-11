@@ -25,7 +25,7 @@ set +a
 
 # Keep the existing diagnostic text below stable while accepting the product
 # environment names used by the Osprey deployment files.
-CUCKOO_PHYSICAL_BIND=${OSPREY_BIND:-}
+OSPREY_PHYSICAL_BIND=${OSPREY_BIND:-}
 G5_PTZ_IP=${OSPREY_CAMERA_IP:-}
 
 for name in OSPREY_HOST OSPREY_BIND OSPREY_CAMERA_IP OSPREY_CAMERA_MAC; do
@@ -42,7 +42,7 @@ ip -4 -o addr show scope global |
   awk '{print $4}' |
   cut -d/ -f1 |
 grep -qx -- "$OSPREY_BIND" ||
-  fail "CUCKOO_PHYSICAL_BIND ${CUCKOO_PHYSICAL_BIND} is not assigned to this host"
+  fail "OSPREY_PHYSICAL_BIND ${OSPREY_PHYSICAL_BIND} is not assigned to this host"
 
 ping -c1 -W2 "$OSPREY_CAMERA_IP" >/dev/null 2>&1 ||
   fail "camera ${G5_PTZ_IP} did not answer a targeted ping"
@@ -78,7 +78,7 @@ docker compose --env-file "$ENV_FILE" -f compose.yaml config --quiet ||
 
 rendered=$("${compose[@]}" config)
 if grep -q 'host_ip: 0\.0\.0\.0' <<<"$rendered"; then
-  fail "rendered Compose binds 0.0.0.0; only ${CUCKOO_PHYSICAL_BIND} and loopback are allowed"
+  fail "rendered Compose binds 0.0.0.0; only ${OSPREY_PHYSICAL_BIND} and loopback are allowed"
 fi
 
 bind_of() {
@@ -106,8 +106,8 @@ expect_bind 8554 "$OSPREY_BIND"
 expect_bind 18001 "$OSPREY_BIND"
 
 printf 'preflight: camera %s (%s) reachable and verified over ARP\n' "$G5_PTZ_IP" "$MAC"
-printf 'preflight: LAN binds on %s -> 8000, 8554, 18001\n' "$CUCKOO_PHYSICAL_BIND"
+printf 'preflight: LAN binds on %s -> 8000, 8554, 18001\n' "$OSPREY_PHYSICAL_BIND"
 printf 'preflight: advertised ONVIF/RTSP on %s -> 8000, 8554 (firewall: deployment subnet only)\n' \
-  "$CUCKOO_PHYSICAL_BIND"
+  "$OSPREY_PHYSICAL_BIND"
 printf 'preflight: loopback only -> 18555\n'
 printf 'preflight: Osprey Compose renders; no camera, firewall, or Protect state changed\n'
