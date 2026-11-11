@@ -831,6 +831,32 @@ def test_sse_streams_logs_presets_and_resumes(served: Any) -> None:
         logger.removeHandler(service.logs)
 
 
+def test_sse_delivers_a_log_written_while_the_state_snapshot_is_built(served: Any) -> None:
+    """Deterministic form of the connect race: the record lands mid-snapshot."""
+    server, service, _ = served
+    logger = logging.getLogger("test.webapi.sse.race")
+    logger.addHandler(service.logs)
+    real_state = server.web.state
+
+    def state_then_log(*args: Any, **kwargs: Any) -> Any:
+        snapshot = real_state(*args, **kwargs)
+        logger.error("mid-snapshot record")
+        return snapshot
+
+    server.web.state = state_then_log
+    try:
+        reader = EventReader(server)
+        try:
+            reader.until("state")
+            entry, _ = reader.until("log")
+            assert entry["message"] == "mid-snapshot record"
+        finally:
+            reader.close()
+    finally:
+        logger.removeHandler(service.logs)
+        server.web.state = real_state
+
+
 def test_sse_requires_auth_and_ends_on_logout() -> None:
     auth = onvif.AdminAuth(onvif.AdminAuth.hash_password("correct horse", iterations=100_000))
     service, _ = make(auth=auth)
