@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
+import arbitration
 from sentry_runtime import MovementGate
 
 log = logging.getLogger("osprey.mqtt")
@@ -190,8 +191,12 @@ class MqttBridge:
                 if not isinstance(data, dict):
                     raise ValueError("payload must be a JSON object")
                 self._validate(action, data)
-                with self.gate.lease("mqtt"):
-                    result["result"] = self._handlers[action](data)
+                token = arbitration.source.set(arbitration.MANUAL)
+                try:
+                    with self.gate.lease("mqtt"):
+                        result["result"] = self._handlers[action](data)
+                finally:
+                    arbitration.source.reset(token)
                 result["accepted"] = True
             except (ValueError, TypeError, json.JSONDecodeError, BlockingIOError) as exc:
                 result["error"] = str(exc) or type(exc).__name__

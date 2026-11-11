@@ -74,3 +74,12 @@ names unique (for example, `home`, `lower-loitering`, and `back-porch`) and set
 
 This behavior follows Frigate's ONVIF controller implementation, which loads
 presets during camera initialization: [Frigate PTZ ONVIF controller](https://github.com/blakeblackshear/frigate/blob/dev/frigate/ptz/onvif.py).
+
+## Manual control and autotracking
+
+When someone moves the camera from the Osprey console, MQTT, or another ONVIF
+user (for example UniFi Protect), Osprey holds Frigate's PTZ commands back for
+`ptz.manual_hold_sec` seconds (default 30), then lets autotracking resume. Give
+Frigate its own ONVIF user and keep it in `ptz.autotrack_users` (default
+`["frigate"]`). See
+[Letting Protect move the camera](protect-dual-adoption.md#letting-protect-move-the-camera-manual-wins-then-resume).
