@@ -18,7 +18,7 @@ configured broker; it does not run or expose a broker of its own.
 }
 ```
 
-Put credentials in a root-owned deployment secret, not in `cuckoo.json` or
+Put credentials in a root-owned deployment secret, not in `osprey.json` or
 documentation. TLS verifies broker certificates when `tls` is enabled. Use
 broker ACLs so only trusted publishers can write Osprey command topics.
 

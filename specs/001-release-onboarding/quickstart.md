@@ -18,11 +18,11 @@ require a physical camera or a Frigate installation for the unit-level scenarios
    `0600`, and the response reports restart required.
 5. Submit a second save and confirm it is rejected without changing file timestamps or content.
 
-Automated coverage: `cuckoo/tests/test_setup_wizard.py`.
+Automated coverage: `osprey/tests/test_setup_wizard.py`.
 
 ## Scenario 2: Doctor success and failure isolation
 
-1. Run `scripts/osprey-doctor.sh --host 192.0.2.10 --config cuckoo.json` in a controlled
+1. Run `scripts/osprey-doctor.sh --host 192.0.2.10 --config osprey.json` in a controlled
    environment.
 2. Run with `--callback http://192.0.2.10:8000` and confirm each applicable result uses the
    documented prefix and a healthy run exits `0`.
@@ -40,7 +40,7 @@ Automated coverage: shell syntax checks plus the repository configuration and in
 4. Confirm valid credentials succeed, invalid credentials fail, stale challenges expire, and
    no password appears in logs or diagnostic output.
 
-Automated coverage: `cuckoo/tests/test_onvif_auth.py` and `cuckoo/tests/test_rtsp.py`.
+Automated coverage: `osprey/tests/test_onvif_auth.py` and `osprey/tests/test_rtsp.py`.
 
 ## Full validation
 
@@ -49,7 +49,7 @@ validation, package checks, and Home Assistant metadata validation before releas
 
 ## Validation record
 
-On 2026-09-15, the focused setup/doctor suites and the complete `cuckoo/tests` suite passed
+On 2026-09-15, the focused setup/doctor suites and the complete `osprey/tests` suite passed
 under an ephemeral `uv` pytest environment. Shell syntax checks passed for the doctor,
 update, Proxmox, and test scripts. Mypy passed for application sources when test and harness
 modules are excluded; the repository's legacy harness imports require the optional ONVIF

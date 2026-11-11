@@ -6,9 +6,9 @@
 !docker/
 !docker/Dockerfile
 !docker/entrypoint.sh
-!docker/cuckoo_health.py
-!cuckoo/
-!cuckoo/**
+!docker/osprey_health.py
+!osprey/
+!osprey/**
 !pyunifiwire/
 !pyunifiwire/LICENSE
 !pyunifiwire/src/

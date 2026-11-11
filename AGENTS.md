@@ -8,9 +8,9 @@ unstated machine state, chat history, or private deployment details.
 
 Osprey controls supported Ubiquiti PTZ cameras and exposes ONVIF/RTSP services
 for a separately deployed Frigate installation. Osprey does not install,
-bundle, or reconfigure Frigate. The `cuckoo/` directory is the historical
-Python package name; user-facing documentation and new code should call the
-product Osprey.
+bundle, or reconfigure Frigate. The controller lives in `osprey/` (renamed
+from the historical `cuckoo/` in 0.9). Old `cuckoo.json`, `cuckoo.pem` and
+`CUCKOO_*` names are still read as fallbacks; do not add new ones.
 
 Never commit camera credentials, tokens, private IP addresses, recordings,
 generated certificates, or deployment state. Use the neutral examples already
@@ -18,7 +18,7 @@ present in the documentation and `.env.*.example` files.
 
 ## Repository map
 
-- `cuckoo/`: controller, ONVIF, RTSP, admin, and integration code
+- `osprey/`: controller, ONVIF, RTSP, admin, and integration code
 - `pyunifiwire/`: shared UniFi camera wire-protocol library
 - `docs/`: user and operator documentation
 - `homeassistant/`, `nix/`, `packaging/`, `docker/`: distribution targets
@@ -26,7 +26,7 @@ present in the documentation and `.env.*.example` files.
 - `.github/workflows/`: release and validation gates
 
 Read the relevant module and its tests before changing behavior. For protocol
-changes, also read `docs/README.md`, `cuckoo/ARCHITECTURE.md`, and the applicable
+changes, also read `docs/README.md`, `osprey/ARCHITECTURE.md`, and the applicable
 integration guide.
 
 ## Fast feedback loop
@@ -42,10 +42,10 @@ make check                 # tests, type checks, static repository checks
 Useful focused commands:
 
 ```sh
-python3 -m pytest -q cuckoo/tests/test_onvif.py
-python3 -m pytest -q cuckoo/tests/test_setup_wizard.py
+python3 -m pytest -q osprey/tests/test_onvif.py
+python3 -m pytest -q osprey/tests/test_setup_wizard.py
 python3 -m pytest -q pyunifiwire/tests
-python3 -m mypy --config-file cuckoo/mypy.ini cuckoo
+python3 -m mypy --config-file osprey/mypy.ini osprey
 sh homeassistant/validate.sh
 ```
 

@@ -4,7 +4,7 @@
 set -u
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-controller_dir=$(CDPATH='' cd -- "$script_dir/../cuckoo" && pwd)
+controller_dir=$(CDPATH='' cd -- "$script_dir/../osprey" && pwd)
 
 usage() {
     cat <<'EOF'
@@ -15,7 +15,7 @@ Options:
   --camera ADDRESS     camera address to route-test
   --callback URL        callback URL that must be reachable (or OSPREY_CALLBACK_URL)
   --frigate URL        existing Frigate URL to health-check
-  --config PATH        JSON config to validate (default: cuckoo.json)
+  --config PATH        JSON config to validate (default: osprey.json)
   --ports LIST         comma-separated ports (default: 7442,7444,7550,8000,8554)
   --help
 EOF
@@ -25,7 +25,8 @@ host=${OSPREY_HOST:-}
 camera=${OSPREY_CAMERA_IP:-}
 callback=${OSPREY_CALLBACK_URL:-}
 frigate=${OSPREY_FRIGATE_URL:-}
-config_file=cuckoo.json
+config_file=osprey.json
+[ -f osprey.json ] || [ ! -f cuckoo.json ] || config_file=cuckoo.json  # pre-0.9 name
 ports=7442,7444,7550,8000,8554
 errors=0
 warnings=0

@@ -5,6 +5,17 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
 
 ## Unreleased
 
+### Renamed: cuckoo to osprey
+- The controller source moved from `cuckoo/` to `osprey/`. Deployments that
+  mount or run `cuckoo/main.py` directly must switch to `osprey/main.py`. The
+  release image, Home Assistant add-on, NixOS package and PyPI wheel are updated.
+- Default file names are now `osprey.json` and `osprey.pem`. An existing
+  `cuckoo.json` or `cuckoo.pem` is still used when the new file does not exist,
+  so an upgraded camera keeps trusting its certificate.
+- Logger names changed from `cuckoo.*` to `osprey.*`. Update any log filters.
+- `handoff.sh` reads `OSPREY_*` variables and falls back to the old `CUCKOO_*` names.
+- The WS-Discovery device UUID is unchanged, so NVRs keep the same device.
+
 ### Bug fixes
 - **onvif:** Fail closed on partial authentication config
 - Bound RTSP digest nonce state

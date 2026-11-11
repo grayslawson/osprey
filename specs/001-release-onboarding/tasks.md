@@ -7,16 +7,16 @@
 
 **Purpose**: Establish repeatable validation fixtures without changing production behavior.
 
-- [X] T001 [P] Add isolated setup and doctor fixture helpers in `cuckoo/tests/tests_support.py`
-- [X] T002 [P] Record the setup and doctor contract references in `cuckoo/tests/README.md`
+- [X] T001 [P] Add isolated setup and doctor fixture helpers in `osprey/tests/tests_support.py`
+- [X] T002 [P] Record the setup and doctor contract references in `osprey/tests/README.md`
 
 ## Phase 2: Foundational
 
 **Purpose**: Create shared assertions for atomic writes, status prefixes, and secret redaction.
 
-- [X] T003 [P] Add reusable secret-redaction assertions in `cuckoo/tests/tests_support.py`
-- [X] T004 [P] Add a shell-test runner for `scripts/osprey-doctor.sh` in `cuckoo/tests/test_doctor.py`
-- [X] T005 [P] Add contract fixtures for neutral setup payloads in `cuckoo/tests/test_setup_wizard.py`
+- [X] T003 [P] Add reusable secret-redaction assertions in `osprey/tests/tests_support.py`
+- [X] T004 [P] Add a shell-test runner for `scripts/osprey-doctor.sh` in `osprey/tests/test_doctor.py`
+- [X] T005 [P] Add contract fixtures for neutral setup payloads in `osprey/tests/test_setup_wizard.py`
 
 **Checkpoint**: Shared validation fixtures are available before story work begins.
 
@@ -24,19 +24,19 @@
 
 **Goal**: A new operator can safely complete setup and receive durable generated artifacts.
 
-**Independent Test**: Run `cuckoo/tests/test_setup_wizard.py` against a temporary state directory
+**Independent Test**: Run `osprey/tests/test_setup_wizard.py` against a temporary state directory
 and verify valid, invalid, repeated, and interrupted saves.
 
 ### Tests
 
-- [X] T006 [P] [US1] Test valid setup creates runtime JSON, Frigate metadata, and mode-0600 secret files in `cuckoo/tests/test_setup_wizard.py`
-- [X] T007 [P] [US1] Test invalid input and invalid setup tokens do not write partial state in `cuckoo/tests/test_setup_wizard.py`
-- [X] T008 [P] [US1] Test completed setup rejects replay and preserves prior files in `cuckoo/tests/test_setup_wizard.py`
+- [X] T006 [P] [US1] Test valid setup creates runtime JSON, Frigate metadata, and mode-0600 secret files in `osprey/tests/test_setup_wizard.py`
+- [X] T007 [P] [US1] Test invalid input and invalid setup tokens do not write partial state in `osprey/tests/test_setup_wizard.py`
+- [X] T008 [P] [US1] Test completed setup rejects replay and preserves prior files in `osprey/tests/test_setup_wizard.py`
 
 ### Implementation and Documentation
 
-- [X] T009 [US1] Harden setup save interruption and restart-state handling in `cuckoo/setup_wizard.py`
-- [X] T010 [US1] Verify setup route status and completion behavior in `cuckoo/main.py`
+- [X] T009 [US1] Harden setup save interruption and restart-state handling in `osprey/setup_wizard.py`
+- [X] T010 [US1] Verify setup route status and completion behavior in `osprey/main.py`
 - [X] T011 [P] [US1] Document first-run recovery, generated artifacts, and reset boundaries in `docs/onboarding-runbook.md` and `docs/installation.md`
 
 **Checkpoint**: User Story 1 is independently testable and preserves secrets and prior state.
@@ -45,14 +45,14 @@ and verify valid, invalid, repeated, and interrupted saves.
 
 **Goal**: One read-only command identifies local, routing, runtime, callback, and Frigate failures.
 
-**Independent Test**: Run `cuckoo/tests/test_doctor.py` with one deliberate failure per check
+**Independent Test**: Run `osprey/tests/test_doctor.py` with one deliberate failure per check
 and assert independent results and exit codes.
 
 ### Tests
 
-- [X] T012 [P] [US2] Test healthy doctor output and zero exit status in `cuckoo/tests/test_doctor.py`
-- [X] T013 [P] [US2] Test invalid host, config, route, port, runtime, and Frigate failures in `cuckoo/tests/test_doctor.py`
-- [X] T014 [P] [US2] Test optional-tool warnings do not suppress unrelated checks in `cuckoo/tests/test_doctor.py`
+- [X] T012 [P] [US2] Test healthy doctor output and zero exit status in `osprey/tests/test_doctor.py`
+- [X] T013 [P] [US2] Test invalid host, config, route, port, runtime, and Frigate failures in `osprey/tests/test_doctor.py`
+- [X] T014 [P] [US2] Test optional-tool warnings do not suppress unrelated checks in `osprey/tests/test_doctor.py`
 
 ### Implementation and Documentation
 
@@ -71,13 +71,13 @@ logs, and diagnostic output for mode names without credential values.
 
 ### Tests
 
-- [X] T018 [P] [US3] Add ONVIF mode and credential-redaction assertions in `cuckoo/tests/test_onvif_auth.py`
-- [X] T019 [P] [US3] Add RTSP mode and stale-challenge redaction assertions in `cuckoo/tests/test_rtsp.py`
-- [X] T020 [P] [US3] Add status/log redaction coverage for generated credentials in `cuckoo/tests/test_setup_wizard.py`
+- [X] T018 [P] [US3] Add ONVIF mode and credential-redaction assertions in `osprey/tests/test_onvif_auth.py`
+- [X] T019 [P] [US3] Add RTSP mode and stale-challenge redaction assertions in `osprey/tests/test_rtsp.py`
+- [X] T020 [P] [US3] Add status/log redaction coverage for generated credentials in `osprey/tests/test_setup_wizard.py`
 
 ### Implementation and Documentation
 
-- [X] T021 [US3] Audit status and error paths for protocol credential leakage in `cuckoo/main.py`, `cuckoo/onvif.py`, and `cuckoo/rtsp.py`
+- [X] T021 [US3] Audit status and error paths for protocol credential leakage in `osprey/main.py`, `osprey/onvif.py`, and `osprey/rtsp.py`
 - [X] T022 [P] [US3] Update authentication and security guidance with active modes, network boundaries, and Frigate compatibility in `docs/authentication.md` and `docs/security.md`
 
 **Checkpoint**: User Story 3 is independently testable for both compatibility and protected modes.

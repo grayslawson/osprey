@@ -1,6 +1,6 @@
 # Operator HTTP contract (`/api/v1`)
 
-Owner: `cuckoo/webapi.py`. Every route is served on the ONVIF port and requires
+Owner: `osprey/webapi.py`. Every route is served on the ONVIF port and requires
 the operator session except `GET /`, `/ui/*` and `/api/v1/session`. Camera-scoped routes take
 `{cam}`, which is `default` for a single-camera deployment or a registered
 camera ID.
