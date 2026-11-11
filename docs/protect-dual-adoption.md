@@ -138,9 +138,10 @@ timestamp more than 300 seconds from the server's clock.
 The G5 stays on the main LAN, so there is no camera VLAN. Use these controls
 instead, and verify each one:
 
-- **Firewall the console away from the physical camera.** Block the Protect
-  console's address from TCP `7442` and `7550` on the G5, and from UDP `10001`
-  if the router allows it. Osprey's address must stay allowed. This stops
+- **Firewall the physical camera away from the console.** Block the camera's
+  traffic to the Protect console on TCP `7442`, `7444`, `7550` and UDP `10001`.
+  `osprey protect-guard --apply` creates this policy on a UniFi gateway. See
+  [Keep UniFi Protect off the physical camera](protect-guard.md). This stops
   Protect from natively adopting the physical camera while Osprey is its only
   controller.
 - **Check the identity before adopting.** Osprey reports its model as
