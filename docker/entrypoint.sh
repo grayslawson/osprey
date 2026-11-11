@@ -3,7 +3,7 @@
 #
 #   run [FLAGS...]     start the controller (default)
 #   doctor [OPTS...]   read-only deployment diagnostics
-#   healthcheck        exit 0 when the ONVIF/console listener accepts TCP
+#   healthcheck        exit 0 when GET /healthz on the ONVIF listener returns 200
 #   version            print the packaged Osprey version
 #   -<flag> ...        shorthand for `run -<flag> ...`
 #   anything else      executed verbatim (for debugging)

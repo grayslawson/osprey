@@ -6,6 +6,7 @@ import dataclasses
 import http.client
 import json
 import re
+from typing import Any
 from http import HTTPStatus
 
 import onvif
@@ -183,3 +184,62 @@ def test_goto_home_matches_the_home_preset_case_insensitively() -> None:
     service = onvif.Services(recorder.backend(), host="10.0.0.1", port=8000)
     assert "GotoHomePositionResponse" in ask(service, "GotoHomePosition")
     assert recorder.preset_gotos == [(9, 1000)]
+
+
+def _service_with(telemetry: dict[str, dict[str, object]], **changes: Any) -> onvif.Services:
+    backend = dataclasses.replace(HealthRecorder().backend(), telemetry=lambda: telemetry, **changes)
+    return onvif.Services(backend, host="10.0.0.1", port=8000)
+
+
+def test_healthz_reports_frame_ages_and_degrades_when_video_stalls() -> None:
+    service = _service_with({"video1": {"last_frame_age": 0.4}, "video2": {"last_frame_age": 90.0}})
+    status, body = service.health()
+    assert status == HTTPStatus.OK and body["status"] == "ok"
+    assert body["video_frame_age_sec"] == 0.4
+    assert body["tracks"] == {"video1": {"last_frame_age": 0.4}, "video2": {"last_frame_age": 90.0}}
+    assert body["camera_connected"] is True
+
+    service = _service_with({"video1": {"last_frame_age": 31.0}, "video2": {"last_frame_age": 90.0}},
+                            camera_connected=lambda: False)
+    status, body = service.health()
+    assert status == HTTPStatus.SERVICE_UNAVAILABLE and body["status"] == "degraded"
+    assert body["video_frame_age_sec"] == 31.0 and body["camera_connected"] is False
+
+
+def test_healthz_degrades_when_no_frame_has_ever_arrived_after_the_grace_period() -> None:
+    service = _service_with({"video1": {"last_frame_age": None}})
+    assert service.health()[0] == HTTPStatus.OK  # just started
+    service.started_at -= onvif.HEALTH_VIDEO_STALE_SEC + 1
+    status, body = service.health()
+    assert status == HTTPStatus.SERVICE_UNAVAILABLE and body["video_frame_age_sec"] is None
+
+
+def test_metrics_endpoint_serves_prometheus_text() -> None:
+    service = _service_with(
+        {"video1": {"last_frame_age": 1.25}, "video2": {"last_frame_age": None}},
+        reboot_counters=lambda: {"requests": 2, "suppressed": 5},
+    )
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", onvif.METRICS_PATH)
+        response = connection.getresponse()
+        text = response.read().decode()
+        assert response.status == HTTPStatus.OK
+        assert response.getheader("Content-Type", "").startswith("text/plain")
+    finally:
+        server.stop()
+    lines = set(text.splitlines())
+    for expected in (
+        "osprey_camera_connected 1",
+        "osprey_camera_adopted 1",
+        'osprey_track_last_frame_age_seconds{track="video1"} 1.250',
+        "osprey_ptz_channel_up 0",  # the stub health has no channel field
+        "osprey_ptz_watchdog_recycles_total 0",
+        "osprey_camera_reboot_requests_total 2",
+        "osprey_camera_reboot_requests_suppressed_total 5",
+    ):
+        assert expected in lines, expected
+    assert any(line.startswith("osprey_uptime_seconds ") for line in lines)
+    assert 'track="video2"' not in text
