@@ -2,10 +2,11 @@
 set -eu
 case "${1:-}" in
     doctor) shift; exec "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/osprey-doctor.sh" "$@" ;;
-    probe)
+    probe|protect-guard)
+        tool=$(printf '%s' "$1" | tr - _)
         shift
         root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-        PYTHONPATH="$root/pyunifiwire/src${PYTHONPATH:+:$PYTHONPATH}" exec python3 "$root/osprey/probe.py" "$@" ;;
-    --help|-h) echo 'Usage: osprey doctor|probe [options]' ;;
-    *) echo 'Usage: osprey doctor|probe [options]' >&2; exit 2 ;;
+        PYTHONPATH="$root/pyunifiwire/src${PYTHONPATH:+:$PYTHONPATH}" exec python3 "$root/osprey/$tool.py" "$@" ;;
+    --help|-h) echo 'Usage: osprey doctor|probe|protect-guard [options]' ;;
+    *) echo 'Usage: osprey doctor|probe|protect-guard [options]' >&2; exit 2 ;;
 esac

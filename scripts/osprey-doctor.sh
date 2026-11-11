@@ -83,6 +83,20 @@ else
     warn "configuration file not found: $config_file (CLI/environment settings may be intentional)"
 fi
 
+# Protect dual adoption: the physical camera must not be adoptable by Protect.
+if [ -f "$config_file" ] && grep -q '"onvif_read_only"[[:space:]]*:[[:space:]]*[0-9]' "$config_file" 2>/dev/null; then
+    if [ -n "${OSPREY_UNIFI_API_KEY_FILE:-}" ] && [ -n "${OSPREY_UNIFI_CONSOLE:-}" ] && [ -n "$camera" ]; then
+        if PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$controller_dir" python3 "$controller_dir/protect_guard.py" \
+            --console "$OSPREY_UNIFI_CONSOLE" --camera-ip "$camera" >/dev/null 2>&1; then
+            ok 'UniFi firewall guard keeps Protect off the physical camera'
+        else
+            warn 'no UniFi firewall guard for the physical camera: run osprey protect-guard (docs/protect-guard.md)'
+        fi
+    else
+        warn 'read-only ONVIF persona is on: make sure Protect cannot adopt the physical camera (osprey protect-guard, docs/protect-guard.md)'
+    fi
+fi
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     ok 'Docker Compose is available'
 elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then

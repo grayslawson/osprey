@@ -25,6 +25,29 @@ network services, not Internet services.
   and CPU abuse. Frigate URL validation rejects embedded credentials, queries,
   and fragments.
 
+## Credentials handling
+
+| Credential | Where Osprey reads it | Notes |
+|---|---|---|
+| Console admin password | `OSPREY_ADMIN_PASSWORD_FILE` or `OSPREY_ADMIN_PASSWORD_HASH` | The setup wizard writes `osprey-secrets.env` with mode 0600 next to the config. |
+| ONVIF users | `OSPREY_ONVIF_USERS_FILE`, each user with `password_file` | One user per client (Frigate, Protect, admin). Passwords are never logged. |
+| RTSP Digest password | `OSPREY_RTSP_PASSWORD_FILE` | Digest protects the password, not the video. |
+| MQTT broker password | `mqtt.password` in `osprey.json` | Off by default. This is the one secret that still lives in the config file: keep that file 0600 and out of Git. |
+| Camera control certificate | `OSPREY_CERT_FILE` / `--cert` (default `osprey.pem`, mode 0600) | Generated on first run. The camera trusts it, so back it up with the state directory. |
+| UniFi Network API key | `OSPREY_UNIFI_API_KEY_FILE` / `--api-key-file` | Used only by `osprey protect-guard`, never by the running controller. It can change your whole network: delete it after use. |
+
+Rules that apply to all of them:
+
+- Prefer `*_FILE` variables over plain environment values. Plain values show up
+  in `docker inspect`, `ps` and crash reports.
+- Never commit them. `.gitignore` covers `osprey.json`, `osprey.pem` and the
+  legacy `cuckoo.*` names. Apart from `mqtt.password`, keep secrets out of `osprey.json`.
+- Logs never contain credential values. `onvif.log_calls` logs user names and
+  peer addresses, so treat those logs as internal.
+- `osprey probe` bundles are redacted (addresses, MACs, serials, UUIDs, tokens,
+  names, credentials). Read one before attaching it to an issue. Never attach
+  a raw `--dump` file, which contains the camera's full messages.
+
 ## ONVIF authentication
 
 ONVIF WS-Security UsernameToken authentication is opt-in because some Frigate

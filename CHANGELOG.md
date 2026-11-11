@@ -3,7 +3,21 @@
 All notable changes to Osprey are listed here. Entries are generated from
 Conventional Commit subjects by git-cliff (see cliff.toml).
 
-## Unreleased
+## Unreleased (0.9.0b1)
+
+First beta. G5 PTZ fully supported; other UniFi PTZ models experimental.
+
+### Features
+- **protect-guard:** `osprey protect-guard --check/--apply` checks for or
+  creates the UniFi firewall policy that keeps Protect from adopting the
+  physical camera; `osprey doctor` and startup warn when the read-only ONVIF
+  persona is on. See docs/protect-guard.md.
+
+### Packaging
+- Version 0.9.0b1. Release workflow accepts PEP 440 pre-release tags and
+  publishes them as pre-releases (image tags `0.9.0b1` and `v0.9.0b1`; `latest`
+  moves only on final releases).
+- Issue forms: bug report and camera model support.
 
 ### Features
 - **ptz:** Manual wins, then resume. A person's PTZ command (console, MQTT, a

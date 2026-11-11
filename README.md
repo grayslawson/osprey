@@ -5,12 +5,12 @@
 <h1 align="center">Osprey</h1>
 
 <p align="center">
-  A local controller that brings Ubiquiti G5 PTZ cameras to Frigate.
+  A local controller that brings UniFi G5 PTZ cameras to Frigate.
 </p>
 
 <p align="center">
   <a href="https://github.com/grayslawson/osprey/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/grayslawson/osprey?style=flat-square"></a>
-  <img alt="Stage: alpha" src="https://img.shields.io/badge/stage-alpha-b7791f?style=flat-square">
+  <img alt="Stage: beta" src="https://img.shields.io/badge/stage-beta-b7791f?style=flat-square">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2f6f54?style=flat-square">
   <img alt="Local-first video" src="https://img.shields.io/badge/video-local--first-304b61?style=flat-square">
 </p>
@@ -21,9 +21,26 @@ and tracking engine. Osprey owns the camera connection and exposes standard
 ONVIF and RTSP endpoints for Frigate and other clients.
 
 > [!WARNING]
-> Osprey is alpha software. Keep camera-facing ports on a trusted LAN or VLAN,
+> Osprey 0.9 is beta software. Keep camera-facing ports on a trusted LAN or VLAN,
 > never forward them to the Internet, and supervise adoption and tracking tests.
 > Osprey does not install, configure, or run Frigate.
+
+## Supported cameras
+
+| Camera | Status |
+|---|---|
+| UniFi G5 PTZ | Supported |
+| Other UniFi PTZ cameras | Experimental: they adopt and stream, and PTZ uses the ranges the camera reports. Run [`osprey probe`](docs/camera-models.md) to help add full support. |
+
+## Install
+
+| Path | Guide |
+|---|---|
+| Docker / Docker Compose / Podman | [Quick start](#quick-start-with-docker), [installation guide](docs/installation.md#docker-or-rootless-podman) |
+| Home Assistant app (add-on) | [Home Assistant](docs/installation.md#home-assistant) |
+| pip (`osprey-ptz` on PyPI) | [pip](docs/installation.md#pip-pypi) |
+| NixOS module | [NixOS](docs/nixos.md) |
+| Proxmox LXC helper | [Proxmox](docs/installation.md#proxmox) |
 
 ## What Osprey provides
 
@@ -34,8 +51,12 @@ ONVIF and RTSP endpoints for Frigate and other clients.
   and recent-log warnings.
 - Optional MQTT commands and control events with retained-command protection.
 - Multiple cameras in one controller, with camera-specific ONVIF personas.
-- A read-only ONVIF persona for NVR/Protect experiments. It republishes media
-  without exposing PTZ controls; Protect firmware compatibility varies.
+- UniFi Protect can adopt Osprey as a third-party ONVIF camera: media only
+  through a read-only persona, or with PTZ under "manual wins, then resume"
+  arbitration. `osprey protect-guard` keeps Protect from adopting the physical
+  camera. See [Protect dual adoption](docs/protect-dual-adoption.md).
+- Manual control wins over Frigate's autotracking for a configurable hold,
+  then autotracking resumes.
 - Docker/Podman, Proxmox, NixOS, and Home Assistant add-on deployment paths.
 
 ## How it fits together
@@ -74,7 +95,7 @@ cd osprey
 
 export OSPREY_HOST=192.0.2.10  # address reachable by the camera and clients
 export OSPREY_BIND=192.0.2.10  # interface exposed to Frigate
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:vX.Y.Z
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:v0.9.0b1
 
 docker compose -f compose.release.yaml up -d
 ```
@@ -86,7 +107,8 @@ saving. Full installation and upgrade paths are in
 [`docs/installation.md`](docs/installation.md).
 
 The ONVIF/operator endpoint uses port `8000`; RTSP uses `8554`. Configure the
-camera identity and any additional cameras in `osprey.json` as described in
+camera identity and any additional cameras in `osprey.json` (older installs:
+`cuckoo.json`, still read) as described in
 [`docs/multi-camera.md`](docs/multi-camera.md). Keep credentials in a secret
 manager or an untracked deployment file.
 
@@ -140,7 +162,10 @@ add-on or a service on another host.
   Authentication does not encrypt video; keep RTSP on a trusted network or
   behind a TLS tunnel.
 - Keep camera, Protect, MQTT, admin, and Frigate credentials out of Git and
-  issue reports. See [`docs/security.md`](docs/security.md).
+  issue reports. Use `*_FILE` variables or the setup wizard's 0600 secrets file
+  rather than plain environment values. See [`docs/security.md`](docs/security.md).
+- If UniFi Protect runs on the same network, block the physical camera from it
+  with [`osprey protect-guard`](docs/protect-guard.md).
 
 ## Stay current
 
@@ -160,7 +185,7 @@ protocol research and code are credited under the applicable license notices.
 ## Contributing
 
 Run `./osprey/test.sh` and `./pyunifiwire/test.sh` before submitting changes.
-When reporting an issue, include the Osprey version, host platform, camera
+Use the issue forms (bug report, camera model support). When reporting an issue, include the Osprey version, host platform, camera
 model, Frigate version, and a redacted reproducible log. Never include
 credentials, private addresses, MAC addresses, or video from someone else’s
 property.
