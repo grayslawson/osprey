@@ -99,6 +99,7 @@ PTZ_LIMITS: Final[dict[str, tuple[float, float]]] = {
     "max_unanswered": (1, 20),
     "probe_interval_sec": (0.1, 60.0),
     "idle_probe_sec": (0.0, 3600.0),
+    "manual_hold_sec": (0.0, 3600.0),
 }
 
 
@@ -123,6 +124,9 @@ def validate_ptz(value: Any) -> dict[str, Any]:
     ptz.validate_max_speed(out["max_speed"])
     if 0 < out["idle_probe_sec"] < 5:
         raise ValueError('"ptz.idle_probe_sec" must be 0 (disabled) or at least 5')
+    users = out["autotrack_users"]
+    if not isinstance(users, list) or not all(isinstance(u, str) and u.strip() for u in users):
+        raise ValueError('"ptz.autotrack_users" must be a list of user names')
     presets_file = out["presets_file"]
     if presets_file is not None and (not isinstance(presets_file, str) or not presets_file.strip()):
         raise ValueError('"ptz.presets_file" must be a path or null')
@@ -221,9 +225,11 @@ def validate_onvif(value: Any, cameras: list[dict[str, Any]] | None = None) -> N
     """``onvif``: the northbound device identity (never the camera's MAC)."""
     if not isinstance(value, dict):
         raise ValueError('"onvif" must be an object')
-    unknown = set(value) - {"identity"}
+    unknown = set(value) - {"identity", "log_calls"}
     if unknown:
         raise ValueError(f'"onvif" has unknown keys: {", ".join(sorted(unknown))}')
+    if not isinstance(value.get("log_calls", False), bool):
+        raise ValueError('"onvif.log_calls" must be a boolean')
     import identity
     parsed = identity.IdentityConfig.from_mapping(value.get("identity"))
     if parsed.mac is not None:
@@ -267,6 +273,12 @@ DEFAULTS: Final[dict[str, Any]] = {
         "idle_probe_sec": 60.0,
         # Where named positions persist; null = next to the TLS certificate.
         "presets_file": None,
+        # Manual wins, then resume: after a person moves the camera (console,
+        # MQTT, a non-autotrack ONVIF user), autotracker commands are dropped for
+        # this many seconds. 0 disables arbitration. See arbitration.py.
+        "manual_hold_sec": 30.0,
+        # ONVIF users treated as autotrackers. Anonymous ONVIF is always one.
+        "autotrack_users": ["frigate"],
     },
     # Northbound ONVIF identity overrides; unset values are derived and never
     # equal the physical camera's MAC or serial (see identity.py).
