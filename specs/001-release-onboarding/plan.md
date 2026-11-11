@@ -68,7 +68,7 @@ specs/001-release-onboarding/
 ├── quickstart.md
 └── tasks.md
 
-cuckoo/
+osprey/
 ├── setup_wizard.py
 ├── main.py
 ├── config.py

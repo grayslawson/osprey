@@ -28,7 +28,7 @@ controls Osprey's listeners inside the container.
 Open `http://<osprey-host>:8000/setup` and enter the setup token printed in
 the container log. The wizard collects the advertised host, bind address,
 camera identity, Frigate URL, and operator password. It atomically writes
-`/state/cuckoo.json`, `/state/osprey-secrets.env`, and the generated password
+`/state/osprey.json`, `/state/osprey-secrets.env`, and the generated password
 files with mode `0600`. Generated RTSP/ONVIF credentials are shown once; save
 them before restarting the container. ONVIF credentials are commented out in
 the generated environment file so Frigate remains compatible by default.
@@ -76,7 +76,7 @@ ONVIF and the operator console use port `8000`; RTSP uses `8554`. Keep
 camera-facing ports on a trusted LAN. Rootless Podman may require host
 networking or explicit port permissions for a camera VLAN.
 
-For multiple cameras, create `cuckoo.json` using the
+For multiple cameras, create `osprey.json` using the
 [multi-camera schema](multi-camera.md), then add this read-only bind mount in
 a local Compose override:
 
@@ -84,7 +84,7 @@ a local Compose override:
 services:
   osprey:
     volumes:
-      - ./cuckoo.json:/workspace/cuckoo/cuckoo.json:ro
+      - ./osprey.json:/workspace/osprey/osprey.json:ro
 ```
 
 Configure the browser admin password before exposing the console beyond the
@@ -194,7 +194,7 @@ socket-wide auto-updater or restart a deployment on its own.
 ## Development build
 
 For contributors, `compose.yaml` builds from the checkout and mounts the source
-trees. Run `./cuckoo/test.sh` before starting it. The development Compose file
+trees. Run `./osprey/test.sh` before starting it. The development Compose file
 is not a production upgrade path.
 
 ## Verify a deployment

@@ -57,7 +57,7 @@ run_controller() {
         # shellcheck disable=SC2086
         set -- "$@" $OSPREY_EXTRA_ARGS
     fi
-    exec python3 /opt/osprey/cuckoo/main.py "$@"
+    exec python3 /opt/osprey/osprey/main.py "$@"
 }
 
 if [ "$#" -eq 0 ]; then

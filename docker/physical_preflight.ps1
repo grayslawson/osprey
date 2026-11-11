@@ -16,13 +16,17 @@ foreach ($line in Get-Content -LiteralPath $EnvFile) {
     }
 }
 
-foreach ($name in 'CUCKOO_PHYSICAL_HOST', 'G5_PTZ_IP', 'G5_PTZ_MAC') {
+if (-not $values['OSPREY_PHYSICAL_HOST'] -and $values['CUCKOO_PHYSICAL_HOST']) {
+    $values['OSPREY_PHYSICAL_HOST'] = $values['CUCKOO_PHYSICAL_HOST']  # pre-rename name
+}
+
+foreach ($name in 'OSPREY_PHYSICAL_HOST', 'G5_PTZ_IP', 'G5_PTZ_MAC') {
     if (-not $values[$name]) {
         throw "Missing $name in $EnvFile"
     }
 }
 
-$hostIp = $values['CUCKOO_PHYSICAL_HOST']
+$hostIp = $values['OSPREY_PHYSICAL_HOST']
 $cameraIp = $values['G5_PTZ_IP']
 $cameraMac = $values['G5_PTZ_MAC'] -replace '[:-]', ''
 if ($cameraMac -notmatch '^[0-9A-Fa-f]{12}$') {
@@ -31,7 +35,7 @@ if ($cameraMac -notmatch '^[0-9A-Fa-f]{12}$') {
 
 $local = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $hostIp -ErrorAction SilentlyContinue
 if (-not $local) {
-    throw "CUCKOO_PHYSICAL_HOST $hostIp is not assigned to this workstation"
+    throw "OSPREY_PHYSICAL_HOST $hostIp is not assigned to this workstation"
 }
 
 if (-not (Test-Connection -TargetName $cameraIp -Count 1 -Quiet)) {

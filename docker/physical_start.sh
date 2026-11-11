@@ -39,7 +39,7 @@ open_firewall() {
 }
 
 allow_onvif_from_deployment() {
-  # Cuckoo advertises its LAN bind address in ONVIF XAddrs, so the container that
+  # Osprey advertises its LAN bind address in ONVIF XAddrs, so the container that
   # External consumers on the project bridge may need ONVIF/RTSP advertised
   # ports. Scope accepts to this project's own bridge subnet so the LAN cannot.
   local subnet port

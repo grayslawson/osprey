@@ -5,7 +5,7 @@ ARG BUILD_FROM=python:3.13-slim-bookworm
 FROM ${BUILD_FROM}
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/opt/osprey/pyunifiwire/src:/opt/osprey/cuckoo
+    PYTHONPATH=/opt/osprey/pyunifiwire/src:/opt/osprey/osprey
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates ffmpeg tini \
@@ -16,7 +16,7 @@ RUN apt-get update \
  && python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-runtime.txt \
  && rm /tmp/requirements-runtime.txt
 
-COPY cuckoo /opt/osprey/cuckoo
+COPY osprey /opt/osprey/osprey
 COPY pyunifiwire /opt/osprey/pyunifiwire
 COPY homeassistant/addon/osprey/run.sh /run.sh
 
@@ -26,7 +26,7 @@ RUN chmod 0755 /run.sh \
     && adduser --system --ingroup osprey osprey \
     && chown -R osprey:osprey /opt/osprey /data/osprey
 
-WORKDIR /opt/osprey/cuckoo
+WORKDIR /opt/osprey/osprey
 USER osprey
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/run.sh"]

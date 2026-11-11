@@ -2,7 +2,7 @@
 
 ## Decision: Reuse the existing first-run setup manager
 
-**Rationale**: `cuckoo/setup_wizard.py` already validates host, bind address, camera identity,
+**Rationale**: `osprey/setup_wizard.py` already validates host, bind address, camera identity,
 Frigate URL, and administrator password. It uses temporary files, restrictive permissions,
 `fsync`, and atomic replacement, which satisfies the partial-write and secret-storage needs.
 The manager also refuses a second setup save after completion.
