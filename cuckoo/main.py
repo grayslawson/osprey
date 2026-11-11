@@ -371,7 +371,7 @@ def build(options: Options) -> Stack:
         )
         if not rtsp_auth.users:
             raise ValueError("RTSP authentication is required but no user holds the media role")
-    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth, bind_host=options.bind_host)
+    stream = rtsp.RtspServer(hub, advertise_host=options.host, port=options.rtsp_port, auth=rtsp_auth, bind_host=options.bind_host, known_tracks=options.tracks)
 
     control = Controller(
         cert=options.cert,
