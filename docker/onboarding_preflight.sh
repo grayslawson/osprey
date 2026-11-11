@@ -5,11 +5,11 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 cd "$here"
-config_file=${1:-cuckoo.json}
+config_file=${1:-osprey.json}
 fail() { printf 'onboarding preflight: %s\n' "$*" >&2; exit 1; }
 
-[[ -f cuckoo/run.sh ]] || fail "not an Osprey checkout (cuckoo/run.sh is missing)"
-[[ -f cuckoo/main.py ]] || fail "checkout is incomplete (cuckoo/main.py is missing)"
+[[ -f osprey/run.sh ]] || fail "not an Osprey checkout (osprey/run.sh is missing)"
+[[ -f osprey/main.py ]] || fail "checkout is incomplete (osprey/main.py is missing)"
 command -v python3 >/dev/null || fail "python3 is required"
 
 if [[ -e "$config_file" ]]; then
@@ -28,8 +28,8 @@ for key in ("password", "token", "secret", "private_key"):
 print(f"validated config: {p}")
 PY
 else
-  [[ "$config_file" == cuckoo.json ]] || fail "config file not found: $config_file"
-  printf 'onboarding preflight: no cuckoo.json (defaults will be used)\n'
+  [[ "$config_file" == osprey.json ]] || fail "config file not found: $config_file"
+  printf 'onboarding preflight: no osprey.json (defaults will be used)\n'
 fi
 
 printf 'onboarding preflight: checkout %s is ready for LOCAL/TEST use\n' "$(git rev-parse --show-toplevel 2>/dev/null || printf unknown)"

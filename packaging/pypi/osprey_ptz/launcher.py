@@ -16,8 +16,8 @@ _APP = Path(__file__).resolve().parent / "_app"
 def main() -> int:
     # The controller uses flat imports (``import config``, ``from unifiwire
     # import certs``), so both bundled roots must be importable.
-    sys.path[:0] = [str(_APP / "cuckoo"), str(_APP)]
+    sys.path[:0] = [str(_APP / "osprey"), str(_APP)]
     sys.argv[0] = "osprey"  # argparse prog name in --help
-    from main import main as controller_main  # cuckoo/main.py
+    from main import main as controller_main  # osprey/main.py
 
     return controller_main()

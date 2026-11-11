@@ -2,7 +2,7 @@
 
 One Osprey process can manage several explicitly registered cameras. Configure
 each camera's stable MAC address, display name, and optional IP hint in
-`cuckoo.json`:
+`osprey.json`:
 
 ```json
 {

@@ -21,14 +21,14 @@ jobs:
         run: python -m pip install -r requirements-ci.txt -e pyunifiwire
       - name: Run tests
         env:
-          PYTHONPATH: ${{ forgejo.workspace }}/cuckoo:${{ forgejo.workspace }}/pyunifiwire/src
+          PYTHONPATH: ${{ forgejo.workspace }}/osprey:${{ forgejo.workspace }}/pyunifiwire/src
         run: |
-          python -m pytest -q cuckoo/tests
+          python -m pytest -q osprey/tests
           python -m pytest -q pyunifiwire/tests
       - name: Run type checks and compile sources
         run: |
-          python -m mypy --config-file cuckoo/mypy.ini cuckoo
+          python -m mypy --config-file osprey/mypy.ini osprey
           (cd pyunifiwire && python -m mypy .)
-          python -m compileall -q cuckoo pyunifiwire/src
+          python -m compileall -q osprey pyunifiwire/src
       - name: Validate repository policy
         run: ./scripts/validate-repo.sh

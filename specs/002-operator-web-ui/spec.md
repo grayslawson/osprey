@@ -15,9 +15,9 @@ ingress, on a phone, and in light or dark themes, with no CDN or build step.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Camera-scoped routes, CSRF header, Secure cookies over TLS, CSP and framing headers, logout, non-200 failed login, preset save and delete without reload, password required by default, read timeouts, login throttle | Done. Tests in `cuckoo/tests/test_webapi.py` and `test_onvif.py`. |
+| 0 | Camera-scoped routes, CSRF header, Secure cookies over TLS, CSP and framing headers, logout, non-200 failed login, preset save and delete without reload, password required by default, read timeouts, login throttle | Done. Tests in `osprey/tests/test_webapi.py` and `test_onvif.py`. |
 | 1 | `/api/v1` JSON, SSE `/api/v1/events`, `recover_hook` for the PTZ watchdog | Done. The watchdog branch installs `recover_hook` or `Backend.recover_ptz()`. |
-| 2 | No-build Preact/htm/signals app in `cuckoo/web/`, vendored with pins, licences and checksums, CSP-safe, light and dark, mobile, WCAG basics | Done. Browser-checked (Chrome, phone width) but not run through axe or Lighthouse. |
+| 2 | No-build Preact/htm/signals app in `osprey/web/`, vendored with pins, licences and checksums, CSP-safe, light and dark, mobile, WCAG basics | Done. Browser-checked (Chrome, phone width) but not run through axe or Lighthouse. |
 | 3 | Click-to-center, drag, wheel and pinch zoom, joystick, keys, preset gallery with thumbnails, PTZ health card with Recover | Done. Gestures checked in headless Chrome against the fixture camera; the committed tests do not drive the browser. |
 | 4 | Live video: MJPEG fan-out, WebCodecs over WebSocket, go2rtc option | Not started. Preview is still single-viewer MJPEG with a snapshot fallback. |
 | 5 | Health checks and wizard with discovery and adoption tracker | Health checks and recover actions are done. The wizard is not redesigned. |

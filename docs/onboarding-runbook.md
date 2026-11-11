@@ -13,7 +13,7 @@ is a common source of confusing option and Compose errors:
 git rev-parse --show-toplevel
 git status --short
 git log -1 --oneline
-./docker/onboarding_preflight.sh [cuckoo.json]
+./docker/onboarding_preflight.sh [osprey.json]
 ```
 
 The preflight rejects malformed JSON and credentials accidentally placed in a
@@ -22,7 +22,7 @@ readiness or camera-network check.
 
 ## Configuration and secrets
 
-`cuckoo.json` contains non-secret runtime settings only: host, ports, camera
+`osprey.json` contains non-secret runtime settings only: host, ports, camera
 MAC allow-list, and codec tracks. Generate JSON with a JSON encoder rather than
 shell interpolation so names containing quotes, backslashes, or newlines remain
 valid. Keep camera, Protect, MQTT, and admin credentials in your deployment's

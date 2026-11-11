@@ -63,17 +63,17 @@ RUN groupadd --gid "${OSPREY_GID}" osprey \
 
 # Application code is owned by root and read-only to the runtime user.
 COPY VERSION /opt/osprey/VERSION
-COPY cuckoo /opt/osprey/cuckoo
+COPY osprey /opt/osprey/osprey
 COPY pyunifiwire/src /opt/osprey/pyunifiwire/src
 COPY pyunifiwire/LICENSE /opt/osprey/pyunifiwire/LICENSE
 COPY LICENSE NOTICE /opt/osprey/
 COPY docker/entrypoint.sh /usr/local/bin/osprey-entrypoint
-COPY docker/cuckoo_health.py /usr/local/bin/osprey-healthcheck
+COPY docker/osprey_health.py /usr/local/bin/osprey-healthcheck
 COPY scripts/osprey scripts/osprey-doctor.sh /opt/osprey/scripts/
 RUN chmod 0755 /usr/local/bin/osprey-entrypoint /usr/local/bin/osprey-healthcheck \
         /opt/osprey/scripts/osprey /opt/osprey/scripts/osprey-doctor.sh \
-    && rm -rf /opt/osprey/cuckoo/tests /opt/osprey/cuckoo/harness \
-    && python -m compileall -q /opt/osprey/cuckoo /opt/osprey/pyunifiwire/src
+    && rm -rf /opt/osprey/osprey/tests /opt/osprey/osprey/harness \
+    && python -m compileall -q /opt/osprey/osprey /opt/osprey/pyunifiwire/src
 
 # Camera control (TLS), snapshot upload, media ingest, ONVIF/operator console,
 # RTSP, and WS-Discovery. Prefer host networking; see compose.release.yaml.

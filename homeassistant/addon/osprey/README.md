@@ -21,7 +21,7 @@ Builder validation to be enabled.
 ## Local build
 
 The Dockerfile uses the repository root as its build context because it needs
-both `cuckoo/` and `pyunifiwire/`:
+both `osprey/` and `pyunifiwire/`:
 
 ```sh
 docker build -f homeassistant/addon/osprey/Dockerfile -t osprey-addon:local .
@@ -91,7 +91,7 @@ deployment outside HA needs TLS and independent authentication.
 ### Release and validation
 
 The repository root is the add-on repository (`repository.json` plus `addon/osprey/`). The
-Dockerfile builds from root to copy `cuckoo/` and `pyunifiwire/`. Publish immutable
+Dockerfile builds from root to copy `osprey/` and `pyunifiwire/`. Publish immutable
 per-architecture GHCR images, update `version`, run `homeassistant/validate.sh` and the
 Home Assistant Add-on Builder for every declared architecture. Test clean install/upgrade,
 ingress, `/data` persistence, discovery, Frigate ingest, PTZ actions, tracking and safe-stop.

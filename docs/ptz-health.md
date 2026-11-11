@@ -57,7 +57,7 @@ the position every `probe_interval_sec` (2 s). A healthy idle channel is asked
 every `idle_probe_sec` (60 s) so that a silent failure is found before the next
 move needs the camera.
 
-All of these values can be set in `cuckoo.json`:
+All of these values can be set in `osprey.json`:
 
 ```json
 {

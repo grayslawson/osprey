@@ -6,7 +6,7 @@ This product is licensed under the MIT License (see LICENSE).
 It includes code derived from the Cuckoo and pyunifiwire projects
 (https://github.com/rjmotion/cuckoo, https://github.com/rjmotion/pyunifiwire),
 Copyright (c) 2026 flock contributors, also under the MIT License. Those
-notices are preserved in LICENSE, cuckoo/LICENSE and pyunifiwire/LICENSE.
+notices are preserved in LICENSE, osprey/LICENSE and pyunifiwire/LICENSE.
 
 Interoperability and non-affiliation
 ------------------------------------

@@ -27,9 +27,16 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
-set -- python3 /opt/osprey/cuckoo/main.py \
+# Upgrade path: add-on builds before the rename kept the control certificate as
+# cuckoo.pem. The camera trusts that certificate, so keep using it.
+CERT=/data/osprey/osprey.pem
+if [ ! -e "$CERT" ] && [ -e /data/osprey/cuckoo.pem ]; then
+  CERT=/data/osprey/cuckoo.pem
+fi
+
+set -- python3 /opt/osprey/osprey/main.py \
   --host "$HOST" \
-  --cert /data/osprey/cuckoo.pem \
+  --cert "$CERT" \
   --name "$(get_option camera_name)" \
   --tracks "$(get_option tracks)" \
   --onvif-port "$(get_option onvif_port)" \

@@ -8,7 +8,7 @@ Generate a PBKDF2 password hash on the Osprey host. The password itself is not
 printed by Osprey:
 
 ```sh
-python3 -c 'import getpass,sys; sys.path.insert(0,"cuckoo"); from onvif import AdminAuth; print(AdminAuth.hash_password(getpass.getpass()))'
+python3 -c 'import getpass,sys; sys.path.insert(0,"osprey"); from onvif import AdminAuth; print(AdminAuth.hash_password(getpass.getpass()))'
 ```
 
 Put the resulting value in a root-only environment file outside the repository:
