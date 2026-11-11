@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Final
 
 import adoption
+import arbitration
 import events
 import media
 import ptz
@@ -297,8 +298,10 @@ class Controller:
         auto_home: bool = True,
         watchdog: PtzWatchdog | None = None,
         preset_ack_timeout: float = PRESET_ACK_TIMEOUT_SEC,
+        arbiter: arbitration.Arbiter | None = None,
     ) -> None:
         self.cert = cert
+        self.arbiter = arbiter or arbitration.Arbiter()
         self.ingest_host = ingest_host
         self.control_port = control_port
         self.ingest_port = ingest_port
@@ -784,7 +787,7 @@ class Controller:
                 del self._ptz_recovery[mac]
                 continue
             if recovery.exhausted:
-                if now - recovery.exhausted_at < recovery.rearm_sec:
+                if now < recovery.exhausted_at + recovery.rearm_sec:  # same float sum as callers compute
                     continue
                 log.warning(
                     "PTZ recovery re-armed after %.0fs: mac=%s", recovery.rearm_sec, mac
@@ -1039,14 +1042,26 @@ class Controller:
 
     # ----------------------------------------------------------------------- moves
 
+    def _admit(self, mac: str) -> tuple[bool, bool]:
+        """Arbitrate one command from the current ``arbitration.source``."""
+        kind = arbitration.source.get()
+        allowed, supersede = self.arbiter.admit(mac, kind)
+        if not allowed:
+            log.debug("dropped %s PTZ command for %s during manual hold", kind, mac)
+        return allowed, supersede
+
     def move(self, mac: str, position: Any, speed: int = ptz.DEFAULT_SPEED) -> bool:
         """Point the head somewhere. Returns False if no PTZ channel is up."""
         session = self._ptz_session(mac)
         if session is None:
             return False
+        allowed, supersede = self._admit(mac)
+        if not allowed:
+            # Report success: a fault would make an autotracker log errors or back off.
+            return True
         with session.move_lock:
             self._continuous_moves.pop(mac, None)
-            if not session.camera.motion.begin(position):
+            if not session.camera.motion.begin(position, supersede=supersede):
                 return False
             try:
                 session.request_many(ptz.PRESET, ptz.move_to(position, speed))
@@ -1066,6 +1081,8 @@ class Controller:
         session = self._ptz_session(mac)
         if session is None:
             return False
+        if not self._admit(mac)[0]:
+            return True
         with session.move_lock:
             if delta.pan == 0 and delta.tilt == 0 and delta.zoom == 0:
                 self._continuous_moves.pop(mac, None)
@@ -1137,6 +1154,8 @@ class Controller:
         motion = session.camera.motion
         if not motion.available:
             return False
+        if not self._admit(mac)[0]:
+            return True  # an autotracker's Stop must not halt the operator's move
         if (
             motion.activity != 0
             and not motion.is_continuous
@@ -1179,9 +1198,12 @@ class Controller:
             return False
         preset = session.camera.presets.get(index)
         target = preset.position if preset is not None else None
+        allowed, supersede = self._admit(mac)
+        if not allowed:
+            return True
         with session.move_lock:
             self._continuous_moves.pop(mac, None)
-            if not session.camera.motion.begin(target):
+            if not session.camera.motion.begin(target, supersede=supersede):
                 return False
             try:
                 session.request(ptz.PRESET, ptz.go(index, speed))

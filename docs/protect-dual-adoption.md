@@ -83,8 +83,38 @@ users file (see [authentication](authentication.md#multiple-onvif-principals)):
 | UniFi Protect | `:8000` ONVIF, `:8554` RTSP | `media`, `events` | Live view, recording, motion events |
 | Operator | `:8000` ONVIF | `admin` | Everything, including encoder writes |
 
-Protect never gets PTZ. Its `protect` principal is denied on every PTZ call
-with `ter:NotAuthorized`, so Frigate keeps sole control of the head.
+By default Protect gets no PTZ: its `protect` principal is denied on every PTZ
+call with `ter:NotAuthorized`, so Frigate keeps sole control of the head.
+
+### Letting Protect move the camera (manual wins, then resume)
+
+Protect 7.3 and later can drive PTZ on third-party ONVIF cameras. To allow it,
+add `ptz` to the `protect` principal's roles. Osprey then arbitrates:
+
+- ONVIF users listed in `ptz.autotrack_users` (default `["frigate"]`) and
+  anonymous ONVIF callers are autotrackers. Every other PTZ client is a person:
+  other ONVIF users such as `protect`, the operator console, and MQTT commands.
+- A person's command replaces an autotracker move that is still running and
+  starts a hold of `ptz.manual_hold_sec` seconds (default 30). Each further
+  manual command restarts the hold.
+- During the hold, autotracker moves and Stops are answered with success but
+  not sent to the camera, so Frigate does not log errors. When the hold ends,
+  Frigate's autotracking takes over again.
+- Set `ptz.manual_hold_sec` to `0` to turn arbitration off.
+
+```json
+{"ptz": {"manual_hold_sec": 30, "autotrack_users": ["frigate"]}}
+```
+
+This only works when Frigate and Protect use different ONVIF users. If ONVIF
+authentication is off, every ONVIF caller counts as an autotracker.
+
+### Seeing what an ONVIF client sends
+
+Set `"onvif": {"log_calls": true}` to log every SOAP call at INFO with its
+action, user, source address and PTZ source (`auto` or `manual`). Without it the
+same line is logged at DEBUG. Use it while adopting a new client; it is noisy
+while Frigate is tracking.
 
 Adoption steps (Protect 7.2 or later; pin the console version and re-test after
 each Protect update):
