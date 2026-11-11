@@ -9,6 +9,9 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
 - **ptz:** Manual wins, then resume. A person's PTZ command (console, MQTT, a
   non-autotrack ONVIF user such as Protect) overrides Frigate and holds it off for
   `ptz.manual_hold_sec` (default 30 s). New `ptz.autotrack_users` setting.
+- **probe:** `osprey probe` writes a redacted, read-only data bundle for an
+  unsupported UniFi PTZ model. Models other than the G5 PTZ are marked
+  experimental (log warning, `support` in the operator API).
 - **onvif:** `onvif.log_calls` logs every SOAP call with user, peer and PTZ source.
 
 ### Renamed: cuckoo to osprey
