@@ -137,8 +137,8 @@ networking and ingress. It is in
 [`homeassistant/addon/osprey`](../homeassistant/addon/osprey/README.md).
 Frigate may be another app or an external host; Osprey does not manage it.
 
-Install it from the Osprey app repository: **Settings > Apps > App store >
-⋮ > Repositories**, add
+Install it from the Osprey app repository: **Settings → Apps → Install app**,
+then the top-right menu → **Repositories**, add
 
 ```
 https://github.com/grayslawson/osprey-ha-apps
@@ -150,7 +150,9 @@ repository; that repository mirrors this one and is kept in step by a
 scheduled workflow (see
 [`packaging/homeassistant-repo`](../packaging/homeassistant-repo/README.md)).
 The add-on installs a published image pinned to the add-on version, so it
-never runs an image from a different release.
+never runs an image from a different release. The repository URL is part of
+the app's identity — the Supervisor derives the app's ID from it — so keep
+`grayslawson/osprey-ha-apps` stable once people install it.
 
 Home Assistant 2026.11 moved HACS into Core as **Settings > Marketplace**. The
 Marketplace covers integrations, dashboard cards, themes and templates, not

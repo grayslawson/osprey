@@ -10,8 +10,9 @@ through ONVIF and RTSP. It does not bundle, install, or manage Frigate.
 
 ## Install
 
-1. Open **Settings → Apps → App store** (before Home Assistant 2026: **Add-ons → Add-on store**).
-2. Open the three-dot menu, choose **Repositories**, and add
+1. Open **Settings → Apps** and select **Install app**. Before Home Assistant
+   2026 this was **Add-ons → Add-on store**.
+2. In the top-right menu, select **Repositories**, and add
    `https://github.com/grayslawson/osprey-ha-apps`. This is the separate public app
    repository built from [`packaging/homeassistant-repo`](../../../packaging/homeassistant-repo/README.md).
    The main Osprey repository URL does not work here: Home Assistant needs
