@@ -53,6 +53,9 @@ from frigate_config import validate_url
 
 DEFAULT_CERT: Final = "osprey.pem"
 SNAPSHOT_WAIT_SEC: Final = 10.0
+# The marker that names the media-only view of a camera: the second ONVIF
+# device an NVR such as UniFi Protect adopts while the tracker keeps the head.
+MEDIA_PERSONA: Final = "media"
 
 log = logging.getLogger("osprey")
 
@@ -701,6 +704,7 @@ def build(options: Options) -> Stack:
             port=options.onvif_read_only_port,
             onvif_auth=services.onvif_auth,
             read_only=True,
+            persona=MEDIA_PERSONA,
             **northbound,  # type: ignore[arg-type]
         )
         read_only_north = onvif.OnvifServer(
@@ -780,14 +784,31 @@ def build(options: Options) -> Stack:
             sentry=mqtt_sentry,
         )
 
-    def announced(name: str, ptz: bool) -> discovery.Identity:
-        return discovery.identity_for(
+    def advertised(name: str, ptz: bool) -> tuple[discovery.Identity, ...]:
+        """The ONVIF devices we announce: the media persona first, then the primary.
+
+        The media persona comes first so that a client which takes the first
+        match adopts the one that cannot move the camera.  Each persona has its
+        own endpoint UUID, its own XAddr and its own scopes, so a client can
+        tell them apart — and a probe that asks for a PTZ device is answered by
+        the primary persona alone.
+        """
+        hardware = services.device_identity().model
+        identities: list[discovery.Identity] = []
+        if read_only_north is not None:
+            identities.append(discovery.identity_for(
+                options.host, read_only_north.port, onvif.DEVICE_PATH,
+                f"{name} ({MEDIA_PERSONA})", ptz=False,
+                hardware=hardware, extra_scopes=options.discovery_scopes,
+            ))
+        identities.append(discovery.identity_for(
             options.host, north.port, onvif.DEVICE_PATH, name, ptz=ptz,
-            hardware=services.device_identity().model, extra_scopes=options.discovery_scopes,
-        )
+            hardware=hardware, extra_scopes=options.discovery_scopes,
+        ))
+        return tuple(identities)
 
     finder = discovery.DiscoveryServer(
-        announced(options.name, False), port=options.discovery_port, multicast=options.announce,
+        advertised(options.name, False), port=options.discovery_port, multicast=options.announce,
         interface_address=discovery.multicast_address(
             options.discovery_address, options.discovery_interface,
             options.bind_host, options.host,
@@ -811,6 +832,7 @@ def build(options: Options) -> Stack:
             read_only_services = onvif.Services(
                 backend_for(camera.mac), host=options.host, port=read_only_north.port,
                 auth=services.auth, onvif_auth=services.onvif_auth, read_only=True,
+                persona=MEDIA_PERSONA,
                 **northbound,  # type: ignore[arg-type]
             )
             read_only_registry.register(read_only_services)
@@ -827,7 +849,7 @@ def build(options: Options) -> Stack:
                 camera.mac, camera.model or "?",
             )
         # Re-announce now that we know whether to claim PTZ.
-        finder.identity = announced(camera.name or options.name, camera.is_ptz)
+        finder.identities = advertised(camera.name or options.name, camera.is_ptz)
         if options.announce:
             finder.say_hello()
 
