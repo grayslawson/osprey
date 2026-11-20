@@ -73,6 +73,16 @@ First beta. G5 PTZ fully supported; other UniFi PTZ models experimental.
 - The WS-Discovery device UUID is unchanged, so NVRs keep the same device.
 
 ### Bug fixes
+- **sentry:** An autotracker now takes the camera from a patrol that is still
+  travelling to its next point. The first autotracking command of a detection
+  used to be refused as "the camera is already moving" for as long as the head
+  was moving, so the tracking never started.
+- **homeassistant:** The release workflow's add-on version check ran a shell
+  expression whose quoting built a different regular expression than it
+  appeared to, and the Home Assistant image job failed. The check now runs,
+  and a test executes the workflow step for real.
+- **homeassistant:** A pre-release no longer moves the `latest` add-on image
+  tag, so a beta cannot become the add-on that an existing install pulls.
 - **ptz:** Compare the recovery re-arm deadline without float subtraction.
 - **ptz:** Chain FOV-scaled `ContinuousMove` steps and avoid reversing on Stop.
 - **ptz:** Cap camera reboot requests and back off the recovery re-arm.
