@@ -6,6 +6,7 @@ export const session = signal(null); // {mode, authenticated, principal, csrf, i
 export const cameras = signal([]); // [{id, name, model, adopted, ptz, status}]
 export const cam = signal("default"); // selected camera id
 export const snapshot = signal(null); // full state document (see webapi.state)
+export const sentry = signal(null); // patrol body of the selected camera (see webapi.sentry_get)
 export const connection = signal("connecting"); // connecting | live | polling | offline
 export const bootError = signal("");
 export const logEntries = signal([]); // newest first, capped

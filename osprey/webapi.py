@@ -37,9 +37,11 @@ import arbitration
 import ptz
 import websecurity
 from model import Camera, Position
+from sentry_runtime import SentryConfig
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only for annotations
     from onvif import OnvifServer, Services, _Handler
+    from sentry_manager import SentryManager
 
 log = logging.getLogger("osprey.webapi")
 
@@ -386,6 +388,9 @@ class WebApp:
         if path == "/logs" and method == "GET":
             self._send_json(h, HTTPStatus.OK, self._logs(request.query))
             return
+        if path == "/sentry" and method == "GET":
+            self._send_json(h, HTTPStatus.OK, self.sentry_overview())
+            return
         match = re.fullmatch(r"/cameras/([^/]+)(/.*)?", path)
         if not match:
             raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "no such API resource")
@@ -444,6 +449,13 @@ class WebApp:
             data = body()
             status, legacy = services.set_frigate_url(data.get("base_url") if isinstance(data, dict) else None)
             result = self._from_legacy(status, legacy)
+        elif rest == "/sentry" and method == "GET":
+            status, result = self.sentry_get(services)
+        elif rest == "/sentry" and method == "POST":
+            status, result = self.sentry_post(services, body())
+        elif rest == "/sentry" and method == "DELETE":
+            self._drain(h)
+            status, result = self.sentry_delete(services)
         else:
             preset = re.fullmatch(r"/presets/(\d{1,6})(/goto|/thumbnail\.jpg)?", rest)
             track = re.fullmatch(r"/tracks/([A-Za-z0-9_-]{1,32})", rest)
@@ -475,6 +487,101 @@ class WebApp:
             else:
                 raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "no such camera resource")
         self._send_json(h, status, result)
+
+    # ----------------------------------------------------------------- sentry
+
+    def _sentry_manager(self, services: "Services") -> "SentryManager":
+        manager = services.backend.sentry()
+        if manager is None:
+            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "no_sentry",
+                           "this deployment has no idle patrol")
+        return manager
+
+    def _sentry_mac(self, services: "Services") -> str:
+        camera = services.backend.camera()
+        if camera is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "unknown_camera", "no camera")
+        return camera.mac
+
+    def sentry_overview(self) -> dict[str, object]:
+        """Every camera's patrol, plus the shared movement gate."""
+        manager = self.server.services.backend.sentry()
+        if manager is None:
+            return {"cameras": {}, "movement": {}}
+        return manager.snapshot()
+
+    def sentry_get(self, services: "Services") -> tuple[HTTPStatus, dict[str, object]]:
+        manager = self._sentry_manager(services)
+        mac = self._sentry_mac(services)
+        if manager.config(mac) is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "no_sentry",
+                           "this camera has no idle patrol configured")
+        return HTTPStatus.OK, manager.snapshot(mac)
+
+    def sentry_post(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        manager = self._sentry_manager(services)
+        mac = self._sentry_mac(services)
+        self._ptz_camera(services)
+        fields = self._fields(
+            data,
+            {"enabled", "interval_sec", "speed", "tracking_hold_sec", "points"},
+        )
+        current = manager.config(mac)
+        base: dict[str, object] = current.as_dict() if current is not None else {
+            "enabled": False,
+            "interval_sec": 45.0,
+            "speed": services.backend.max_speed,
+            "tracking_hold_sec": 15.0,
+            "points": [],
+        }
+        merged = {**base, **{key: value for key, value in fields.items()}}
+        merged["points"] = self._sentry_points(merged.get("points"))
+        try:
+            sentry_config = SentryConfig.from_mapping(merged)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", str(exc)) from None
+        try:
+            manager.configure(mac, sentry_config)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", str(exc)) from None
+        return HTTPStatus.OK, manager.snapshot(mac)
+
+    def sentry_delete(self, services: "Services") -> tuple[HTTPStatus, dict[str, object]]:
+        manager = self._sentry_manager(services)
+        mac = self._sentry_mac(services)
+        if manager.config(mac) is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "no_sentry",
+                           "this camera has no idle patrol configured")
+        manager.remove(mac)
+        return HTTPStatus.OK, {"ok": True}
+
+    @staticmethod
+    def _sentry_points(value: object) -> list[dict[str, object]]:
+        """Validate the tour: an ordered list of named points."""
+        if not isinstance(value, (list, tuple)):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "points must be a list")
+        points: list[dict[str, object]] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", f"points[{index}] must be an object")
+            unknown = set(item) - {"name", "dwell_sec"}
+            if unknown:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid",
+                               f"points[{index}] has unexpected field(s): {', '.join(sorted(unknown))}")
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip() or len(name) > _PRESET_NAME_MAX:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid",
+                               f"points[{index}].name must be 1-{_PRESET_NAME_MAX} characters")
+            dwell = item.get("dwell_sec")
+            if dwell is not None:
+                if isinstance(dwell, bool) or not isinstance(dwell, (int, float)) or not math.isfinite(dwell):
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "invalid",
+                                   f"points[{index}].dwell_sec must be a number")
+                if not 1 <= float(dwell) <= 86400:
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "invalid",
+                                   f"points[{index}].dwell_sec must be between 1 and 86400")
+            points.append({"name": name.strip(), "dwell_sec": None if dwell is None else float(dwell)})
+        return points
 
     # ----------------------------------------------------------- cameras
 

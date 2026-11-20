@@ -22,6 +22,8 @@ matches the task.
   Frigate instance.
 - [Frigate connection settings](frigate-connection.md) — endpoint and health
   configuration.
+- [Sentry patrol](sentry.md) — the idle PTZ patrol: tours per camera, and how it
+  steps aside for a person or for Frigate's autotracking.
 - [MQTT](mqtt.md) — optional commands and event publishing.
 - [PTZ health](ptz-health.md) — motion state rules, watchdog recovery, `/healthz`,
   and the persisted `home` preset.
