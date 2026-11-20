@@ -18,8 +18,9 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
 - **discovery:** A discovery message that names every persona now stays inside
   one datagram — the 1472 bytes a 1500-byte MTU leaves for the UDP payload —
   so it is not split into IP fragments, which some networks drop and some
-  clients reassemble badly. The metadata version, the device type and then the
-  `To` header are given up, in that order, and only when the personas would
+  clients reassemble badly. The metadata version, the device type, the `To`
+  header, the XML declaration and the hardware scope are given up, in that
+  order, and only when the personas would
   not otherwise fit; a controller that serves one camera still sends the full,
   standard message.
 
