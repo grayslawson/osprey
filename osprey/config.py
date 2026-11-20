@@ -446,7 +446,8 @@ DEFAULTS: Final[dict[str, Any]] = {
         "snapshot": 7444,
         "rtsp": 8554,
         "onvif": 8000,
-        # Optional second ONVIF media-only persona for NVR/Protect consumers.
+        # Optional second ONVIF device for the same camera: the media persona,
+        # which carries media but no PTZ, for an NVR such as UniFi Protect.
         "onvif_read_only": None,
         "discovery": 3702,
     },

@@ -30,8 +30,8 @@ matches the task.
 - [Security](security.md) — trust boundaries, authentication, and exposure rules.
 - [Operator app](operator-ui.md) — the browser app, its JSON API, and Home
   Assistant ingress.
-- [Protect dual adoption](protect-dual-adoption.md) — limitations of the
-  read-only media persona.
+- [Protect dual adoption](protect-dual-adoption.md) — the media persona, and the
+  limits of sharing one camera with two clients.
 
 ## Development and validation
 

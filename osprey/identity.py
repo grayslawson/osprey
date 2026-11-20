@@ -16,6 +16,13 @@ they survive restarts but are never equal to the camera's own identifiers:
 * ``model`` — ``Osprey <camera model>``;
 * ``hardware_id`` — ``osprey-onvif``;
 * ``hostname`` — the controller name reduced to an RFC 1123 label.
+
+A controller that serves the same camera twice — once with PTZ for the
+tracker and once without it for a recorder — must present two *different*
+devices, or the recorder merges the two records.  A ``persona`` marker is
+folded into the seed, so the derived serial and MAC differ per persona, and
+a persona never inherits the primary's operator overrides or the MAC of the
+discovery interface.
 """
 
 from __future__ import annotations
@@ -141,15 +148,38 @@ def resolve(
     camera_model: str | None = None,
     controller_name: str = "osprey",
     interface_hw: str | None = None,
+    persona: str | None = None,
 ) -> DeviceIdentity:
-    """Combine overrides with derived values; never return the camera's MAC."""
+    """Combine overrides with derived values; never return the camera's MAC.
+
+    ``persona`` names the view this identity belongs to.  A controller that
+    serves the same camera twice — once with PTZ for the tracker and once
+    without it for a recorder — must present two *different* devices, or the
+    recorder merges the two records.  The marker is folded into the seed, so
+    the derived serial and MAC differ per persona.
+
+    A persona derives **everything** that identifies the device: the serial,
+    the MAC and the hostname.  It deliberately does not inherit the
+    primary's operator overrides (``config.serial``, ``config.mac``,
+    ``config.hostname``) or the MAC of the discovery interface — those
+    describe *one* device, and sharing them would make the two personas
+    indistinguishable to an NVR.  The manufacturer, model and hardware id
+    describe the product and are shared.
+    """
+    derived_seed = seed if not persona else f"{seed}\0{persona}"
     forbidden = normalise_mac(camera_mac) if camera_mac and len(re.sub(r"[^0-9A-Fa-f]", "", camera_mac)) == 12 else None
-    mac = config.mac or interface_hw or derived_mac(seed)
+    if persona:
+        mac = derived_mac(derived_seed)
+        serial = derived_serial(derived_seed)
+        hostname = hostname_label(f"{controller_name}-{persona}")
+    else:
+        mac = config.mac or interface_hw or derived_mac(derived_seed)
+        serial = config.serial or derived_serial(derived_seed)
+        hostname = config.hostname or hostname_label(controller_name)
     if forbidden is not None and mac == forbidden:
-        mac = derived_mac(seed)
-    serial = config.serial or derived_serial(seed)
+        mac = derived_mac(derived_seed)
     if forbidden is not None and re.sub(r"[^0-9A-F]", "", serial.upper()) == forbidden.replace(":", ""):
-        serial = derived_serial(seed)
+        serial = derived_serial(derived_seed)
     model = config.model or (f"Osprey {camera_model}" if camera_model else "Osprey PTZ")
     return DeviceIdentity(
         manufacturer=config.manufacturer,
@@ -157,6 +187,6 @@ def resolve(
         serial=serial,
         hardware_id=config.hardware_id or DEFAULT_HARDWARE_ID,
         mac=mac,
-        hostname=config.hostname or hostname_label(controller_name),
+        hostname=hostname,
         prefix_length=config.prefix_length,
     )

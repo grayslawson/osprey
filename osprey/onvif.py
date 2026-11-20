@@ -416,6 +416,10 @@ NAMESPACES: Final = {
 }
 
 MANUFACTURER: Final = device_identity.DEFAULT_MANUFACTURER
+# The persona marker names a view of the camera ("media" for the media-only
+# view an NVR adopts).  It ends up in a hostname label and a scope token, so
+# it is kept to a short, boring token.
+_PERSONA_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
 PTZ_NODE: Final = "PTZNode"
 VIDEO_SOURCE: Final = "VideoSource"
 PTZ_CONFIG: Final = "PTZConfig"
@@ -1029,6 +1033,7 @@ class Services:
         extra_scopes: tuple[str, ...] = (),
         snapshot_interval: float = 1.0,
         autotrack_users: frozenset[str] = frozenset({"frigate"}),
+        persona: str = "",
         log_calls: bool = False) -> None:
         self.backend = backend
         self.host = host
@@ -1044,6 +1049,9 @@ class Services:
         self.frigate_url = self.frigate_store.load() or frigate_url
         self.identity_config = identity or device_identity.IdentityConfig()
         self.name = name
+        if persona and not _PERSONA_RE.fullmatch(persona):
+            raise ValueError("a persona must be 1-32 characters of letters, digits, dash or underscore")
+        self.persona = persona
         self.interface_mac = interface_mac
         self.extra_scopes = extra_scopes
         self.snapshots = SnapshotCache(lambda: self.backend.snapshot(), snapshot_interval)
@@ -1076,13 +1084,24 @@ class Services:
             camera_model=camera.model if camera is not None and camera.model else None,
             controller_name=self.name,
             interface_hw=self.interface_mac,
+            persona=self.persona or None,
         )
 
-    def scopes(self) -> tuple[str, ...]:
+    @property
+    def display_name(self) -> str:
+        """The friendly name this persona presents.
+
+        A controller that serves the same camera twice gives each persona its
+        own name, so an NVR's camera list shows which entry is the media-only
+        view instead of two identical cameras.
+        """
         camera = self.backend.camera()
-        name = camera.name if camera is not None and camera.name else self.name
+        base = camera.name if camera is not None and camera.name else self.name
+        return f"{base} ({self.persona})" if self.persona else base
+
+    def scopes(self) -> tuple[str, ...]:
         return discovery.scopes_for(
-            name, self.ptz_enabled, self.device_identity().model, self.extra_scopes
+            self.display_name, self.ptz_enabled, self.device_identity().model, self.extra_scopes
         )
 
     def frigate_settings(self) -> dict[str, object]:

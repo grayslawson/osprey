@@ -5,6 +5,24 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
 
 ## Unreleased
 
+### Features
+- **onvif:** A media persona for NVRs. `ports.onvif_read_only` now serves the
+  camera as a second ONVIF device — the same media, no PTZ at all — with its
+  own serial, MAC, hostname and friendly name (`<camera name> (media)`), so an
+  NVR such as UniFi Protect records it as a camera of its own and can never
+  move the camera head. WS-Discovery answers with one ProbeMatch per device,
+  the media persona first, and a probe that asks for a PTZ device is answered
+  by the primary persona alone. See docs/protect-dual-adoption.md.
+
+### Fixes
+- **discovery:** A discovery message that names every persona now stays inside
+  one datagram — the 1472 bytes a 1500-byte MTU leaves for the UDP payload —
+  so it is not split into IP fragments, which some networks drop and some
+  clients reassemble badly. The metadata version, the device type and then the
+  `To` header are given up, in that order, and only when the personas would
+  not otherwise fit; a controller that serves one camera still sends the full,
+  standard message.
+
 ## [0.9.0b1] - 2026-11-20
 
 First beta. G5 PTZ fully supported; other UniFi PTZ models experimental.
