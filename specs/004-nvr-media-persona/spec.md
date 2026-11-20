@@ -80,9 +80,10 @@ recorder that discovers Osprey.
 A 1500-byte Ethernet MTU leaves 1472 bytes for the UDP payload, and a larger
 discovery message is split into IP fragments, which some networks drop and
 some clients reassemble badly. Every message Osprey sends therefore stays
-inside one datagram: the metadata version, the device type and then the `To`
-header are given up, in that order, if the personas would not otherwise fit.
-A controller that serves one camera still sends the full, standard message.
+inside one datagram: the metadata version, the device type, the `To` header,
+the XML declaration and finally the hardware scope are given up, in that
+order, if the personas would not otherwise fit. A controller that serves one
+camera still sends the full, standard message.
 
 ### Simultaneity
 

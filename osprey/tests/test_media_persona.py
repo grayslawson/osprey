@@ -207,6 +207,47 @@ def test_the_hello_of_two_personas_also_fits_one_datagram() -> None:
     assert hello.count("<d:Hello>") == 2
 
 
+def test_a_long_camera_name_still_fits_one_datagram() -> None:
+    """A long name must not push the reply into IP fragments."""
+    primary = discovery.identity_for(
+        host="192.168.1.2", port=8000, path=onvif.DEVICE_PATH,
+        name="Front Yard Driveway Camera 4K", ptz=True, hardware="Osprey UniFi G5 PTZ Camera",
+    )
+    media = discovery.identity_for(
+        host="192.168.1.2", port=8001, path=onvif.DEVICE_PATH,
+        name="Front Yard Driveway Camera 4K (media)", ptz=False,
+        hardware="Osprey UniFi G5 PTZ Camera",
+    )
+    reply = discovery.probe_match(
+        (primary, media), "urn:uuid:12345678-1234-1234-1234-123456789abc"
+    )
+    assert len(reply.encode()) <= discovery.MAX_MESSAGE_BYTES
+    assert reply.count("<d:ProbeMatch>") == 2
+
+
+def test_the_hardware_scope_is_given_up_before_the_message_is_fragmented() -> None:
+    """The hardware scope only repeats the model, which the device reports itself."""
+    primary = discovery.identity_for(
+        host="192.168.1.2", port=8000, path=onvif.DEVICE_PATH,
+        name="a very long camera name indeed", ptz=True,
+        hardware="Osprey UniFi G5 PTZ Camera with a long model name",
+    )
+    media = discovery.identity_for(
+        host="192.168.1.2", port=8001, path=onvif.DEVICE_PATH,
+        name="a very long camera name indeed (media)", ptz=False,
+        hardware="Osprey UniFi G5 PTZ Camera with a long model name",
+    )
+    reply = discovery.probe_match(
+        (primary, media), "urn:uuid:12345678-1234-1234-1234-123456789abc"
+    )
+    assert len(reply.encode()) <= discovery.MAX_MESSAGE_BYTES
+    assert "onvif://www.onvif.org/hardware/" not in reply
+    # The scope is still matched against, so a client that asks for it is answered.
+    payload = probe(scopes=primary.scopes[-2])
+    matched = discovery.matching_identities(payload, (primary, media))
+    assert matched == (primary, media)
+
+
 # ------------------------------------------------------------------------ stack
 
 

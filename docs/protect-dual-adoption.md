@@ -71,6 +71,14 @@ A probe that asks specifically for a PTZ device is answered by the primary
 device alone: the media persona does not advertise the PTZ scope, so it never
 satisfies such a request.
 
+WS-Discovery is link-local multicast, so it only works when the probe can
+reach Osprey and the reply can get back. A container on a plain bridge
+network usually cannot do either — the multicast never crosses into the
+container, and the container cannot multicast onto the LAN. When that is the
+case, adopt the media persona by address instead: **Advanced Adoption**, the
+Osprey host and port `8001`. The device is the same either way; only the way
+you find it differs.
+
 ### Adopting it in Protect
 
 1. Add the Osprey host and port `8001` as a **generic ONVIF camera** in
