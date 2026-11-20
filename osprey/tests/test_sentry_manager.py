@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from sentry_manager import SentryManager
+from sentry_manager import SentryManager, SentryStore
 from sentry_runtime import MovementGate, SentryConfig
 
 
@@ -242,3 +242,104 @@ def test_status_reports_the_config_the_state_and_the_presets() -> None:
         assert "AAA" in cameras
     finally:
         manager.stop()
+
+
+# --------------------------------------------------------------- persistence
+
+
+def test_the_store_round_trips_per_camera_settings(tmp_path: Any) -> None:
+    store = SentryStore(tmp_path / "sentry.json")
+    assert store.load() == {}
+    assert store.save({"AAA": {"enabled": True, "points": [{"name": "gate"}]}}) is True
+    loaded = store.load()
+    assert loaded["AAA"]["enabled"] is True
+    assert loaded["AAA"]["points"] == [{"name": "gate"}]
+
+
+def test_an_unreadable_store_is_ignored_rather_than_fatal(tmp_path: Any) -> None:
+    path = tmp_path / "sentry.json"
+    path.write_text("{not json", encoding="utf-8")
+    assert SentryStore(path).load() == {}
+
+
+def test_restore_prefers_the_stored_settings_over_the_baseline(tmp_path: Any) -> None:
+    world = World()
+    store = SentryStore(tmp_path / "sentry.json")
+    store.save({"AAA": {"enabled": True, "interval_sec": 10, "speed": 400,
+                        "tracking_hold_sec": 15, "points": [{"name": "gate"}]}})
+    manager = make_manager(world)
+    manager.store = store
+    manager.restore({
+        "AAA": {"enabled": False, "interval_sec": 90, "speed": 1000,
+                "tracking_hold_sec": 15, "points": [{"name": "driveway"}]},
+    })
+    try:
+        config = manager.config("AAA")
+        assert config is not None
+        assert config.interval_sec == 10
+        assert config.speed == 400
+        assert [point.name for point in config.points] == ["gate"]
+        assert config.enabled is True
+    finally:
+        manager.stop()
+
+
+def test_restore_uses_the_baseline_for_a_camera_the_store_does_not_mention(tmp_path: Any) -> None:
+    world = World()
+    store = SentryStore(tmp_path / "sentry.json")
+    manager = make_manager(world)
+    manager.store = store
+    manager.restore({
+        "AAA": {"enabled": True, "interval_sec": 45, "speed": 1000,
+                "tracking_hold_sec": 15, "points": [{"name": "driveway"}]},
+    })
+    try:
+        config = manager.config("AAA")
+        assert config is not None
+        assert [point.name for point in config.points] == ["driveway"]
+    finally:
+        manager.stop()
+
+
+def test_a_removed_patrol_does_not_come_back_after_a_restart(tmp_path: Any) -> None:
+    world = World()
+    store = SentryStore(tmp_path / "sentry.json")
+    manager = make_manager(world)
+    manager.store = store
+    manager.configure("AAA", config_for("AAA", ["driveway"]))
+    manager.remove("AAA")
+    assert manager.config("AAA") is None
+
+    # A restart reads the baseline from the config file and the tombstone
+    # from the state file; the tombstone wins.
+    restarted = make_manager(world)
+    restarted.store = store
+    restarted.restore({
+        "AAA": {"enabled": True, "interval_sec": 45, "speed": 1000,
+                "tracking_hold_sec": 15, "points": [{"name": "driveway"}]},
+    })
+    try:
+        assert restarted.config("AAA") is None
+        assert "AAA" not in restarted._runtimes
+    finally:
+        restarted.stop()
+
+
+def test_a_configured_patrol_survives_a_restart(tmp_path: Any) -> None:
+    world = World()
+    store = SentryStore(tmp_path / "sentry.json")
+    manager = make_manager(world)
+    manager.store = store
+    manager.configure("AAA", config_for("AAA", ["driveway", "gate"]))
+    manager.stop()
+
+    restarted = make_manager(world)
+    restarted.store = store
+    restarted.restore({})
+    try:
+        config = restarted.config("AAA")
+        assert config is not None
+        assert [point.name for point in config.points] == ["driveway", "gate"]
+        assert "AAA" in restarted._runtimes
+    finally:
+        restarted.stop()

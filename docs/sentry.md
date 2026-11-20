@@ -93,6 +93,26 @@ camera, and naming one twice is an error).
 The MAC is the camera's own, as shown by `osprey doctor` and in the operator
 console's camera list.
 
+### Where the configuration lives
+
+Two places, and the rule between them is simple:
+
+- **`osprey.json`** is the baseline. It ships with the deployment and says what
+  the patrol should be before anyone touches it.
+- **`sentry.json` in the state directory** holds what an operator changed at
+  runtime — through the console, the API or MQTT. It survives a restart, so a
+  patrol that is running when Osprey restarts comes back.
+
+A camera mentioned in `sentry.json` uses that configuration; a camera that is
+not mentioned falls back to `osprey.json`. Removing a patrol through the API
+writes a tombstone, so it stays removed even if the config file still lists
+it.
+
+That means a change made at runtime wins over the config file for that
+camera. Edit `osprey.json` for a camera that has never been changed at
+runtime, or remove its entry from `sentry.json` to hand it back to the config
+file.
+
 ## Frigate: the zone caveat
 
 This is the part that surprises people, so read it before enabling a patrol.
