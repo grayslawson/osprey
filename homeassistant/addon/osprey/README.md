@@ -121,3 +121,10 @@ The Dockerfile builds from the Osprey repository root to copy `osprey/` and
 Home Assistant Add-on Builder for every declared architecture. Test clean install/upgrade,
 ingress, `/data` persistence, discovery, Frigate ingest, PTZ actions, tracking and safe-stop.
 `docker build -f homeassistant/addon/osprey/Dockerfile .` is only a local smoke test.
+
+The manifest pins the image to the add-on version
+(`ghcr.io/grayslawson/{arch}-osprey-addon:<version>`), so an installation
+never runs an image from a different release. `homeassistant/validate.sh`
+checks that the manifest version and the image tag name the same version as
+`VERSION`, and the app repository is refreshed by a scheduled workflow that
+mirrors this add-on with `scripts/sync-ha-apps.sh`.

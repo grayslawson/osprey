@@ -9,7 +9,7 @@ init: true
 arch:
   - amd64
   - aarch64
-image: ghcr.io/grayslawson/{arch}-osprey-addon
+image: ghcr.io/grayslawson/{arch}-osprey-addon:0.9.0b1
 host_network: true
 webui: http://[HOST]:[PORT:8000]/
 ingress: true
