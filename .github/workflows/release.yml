@@ -187,9 +187,43 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@fb13cb306901256ace3dab689990e13a5550ffaa # v1.11.0
 
+  npm:
+    name: Publish to npm
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    # npm publishes through a trusted publisher bound to this workflow file.
+    # Until that binding exists the job fails, and the failure is recorded on
+    # the run rather than blocking the other channels.
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      - name: Check the package version against the release
+        working-directory: packaging/npm
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          package_version="$(python3 -c 'import json,os; print(json.load(open("package.json"))["version"])')"
+          if [ "$package_version" != "$RELEASE_VERSION" ]; then
+            echo "npm package version ($package_version) does not match release version ($RELEASE_VERSION)" >&2
+            exit 1
+          fi
+      - name: Publish the launcher
+        working-directory: packaging/npm
+        run: npm publish --provenance --access public
+
   github-release:
     name: Create GitHub Release
-    needs: [verify, pypi, image]
+    needs: [verify, pypi, npm, image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
