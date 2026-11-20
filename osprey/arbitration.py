@@ -14,7 +14,10 @@ Every PTZ command is tagged with the kind of client that sent it, through the
     manual hold stops it — but it is a separate kind so the controller can
     tell an autotracker apart from a patrol. The patrol needs that
     distinction because it has to stand down while Frigate is tracking, and a
-    patrol that mistook its own moves for tracking would never advance.
+    patrol that mistook its own moves for tracking would never advance. The
+    priority runs the other way too: an autotracker takes the camera from a
+    patrol that is still travelling to its next point, because a tracked
+    object outranks idle-time work.
 ``None`` (untagged)
     Osprey itself (auto-home, recovery). It is never held back and never starts
     a hold.
@@ -55,23 +58,35 @@ class Arbiter:
     def admit(self, mac: str, kind: str | None) -> tuple[bool, bool]:
         """Return ``(allowed, supersede)`` for one command from ``kind``.
 
-        ``supersede`` is true when a manual command may replace a move that an
-        autotracker (or Osprey itself) started and that has not finished yet.
+        ``supersede`` is true when the command may replace a move that another
+        source started and that has not finished yet:
+
+        * a person may replace a move an autotracker, a patrol or Osprey
+          itself started;
+        * an autotracker may replace a move the sentry patrol started.  The
+          patrol is idle-time work and a tracked object outranks it.  Without
+          this the autotracker's first move is refused as "the camera is
+          already moving" for as long as the head is travelling to the next
+          patrol point, and the tracking never starts.
         """
-        if self.hold_sec <= 0 or kind is None:
+        if kind is None:
             return True, False
         now = self._clock()
         with self._lock:
             if kind == MANUAL:
+                if self.hold_sec <= 0:
+                    # Arbitration is off: nobody supersedes anybody.
+                    return True, False
                 supersede = self._last.get(mac) != MANUAL
                 self._until[mac] = now + self.hold_sec
                 self._last[mac] = MANUAL
                 return True, supersede
-            if now < self._until.get(mac, 0.0):
+            if self.hold_sec > 0 and now < self._until.get(mac, 0.0):
                 self.dropped += 1
                 return False, False
+            supersede = kind == AUTO and self._last.get(mac) == PATROL
             self._last[mac] = kind
-            return True, False
+            return True, supersede
 
     def remaining(self, mac: str) -> float:
         """Seconds left on the manual hold for ``mac`` (0 when none)."""
