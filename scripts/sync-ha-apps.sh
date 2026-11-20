@@ -29,6 +29,10 @@ cp -R "$upstream/osprey" "$target/src/osprey"
 cp -R "$upstream/pyunifiwire" "$target/src/pyunifiwire"
 cp "$upstream/homeassistant/addon/osprey/run.sh" "$addon/run.sh"
 cp "$upstream/homeassistant/addon/osprey/README.md" "$addon/README.md"
+cp "$upstream/homeassistant/addon/osprey/DOCS.md" "$addon/DOCS.md"
+cp "$upstream/homeassistant/addon/osprey/CHANGELOG.md" "$addon/CHANGELOG.md"
+rm -rf "$addon/translations"
+cp -R "$upstream/homeassistant/addon/osprey/translations" "$addon/translations"
 chmod 0755 "$addon/run.sh"
 
 # The manifest names the version and the image it installs.  Both follow the
