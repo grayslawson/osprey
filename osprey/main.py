@@ -38,6 +38,7 @@ import media
 import mqtt_bridge
 import onvif
 import logbuffer
+import logfile
 import rtsp
 import snapshots
 import setup_wizard
@@ -846,7 +847,13 @@ def main(argv: list[str] | None = None) -> int:
 
     options = resolve_options(args)
     stack = build(options)
-
+    # Persist a rotating log next to the certificate so a restart keeps a
+    # short history.  A read-only or missing state directory only disables the
+    # file log; the controller still runs with console logging.
+    logfile.install(
+        options.cert.parent,
+        level=logging.DEBUG if args.verbose else logging.INFO,
+    )
     stopping = threading.Event()
 
     def shutdown(signum: int, frame: FrameType | None) -> None:

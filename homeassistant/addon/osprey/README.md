@@ -93,9 +93,11 @@ deployment outside HA needs TLS and independent authentication.
 
 ### Release and validation
 
-The repository root is the add-on repository (`repository.json` plus `addon/osprey/`). The
-Dockerfile builds from root to copy `osprey/` and `pyunifiwire/`. Publish immutable
-per-architecture GHCR images, update `version`, run `homeassistant/validate.sh` and the
+The app repository is a separate public Git repository with `repository.yaml` at its
+root, built from [`packaging/homeassistant-repo`](../../../packaging/homeassistant-repo/README.md).
+The Dockerfile builds from the Osprey repository root to copy `osprey/` and
+`pyunifiwire/`. Publish immutable per-architecture GHCR images, update
+`version`, run `homeassistant/validate.sh` and the
 Home Assistant Add-on Builder for every declared architecture. Test clean install/upgrade,
 ingress, `/data` persistence, discovery, Frigate ingest, PTZ actions, tracking and safe-stop.
 `docker build -f homeassistant/addon/osprey/Dockerfile .` is only a local smoke test.
