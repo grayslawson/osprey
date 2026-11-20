@@ -64,8 +64,9 @@ A 1500-byte Ethernet MTU leaves 1472 bytes for the UDP payload.  A larger
 discovery message is split into IP fragments, which some networks drop and
 some clients reassemble badly, so every message Osprey sends stays inside one
 datagram.  The optional parts of the message — the metadata version, the
-`To` header, the device type — are given up in that order to make room.  A
-device that serves one camera still sends the full, standard message.
+device type, the `To` header, the XML declaration and the hardware scope —
+are given up in that order to make room.  A device that serves one camera
+still sends the full, standard message.
 """
 
 from __future__ import annotations
@@ -98,6 +99,7 @@ SOAP_NS: Final = "http://www.w3.org/2003/05/soap-envelope"
 NVT_TYPE: Final = "dn:NetworkVideoTransmitter"
 DEVICE_TYPE: Final = "tds:Device"
 ANONYMOUS_URI: Final = "http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous"
+HARDWARE_SCOPE: Final = "onvif://www.onvif.org/hardware/"
 DISCOVERY_URI: Final = "urn:schemas-xmlsoap-org:ws:2005:04:discovery"
 MATCH_RFC3986: Final = f"{DISCOVERY_NS}/rfc3986"
 MATCH_STRCMP0: Final = f"{DISCOVERY_NS}/strcmp0"
@@ -113,10 +115,12 @@ log = logging.getLogger("osprey.discovery")
 _oversized_warned = False
 
 
-def _envelope(body: str, header: str, *, device_namespace: bool = True) -> str:
+def _envelope(
+    body: str, header: str, *, device_namespace: bool = True, declaration: bool = True
+) -> str:
     return (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        f'<s:Envelope xmlns:s="{SOAP_NS}" xmlns:a="{ADDRESSING_NS}" xmlns:d="{DISCOVERY_NS}" '
+        ('<?xml version="1.0" encoding="UTF-8"?>' if declaration else "")
+        + f'<s:Envelope xmlns:s="{SOAP_NS}" xmlns:a="{ADDRESSING_NS}" xmlns:d="{DISCOVERY_NS}" '
         'xmlns:dn="http://www.onvif.org/ver10/network/wsdl" '
         + ('xmlns:tds="http://www.onvif.org/ver10/device/wsdl"' if device_namespace else "")
         + ">"
@@ -248,6 +252,21 @@ def _types(omit: frozenset[str]) -> str:
     return NVT_TYPE if "device_type" in omit else f"{NVT_TYPE} {DEVICE_TYPE}"
 
 
+def _scopes(identity: Identity, omit: frozenset[str]) -> str:
+    """The scopes to advertise, minus the hardware scope when it is given up.
+
+    The hardware scope only repeats the model, which the device reports in
+    ``GetDeviceInformation`` anyway, so it is the first thing to go when the
+    message would not otherwise fit.  The scope is still matched against, so a
+    client that asks for it is still answered.
+    """
+    if "hardware" not in omit:
+        return identity.scope_text
+    return " ".join(
+        scope for scope in identity.scopes if not scope.startswith(HARDWARE_SCOPE)
+    )
+
+
 def probe_match(identities: Sequence[Identity], relates_to: str) -> str:
     """A ProbeMatches answer naming every identity we answer for.
 
@@ -256,8 +275,8 @@ def probe_match(identities: Sequence[Identity], relates_to: str) -> str:
     its own scopes, so a client can tell them apart.
 
     The message is kept inside one datagram: the metadata version, the device
-    type and then the ``To`` header are given up, in that order, if the
-    personas would not otherwise fit.
+    type, the ``To`` header, the XML declaration and finally the hardware
+    scope are given up, in that order, if the personas would not otherwise fit.
     """
     message_id = f"urn:uuid:{uuid.uuid4()}"
 
@@ -273,16 +292,20 @@ def probe_match(identities: Sequence[Identity], relates_to: str) -> str:
             "<d:ProbeMatch>"
             f"<a:EndpointReference><a:Address>{identity.endpoint}</a:Address></a:EndpointReference>"
             f"<d:Types>{types}</d:Types>"
-            f"<d:Scopes>{identity.scope_text}</d:Scopes>"
+            f"<d:Scopes>{_scopes(identity, omit)}</d:Scopes>"
             f"<d:XAddrs>{identity.xaddr}</d:XAddrs>"
             + ("" if "metadata" in omit else "<d:MetadataVersion>1</d:MetadataVersion>")
             + "</d:ProbeMatch>"
             for identity in identities
         )
         body = f"<d:ProbeMatches>{matches}</d:ProbeMatches>"
-        return _envelope(body, header, device_namespace="device_type" not in omit)
+        return _envelope(
+            body, header,
+            device_namespace="device_type" not in omit,
+            declaration="declaration" not in omit,
+        )
 
-    message = _fit(build, ("metadata", "device_type", "to"))
+    message = _fit(build, ("metadata", "device_type", "to", "declaration", "hardware"))
     _report_size(message, "ProbeMatches")
     return message
 
@@ -303,15 +326,19 @@ def announcement(identities: Sequence[Identity], leaving: bool = False) -> str:
             f"<d:{action}>"
             f"<a:EndpointReference><a:Address>{identity.endpoint}</a:Address></a:EndpointReference>"
             f"<d:Types>{types}</d:Types>"
-            f"<d:Scopes>{identity.scope_text}</d:Scopes>"
+            f"<d:Scopes>{_scopes(identity, omit)}</d:Scopes>"
             f"<d:XAddrs>{identity.xaddr}</d:XAddrs>"
             + ("" if "metadata" in omit else "<d:MetadataVersion>1</d:MetadataVersion>")
             + f"</d:{action}>"
             for identity in identities
         )
-        return _envelope(bodies, header, device_namespace="device_type" not in omit)
+        return _envelope(
+            bodies, header,
+            device_namespace="device_type" not in omit,
+            declaration="declaration" not in omit,
+        )
 
-    message = _fit(build, ("metadata", "device_type"))
+    message = _fit(build, ("metadata", "device_type", "declaration", "hardware"))
     _report_size(message, action)
     return message
 

@@ -78,10 +78,12 @@ so existing callers and tests keep working.
 20-byte IPv4 header and an 8-byte UDP header. `probe_match()` and
 `announcement()` render the message and, if it does not fit, give up the
 optional parts in a fixed order: the metadata version (optional in the
-WS-Discovery schema), then the device type (the NVT type alone still
-identifies an ONVIF device), then the `To` header (optional in a response).
-If even that is not enough — a very long camera name — the message is sent
-whole and a warning is logged once.
+WS-Discovery schema), the device type (the NVT type alone still identifies
+an ONVIF device), the `To` header (optional in a response), the XML
+declaration (optional in XML; UTF-8 is the default) and finally the hardware
+scope, which only repeats the model the device reports in
+`GetDeviceInformation`. If even that is not enough the message is sent whole
+and a warning is logged once.
 
 A controller that serves one camera still sends the full, standard message:
 nothing is given up unless it has to be.
