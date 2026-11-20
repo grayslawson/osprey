@@ -3,9 +3,7 @@ class Osprey < Formula
   homepage "https://github.com/grayslawson/osprey"
   version "0.9.0b1"
   url "https://github.com/grayslawson/osprey/archive/refs/tags/v0.9.0b1.tar.gz"
-  # Add the archive checksum when copying this formula into a Homebrew tap.
-  # The checksum is intentionally omitted here so direct installation works
-  # before the first GitHub release archive exists.
+  sha256 "84ee4b4713e6604fe92d9ea5e189f764d1cc668e2a484e346d37b383ccf146a2"
   license "MIT"
   def install
     bin.install "scripts/osprey"
