@@ -63,7 +63,9 @@ First beta. G5 PTZ fully supported; other UniFi PTZ models experimental.
 
 ### Repository
 - GitHub `grayslawson/osprey` is the canonical repository. The Forgejo
-  instance is a read-only pull mirror. See docs/repository-sync.md.
+  instance is a read-only pull mirror of it, synchronised hourly; the
+  pre-rename Forgejo tree is kept frozen as `grays/osprey-legacy`.
+  See docs/repository-sync.md.
 
 ### Renamed: cuckoo to osprey
 - The controller source moved from `cuckoo/` to `osprey/`. Deployments that
