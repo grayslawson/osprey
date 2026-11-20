@@ -5,6 +5,12 @@ named-preset callback and live camera/tracking predicates.  The optional lease
 callback must be shared with every other movement producer (autotracking,
 return-home, and manual control) when integrated; checking a predicate alone
 cannot close a check-then-move race.
+
+The patrol moves under the ``PATROL`` arbitration source.  It yields to a
+person exactly as an autotracker does, but it is a distinct kind so the
+controller can tell an autotracker apart from a patrol: a patrol has to stand
+down while an autotracker is driving, and one that mistook its own moves for
+tracking would never advance.
 """
 
 from __future__ import annotations
@@ -158,7 +164,7 @@ class SentryPatrol:
                         self._state, self._next_move_at = "busy", clock + 1.0
                         self._publish()
                         return False
-                    token = arbitration.source.set(arbitration.AUTO)  # a patrol yields to people
+                    token = arbitration.source.set(arbitration.PATROL)  # a patrol yields to people
                     try:
                         accepted = self.goto_preset(point.name)
                     finally:
