@@ -55,6 +55,10 @@ First beta. G5 PTZ fully supported; other UniFi PTZ models experimental.
 - **homebrew:** The Homebrew tap ships a formula for the CLI.
 - **homeassistant:** The add-on is published as a Home Assistant app, and the
   documentation uses the current 2026.11 apps terminology.
+- **homeassistant:** The app repository `grayslawson/osprey-ha-apps` exists
+  and is kept in step by a scheduled mirror, so the app can be installed from
+  Home Assistant. The add-on pins the image it installs to the add-on version
+  instead of pulling whatever was published last.
 - Issue forms: bug report and camera model support.
 
 ### Repository
