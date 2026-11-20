@@ -10,12 +10,22 @@ on:
         description: Add-on version to build (for example, 0.1.0)
         required: true
         type: string
+      prerelease:
+        description: Pre-release build (does not move the "latest" tag)
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       version:
         description: Add-on version to build (for example, 0.1.0)
         required: true
         type: string
+      prerelease:
+        description: Pre-release build (does not move the "latest" tag)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,6 +41,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       version: ${{ steps.version.outputs.value }}
+      tags: ${{ steps.version.outputs.tags }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -45,6 +56,7 @@ jobs:
         id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
           raw_version="${INPUT_VERSION:-}"
@@ -60,12 +72,26 @@ jobs:
             [0-9]*.[0-9]*.[0-9]*|[0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "Version must be semver-like: $raw_version" >&2; exit 1 ;;
           esac
-          manifest_version="$(sed -n 's/^version:[[:space:]]*["'"']\{0,1\}\([^"'"']*\)["'"']\{0,1\}/\1/p' homeassistant/addon/osprey/config.yaml | head -n1)"
+          # The manifest version must match the release version.  The awk
+          # program deliberately avoids quote characters: a shell expression
+          # that embeds them is easy to mangle into a different regular
+          # expression than the one it looks like.
+          manifest_version="$(awk -F: '/^version:/ {gsub(/[^0-9A-Za-z.+-]/, "", $2); print $2; exit}' homeassistant/addon/osprey/config.yaml)"
           if [ "$manifest_version" != "$version" ]; then
             echo "Home Assistant manifest version ($manifest_version) must match release version ($version)" >&2
             exit 1
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
+          # "latest" only moves on a final release, so a pre-release never
+          # becomes the add-on that an existing installation pulls.
+          {
+            echo 'tags<<OSPREY_TAGS_EOF'
+            echo "$version"
+            if [ "${INPUT_PRERELEASE:-false}" != "true" ]; then
+              echo 'latest'
+            fi
+            echo 'OSPREY_TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.arch }} image
@@ -90,9 +116,7 @@ jobs:
           file: homeassistant/addon/osprey/Dockerfile
           image: ${{ matrix.image }}
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
-          image-tags: |
-            ${{ needs.prepare.outputs.version }}
-            latest
+          image-tags: ${{ needs.prepare.outputs.tags }}
           push: 'true'
           version: ${{ needs.prepare.outputs.version }}
 
@@ -109,7 +133,5 @@ jobs:
         with:
           architectures: ${{ env.ARCHITECTURES }}
           image-name: ${{ env.IMAGE_NAME }}
-          image-tags: |
-            ${{ needs.prepare.outputs.version }}
-            latest
+          image-tags: ${{ needs.prepare.outputs.tags }}
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}

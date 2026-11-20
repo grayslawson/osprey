@@ -147,10 +147,12 @@ class SentryPatrol:
                 return False
             if self.tracking_active():
                 self._state, self._next_move_at = "tracking", clock + 1.0
+                log.debug("sentry patrol stands down: an autotracker is driving this camera")
                 self._publish()
                 return False
             if not self.camera_idle():
                 self._state, self._next_move_at = "camera_busy", clock + 1.0
+                log.debug("sentry patrol stands down: the camera is still moving")
                 self._publish()
                 return False
             point = self._points[self._index]
@@ -190,6 +192,7 @@ class SentryPatrol:
             self._index = (self._index + 1) % len(self._points)
             dwell = point.dwell_sec if point.dwell_sec is not None else self.interval_sec
             self._state, self._next_move_at = "moving", clock + dwell
+            log.info("sentry patrol moved to %s", point.name)
             self._publish()
             return True
 
