@@ -116,6 +116,13 @@ registered cameras may connect. `name` is shown to ONVIF clients; `ip` is an
 optional operator hint and is not used as the camera identity. Invalid entries
 are rejected at startup with the offending list index.
 
+`ports.onvif_read_only` adds a second ONVIF device for the same camera: the
+**media persona**, which carries the media but no PTZ at all, for a recorder
+such as UniFi Protect that must never move the head. It is a separate device
+— its own serial, MAC, hostname and name (`<camera name> (media)`) — and
+WS-Discovery advertises it alongside the primary one. See
+[Protect dual adoption](../docs/protect-dual-adoption.md).
+
 ```sh
 ./run.sh --config osprey.json                       # all from the file
 ./run.sh --config osprey.json --tracks video1:h265  # …but this run's main is H.265

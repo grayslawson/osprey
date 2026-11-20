@@ -12,10 +12,16 @@ import onvif
 IDENTITY = discovery.identity_for(
     host="10.0.0.1", port=8000, path=onvif.DEVICE_PATH, name="front gate", ptz=True
 )
+# The media-only persona: the same camera, served again without PTZ.
+MEDIA = discovery.identity_for(
+    host="10.0.0.1", port=8001, path=onvif.DEVICE_PATH, name="front gate (media)", ptz=False
+)
 
 
-def probe(types: str | None = discovery.NVT_TYPE, message_id: str = "urn:uuid:abc") -> bytes:
+def probe(types: str | None = discovery.NVT_TYPE, message_id: str = "urn:uuid:abc",
+          scopes: str | None = None) -> bytes:
     type_element = f"<d:Types>{types}</d:Types>" if types is not None else ""
+    scope_element = f"<d:Scopes>{scopes}</d:Scopes>" if scopes is not None else ""
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
@@ -26,7 +32,8 @@ def probe(types: str | None = discovery.NVT_TYPE, message_id: str = "urn:uuid:ab
         f"<s:Header><a:MessageID>{message_id}</a:MessageID>"
         "<a:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</a:To>"
         "<a:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</a:Action>"
-        f"</s:Header><s:Body><d:Probe>{type_element}</d:Probe></s:Body></s:Envelope>"
+        f"</s:Header><s:Body><d:Probe>{type_element}{scope_element}</d:Probe>"
+        "</s:Body></s:Envelope>"
     ).encode()
 
 
@@ -66,7 +73,7 @@ def test_rubbish_is_not_a_probe() -> None:
 
 
 def test_probe_match_relates_to_the_probe_and_names_our_address() -> None:
-    xml = discovery.probe_match(IDENTITY, "urn:uuid:abc")
+    xml = discovery.probe_match((IDENTITY,), "urn:uuid:abc")
     root = ElementTree.fromstring(xml)
     texts = {
         element.tag.rpartition("}")[2]: (element.text or "").strip() for element in root.iter()
@@ -78,8 +85,8 @@ def test_probe_match_relates_to_the_probe_and_names_our_address() -> None:
 
 
 def test_hello_and_bye_carry_the_same_identity() -> None:
-    hello = discovery.announcement(IDENTITY)
-    bye = discovery.announcement(IDENTITY, leaving=True)
+    hello = discovery.announcement((IDENTITY,))
+    bye = discovery.announcement((IDENTITY,), leaving=True)
     assert "<d:Hello>" in hello and "<d:Bye>" in bye
     assert IDENTITY.endpoint in hello and IDENTITY.endpoint in bye
 
@@ -139,7 +146,7 @@ def test_a_real_onvif_client_probe_is_answered() -> None:
 def test_the_reply_uses_the_onvif_wsaddressing_namespace() -> None:
     """The ProbeMatch must come back in WS-Addressing 2004/08 and relate to the
     probe — a real client validates and correlates on both."""
-    reply = discovery.probe_match(IDENTITY, "urn:uuid:abc")
+    reply = discovery.probe_match((IDENTITY,), "urn:uuid:abc")
     assert "http://schemas.xmlsoap.org/ws/2004/08/addressing" in reply
     assert "http://www.w3.org/2005/08/addressing" not in reply, "2005/08 is the wrong spec"
     assert "<a:RelatesTo>urn:uuid:abc</a:RelatesTo>" in reply
@@ -163,3 +170,71 @@ def test_a_probe_using_the_wrong_2005_08_namespace_is_still_tolerated() -> None:
         "<s:Body><d:Probe/></s:Body></s:Envelope>"
     ).encode()
     assert discovery.probe_message_id(legacy) == "urn:uuid:legacy"
+
+
+def test_a_probe_is_answered_by_every_persona() -> None:
+    """A controller that serves the camera twice answers with one ProbeMatch
+    per view, so a client can adopt the media-only one."""
+    xml = discovery.probe_match((IDENTITY, MEDIA), "urn:uuid:abc")
+    root = ElementTree.fromstring(xml)
+    matches = [
+        element for element in root.iter()
+        if element.tag.rpartition("}")[2] == "ProbeMatch"
+    ]
+    assert len(matches) == 2
+    addresses = {element.text for element in root.iter() if element.tag.rpartition("}")[2] == "Address"}
+    assert addresses == {IDENTITY.endpoint, MEDIA.endpoint}
+    xaddrs = {element.text for element in root.iter() if element.tag.rpartition("}")[2] == "XAddrs"}
+    assert xaddrs == {IDENTITY.xaddr, MEDIA.xaddr}
+
+
+def test_each_persona_has_its_own_endpoint_uuid() -> None:
+    """The two personas must not answer as the same device."""
+    assert IDENTITY.endpoint != MEDIA.endpoint
+    assert MEDIA.endpoint.startswith("urn:uuid:")
+
+
+def test_the_media_persona_never_advertises_ptz() -> None:
+    assert "onvif://www.onvif.org/type/ptz" in IDENTITY.scope_text
+    assert "onvif://www.onvif.org/type/ptz" not in MEDIA.scope_text
+
+
+def test_a_probe_for_a_ptz_device_is_offered_the_ptz_persona_alone() -> None:
+    """A client that asks for a PTZ device must not be handed the media-only one."""
+    payload = probe(scopes="onvif://www.onvif.org/type/ptz")
+    matched = discovery.matching_identities(payload, (IDENTITY, MEDIA))
+    assert matched == (IDENTITY,)
+
+
+def test_a_probe_that_asks_for_nothing_is_offered_everything() -> None:
+    matched = discovery.matching_identities(probe(), (IDENTITY, MEDIA))
+    assert matched == (IDENTITY, MEDIA)
+
+
+def test_a_probe_for_a_scope_nobody_has_is_not_answered() -> None:
+    payload = probe(scopes="onvif://www.onvif.org/type/telepathy")
+    assert discovery.matching_identities(payload, (IDENTITY, MEDIA)) == ()
+
+
+def test_the_hello_names_every_persona() -> None:
+    hello = discovery.announcement((IDENTITY, MEDIA))
+    assert IDENTITY.endpoint in hello and MEDIA.endpoint in hello
+    assert hello.count("<d:Hello>") == 2
+
+
+def test_the_server_answers_with_both_personas() -> None:
+    server = discovery.DiscoveryServer((IDENTITY, MEDIA), port=0, multicast=False)
+    assert server.identity is IDENTITY
+    assert len(server.identities) == 2
+    server.start()
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.settimeout(5)
+    try:
+        client.sendto(probe(), ("127.0.0.1", server.port))
+        payload, _ = client.recvfrom(65536)
+        body = payload.decode()
+        assert body.count("<d:ProbeMatch>") == 2
+        assert IDENTITY.xaddr in body and MEDIA.xaddr in body
+    finally:
+        client.close()
+        server.stop()

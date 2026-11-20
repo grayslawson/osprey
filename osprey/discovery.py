@@ -50,6 +50,22 @@ How it works, end to end
 3. `probe_match()` builds the ProbeMatch — our stable endpoint UUID, our Types and
    Scopes, the `XAddrs` pointing at our ONVIF device service, and `RelatesTo` set
    to the Probe's MessageID — and it is unicast straight back to the prober.
+
+More than one device
+--------------------
+A controller may serve the same camera twice: once with PTZ for the tracker and
+once without it for a recorder.  Those are **two ONVIF devices**, so discovery
+answers with one ProbeMatch per device — each with its own endpoint UUID, its
+own XAddr and its own scopes — and a client can tell them apart.
+
+One datagram, please
+--------------------
+A 1500-byte Ethernet MTU leaves 1472 bytes for the UDP payload.  A larger
+discovery message is split into IP fragments, which some networks drop and
+some clients reassemble badly, so every message Osprey sends stays inside one
+datagram.  The optional parts of the message — the metadata version, the
+`To` header, the device type — are given up in that order to make room.  A
+device that serves one camera still sends the full, standard message.
 """
 
 from __future__ import annotations
@@ -62,7 +78,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Final, Iterable
+from typing import Callable, Final, Iterable, Sequence
 from urllib.parse import quote, urlsplit
 from xml.etree import ElementTree
 
@@ -81,20 +97,29 @@ ADDRESSING_NS_2005: Final = "http://www.w3.org/2005/08/addressing"
 SOAP_NS: Final = "http://www.w3.org/2003/05/soap-envelope"
 NVT_TYPE: Final = "dn:NetworkVideoTransmitter"
 DEVICE_TYPE: Final = "tds:Device"
+ANONYMOUS_URI: Final = "http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous"
+DISCOVERY_URI: Final = "urn:schemas-xmlsoap-org:ws:2005:04:discovery"
 MATCH_RFC3986: Final = f"{DISCOVERY_NS}/rfc3986"
 MATCH_STRCMP0: Final = f"{DISCOVERY_NS}/strcmp0"
 # Hello/Bye stay on the local link (WS-Discovery recommends a TTL of 1).
 MULTICAST_TTL: Final = 1
+# The largest discovery message we send, in bytes: a 1500-byte Ethernet MTU
+# minus a 20-byte IPv4 header and an 8-byte UDP header.  Anything bigger is
+# fragmented, and fragments get dropped.
+MAX_MESSAGE_BYTES: Final = 1472
 
 log = logging.getLogger("osprey.discovery")
 
+_oversized_warned = False
 
-def _envelope(body: str, header: str) -> str:
+
+def _envelope(body: str, header: str, *, device_namespace: bool = True) -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<s:Envelope xmlns:s="{SOAP_NS}" xmlns:a="{ADDRESSING_NS}" xmlns:d="{DISCOVERY_NS}" '
         'xmlns:dn="http://www.onvif.org/ver10/network/wsdl" '
-        'xmlns:tds="http://www.onvif.org/ver10/device/wsdl">'
+        + ('xmlns:tds="http://www.onvif.org/ver10/device/wsdl"' if device_namespace else "")
+        + ">"
         f"<s:Header>{header}</s:Header><s:Body>{body}</s:Body></s:Envelope>"
     )
 
@@ -186,59 +211,123 @@ def scope_matches(wanted: str, offered: str, match_by: str = MATCH_RFC3986) -> b
     )
 
 
-def probe_match(identity: Identity, relates_to: str) -> str:
-    header = (
-        f"<a:MessageID>urn:uuid:{uuid.uuid4()}</a:MessageID>"
-        f"<a:RelatesTo>{relates_to}</a:RelatesTo>"
-        "<a:To>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</a:To>"
-        f"<a:Action>{DISCOVERY_NS}/ProbeMatches</a:Action>"
-    )
-    body = (
-        "<d:ProbeMatches><d:ProbeMatch>"
-        f"<a:EndpointReference><a:Address>{identity.endpoint}</a:Address></a:EndpointReference>"
-        f"<d:Types>{NVT_TYPE} {DEVICE_TYPE}</d:Types>"
-        f"<d:Scopes>{identity.scope_text}</d:Scopes>"
-        f"<d:XAddrs>{identity.xaddr}</d:XAddrs>"
-        "<d:MetadataVersion>1</d:MetadataVersion>"
-        "</d:ProbeMatch></d:ProbeMatches>"
-    )
-    return _envelope(body, header)
+def _fit(build: Callable[[frozenset[str]], str], order: Sequence[str]) -> str:
+    """Render a discovery message that fits in one datagram.
 
-
-def announcement(identity: Identity, leaving: bool = False) -> str:
-    action = "Bye" if leaving else "Hello"
-    header = (
-        f"<a:MessageID>urn:uuid:{uuid.uuid4()}</a:MessageID>"
-        f"<a:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</a:To>"
-        f"<a:Action>{DISCOVERY_NS}/{action}</a:Action>"
-    )
-    body = (
-        f"<d:{action}>"
-        f"<a:EndpointReference><a:Address>{identity.endpoint}</a:Address></a:EndpointReference>"
-        f"<d:Types>{NVT_TYPE} {DEVICE_TYPE}</d:Types>"
-        f"<d:Scopes>{identity.scope_text}</d:Scopes>"
-        f"<d:XAddrs>{identity.xaddr}</d:XAddrs>"
-        "<d:MetadataVersion>1</d:MetadataVersion>"
-        f"</d:{action}>"
-    )
-    return _envelope(body, header)
-
-
-def probe_message_id(payload: bytes, scopes: Iterable[str] | None = None) -> str | None:
-    """The MessageID of a Probe we should answer, or None if it is not for us.
-
-    When ``scopes`` is given, a Probe that names Scopes is answered only if every
-    requested scope matches one of ours (default RFC 3986 prefix matching).
+    ``build`` renders the message with the named optional parts omitted.
+    Optional parts are given up in ``order`` until the message fits inside
+    :data:`MAX_MESSAGE_BYTES`; if even that is not enough the message is
+    returned whole and the caller says so.
     """
+    omitted: frozenset[str] = frozenset()
+    message = build(omitted)
+    for part in order:
+        if len(message.encode()) <= MAX_MESSAGE_BYTES:
+            break
+        omitted = omitted | {part}
+        message = build(omitted)
+    return message
+
+
+def _report_size(message: str, what: str) -> None:
+    """Say once that a message did not fit in one datagram."""
+    global _oversized_warned
+    size = len(message.encode())
+    if size <= MAX_MESSAGE_BYTES or _oversized_warned:
+        return
+    _oversized_warned = True
+    log.warning(
+        "ws-discovery: the %s message is %d bytes, over the %d-byte datagram budget; "
+        "it will be fragmented. Shorten the camera name or the advertised host.",
+        what, size, MAX_MESSAGE_BYTES,
+    )
+
+
+def _types(omit: frozenset[str]) -> str:
+    """The device types we claim, minus the device type when it is given up."""
+    return NVT_TYPE if "device_type" in omit else f"{NVT_TYPE} {DEVICE_TYPE}"
+
+
+def probe_match(identities: Sequence[Identity], relates_to: str) -> str:
+    """A ProbeMatches answer naming every identity we answer for.
+
+    A controller that serves the same camera twice answers with one
+    ProbeMatch per view: each has its own endpoint UUID, its own XAddr and
+    its own scopes, so a client can tell them apart.
+
+    The message is kept inside one datagram: the metadata version, the device
+    type and then the ``To`` header are given up, in that order, if the
+    personas would not otherwise fit.
+    """
+    message_id = f"urn:uuid:{uuid.uuid4()}"
+
+    def build(omit: frozenset[str]) -> str:
+        types = _types(omit)
+        header = (
+            f"<a:MessageID>{message_id}</a:MessageID>"
+            f"<a:RelatesTo>{relates_to}</a:RelatesTo>"
+            + ("" if "to" in omit else f"<a:To>{ANONYMOUS_URI}</a:To>")
+            + f"<a:Action>{DISCOVERY_NS}/ProbeMatches</a:Action>"
+        )
+        matches = "".join(
+            "<d:ProbeMatch>"
+            f"<a:EndpointReference><a:Address>{identity.endpoint}</a:Address></a:EndpointReference>"
+            f"<d:Types>{types}</d:Types>"
+            f"<d:Scopes>{identity.scope_text}</d:Scopes>"
+            f"<d:XAddrs>{identity.xaddr}</d:XAddrs>"
+            + ("" if "metadata" in omit else "<d:MetadataVersion>1</d:MetadataVersion>")
+            + "</d:ProbeMatch>"
+            for identity in identities
+        )
+        body = f"<d:ProbeMatches>{matches}</d:ProbeMatches>"
+        return _envelope(body, header, device_namespace="device_type" not in omit)
+
+    message = _fit(build, ("metadata", "device_type", "to"))
+    _report_size(message, "ProbeMatches")
+    return message
+
+
+def announcement(identities: Sequence[Identity], leaving: bool = False) -> str:
+    """A Hello (or Bye) naming every identity we announce."""
+    action = "Bye" if leaving else "Hello"
+    message_id = f"urn:uuid:{uuid.uuid4()}"
+
+    def build(omit: frozenset[str]) -> str:
+        types = _types(omit)
+        header = (
+            f"<a:MessageID>{message_id}</a:MessageID>"
+            f"<a:To>{DISCOVERY_URI}</a:To>"
+            f"<a:Action>{DISCOVERY_NS}/{action}</a:Action>"
+        )
+        bodies = "".join(
+            f"<d:{action}>"
+            f"<a:EndpointReference><a:Address>{identity.endpoint}</a:Address></a:EndpointReference>"
+            f"<d:Types>{types}</d:Types>"
+            f"<d:Scopes>{identity.scope_text}</d:Scopes>"
+            f"<d:XAddrs>{identity.xaddr}</d:XAddrs>"
+            + ("" if "metadata" in omit else "<d:MetadataVersion>1</d:MetadataVersion>")
+            + f"</d:{action}>"
+            for identity in identities
+        )
+        return _envelope(bodies, header, device_namespace="device_type" not in omit)
+
+    message = _fit(build, ("metadata", "device_type"))
+    _report_size(message, action)
+    return message
+
+
+def _probe_element(payload: bytes) -> ElementTree.Element | None:
+    """The Probe element of a payload, or None when it is not a Probe."""
     try:
         root = ElementTree.fromstring(payload)
     except ElementTree.ParseError:
         return None
     body = root.find(f"{{{SOAP_NS}}}Body")
-    if body is None or body.find(f"{{{DISCOVERY_NS}}}Probe") is None:
+    if body is None:
         return None
     probe = body.find(f"{{{DISCOVERY_NS}}}Probe")
-    assert probe is not None
+    if probe is None:
+        return None
     types = probe.find(f"{{{DISCOVERY_NS}}}Types")
     if types is not None and types.text:
         wanted = types.text.split()
@@ -248,13 +337,18 @@ def probe_message_id(payload: bytes, scopes: Iterable[str] | None = None) -> str
             return None
         if "NetworkVideoDisplay" in locals_wanted and len(locals_wanted) == 1:
             return None
-    wanted_scopes = probe.find(f"{{{DISCOVERY_NS}}}Scopes")
-    if scopes is not None and wanted_scopes is not None and wanted_scopes.text and wanted_scopes.text.strip():
-        match_by = wanted_scopes.attrib.get("MatchBy", MATCH_RFC3986)
-        offered = tuple(scopes)
-        for wanted_scope in wanted_scopes.text.split():
-            if not any(scope_matches(wanted_scope, scope, match_by) for scope in offered):
-                return None
+    return probe
+
+
+def probe_message_id(payload: bytes) -> str | None:
+    """The MessageID of a Probe we should answer, or None if it is not for us.
+
+    Which of our personas answer is decided by :func:`matching_identities`.
+    """
+    probe = _probe_element(payload)
+    if probe is None:
+        return None
+    root = ElementTree.fromstring(payload)
     header = root.find(f"{{{SOAP_NS}}}Header")
     if header is None:
         return None
@@ -266,6 +360,32 @@ def probe_message_id(payload: bytes, scopes: Iterable[str] | None = None) -> str
     if message_id is None or not message_id.text:
         return None
     return message_id.text.strip()
+
+
+def matching_identities(payload: bytes, identities: Sequence[Identity]) -> tuple[Identity, ...]:
+    """The personas that answer this Probe.
+
+    A Probe that names scopes is answered by the personas that satisfy every
+    requested scope, so a client that wants a PTZ device is offered the PTZ
+    persona alone and never the media-only one.  A Probe that names no scopes
+    is answered by all of them.
+    """
+    probe = _probe_element(payload)
+    if probe is None:
+        return ()
+    wanted = probe.find(f"{{{DISCOVERY_NS}}}Scopes")
+    if wanted is None or not wanted.text or not wanted.text.strip():
+        return tuple(identities)
+    match_by = wanted.attrib.get("MatchBy", MATCH_RFC3986)
+    requested = wanted.text.split()
+    matched = []
+    for identity in identities:
+        if all(
+            any(scope_matches(scope, offered, match_by) for offered in identity.scopes)
+            for scope in requested
+        ):
+            matched.append(identity)
+    return tuple(matched)
 
 
 def interface_ipv4(name: str) -> str | None:
@@ -335,7 +455,7 @@ class DiscoveryServer:
 
     def __init__(
         self,
-        identity: Identity,
+        identity: Identity | Sequence[Identity],
         port: int = WS_DISCOVERY_PORT,
         multicast: bool = True,
         *,
@@ -344,7 +464,7 @@ class DiscoveryServer:
         hello_interval: float = 0.0,
         announce_to: tuple[str, int] | None = None,
     ) -> None:
-        self.identity = identity
+        self.identities: tuple[Identity, ...] = (identity,) if isinstance(identity, Identity) else tuple(identity)
         self.multicast = multicast
         self.hello_interval = max(0.0, hello_interval)
         self.announce_to = announce_to or (MULTICAST_GROUP, WS_DISCOVERY_PORT)
@@ -400,6 +520,11 @@ class DiscoveryServer:
     def port(self) -> int:
         return int(self.sock.getsockname()[1])
 
+    @property
+    def identity(self) -> Identity:
+        """The primary identity; the first one we answer for."""
+        return self.identities[0]
+
     def start(self) -> None:
         log.info(
             "ws-discovery answering on :%d%s", self.port,
@@ -416,7 +541,7 @@ class DiscoveryServer:
 
     def _announce(self, leaving: bool) -> None:
         try:
-            self.sock.sendto(announcement(self.identity, leaving).encode(), self.announce_to)
+            self.sock.sendto(announcement(self.identities, leaving).encode(), self.announce_to)
             if not leaving:
                 self.hellos += 1
         except OSError as exc:
@@ -437,11 +562,14 @@ class DiscoveryServer:
                 payload, peer = self.sock.recvfrom(65536)
             except (TimeoutError, OSError):
                 continue
-            message_id = probe_message_id(payload, self.identity.scopes)
+            matched = matching_identities(payload, self.identities)
+            if not matched:
+                continue
+            message_id = probe_message_id(payload)
             if message_id is None:
                 continue
             try:
-                self.sock.sendto(probe_match(self.identity, message_id).encode(), peer)
+                self.sock.sendto(probe_match(matched, message_id).encode(), peer)
                 self.answered += 1
                 log.debug("answered probe from %s", peer[0])
             except OSError as exc:  # pragma: no cover - transient network failure

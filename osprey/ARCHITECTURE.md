@@ -90,6 +90,16 @@ demands that hand-formed SOAP does not: XML element order matters (the ONVIF
 elements are silently dropped), and a media profile must embed a
 `PTZConfiguration` for PTZ to be offered at all.
 
+The north face can serve the same camera twice. The **primary persona** is the
+camera with PTZ; the **media persona** is the same media with no PTZ at all,
+for a recorder such as UniFi Protect that must never move the head. They are
+two *devices*, not two names for one: each derives its own serial, MAC,
+hostname, endpoint UUID and friendly name, so an NVR records them separately.
+WS-Discovery answers with one ProbeMatch per persona — the media persona
+first, so a client that takes the first match adopts the one that cannot move
+the camera — and the reply is kept inside one datagram, because a discovery
+message larger than the path MTU is fragmented, and fragments get dropped.
+
 The RTSP side serves several clients at once without letting one of them hold up the
 rest. A track the camera is not pushing answers 503 and playing sessions on it end with
 an RTCP BYE after `STALL_TEARDOWN` seconds of silence. Each client has a bounded queue
