@@ -27,10 +27,12 @@ case "$version" in
   *) package_version="$version" ;;
 esac
 
-command -v nuget >/dev/null 2>&1 || {
-  echo "the nuget client is required to pack the package" >&2
+command -v nuget >/dev/null 2>&1 && has_nuget=1 || has_nuget=0
+command -v docker >/dev/null 2>&1 && has_docker=1 || has_docker=0
+if [ "$has_nuget" -eq 0 ] && [ "$has_docker" -eq 0 ]; then
+  echo "packing needs the nuget client or docker" >&2
   exit 1
-}
+fi
 
 # The nuspec names its files with a path relative to itself, so it is packed
 # from a tree that keeps that layout: the nuspec in packaging/chocolatey/ and
@@ -43,8 +45,17 @@ cp -R "$upstream/packaging/chocolatey/tools" "$tmp/packaging/chocolatey/tools"
 sed "s|<version>.*</version>|<version>$package_version</version>|" \
   "$upstream/packaging/chocolatey/osprey.nuspec" > "$tmp/packaging/chocolatey/osprey.nuspec"
 
-nuget pack "$tmp/packaging/chocolatey/osprey.nuspec" \
-  -OutputDirectory "$target" \
-  -Version "$package_version"
+if [ "$has_nuget" -eq 1 ]; then
+  nuget pack "$tmp/packaging/chocolatey/osprey.nuspec" -OutputDirectory "$target"
+else
+  # The NuGet client is a .NET Framework application and needs mono, which the
+  # Linux runners do not carry.  The official Chocolatey image has a native
+  # client instead, and it packs the same nuspec.
+  docker run --rm \
+    --volume "$tmp:/work" \
+    --volume "$target:/out" \
+    "chocolatey/choco:${CHOCO_IMAGE:-v2.7.5-linux}" \
+    choco pack /work/packaging/chocolatey/osprey.nuspec --out /out
+fi
 
 echo "Packed osprey $package_version into $target."
