@@ -165,6 +165,10 @@ dialog::backdrop { background: rgb(0 0 0 / 0.5); }
 .log-list li.tone-bad { color: var(--bad); }
 .log-list li.tone-warn { color: var(--warn); }
 
+/* ---- patrol panel ---- */
+.point-name { flex: 1 1 8rem; min-width: 0; }
+.point-dwell { flex: 0 0 7rem; }
+
 @media (min-width: 900px) {
   .tabs {
     position: static; border-top: 0; border-bottom: 1px solid var(--line);

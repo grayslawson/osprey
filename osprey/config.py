@@ -186,6 +186,7 @@ def validate_runtime(value: dict[str, Any]) -> None:
             seen[port] = key
     validate_discovery(value.get("discovery", {}))
     validate_onvif(value.get("onvif", {}))
+    validate_sentry(value.get("sentry"))
 
 def validate_discovery(value: Any) -> None:
     """``discovery``: which LAN interface WS-Discovery uses, Hello cadence, scopes."""
@@ -219,6 +220,148 @@ def validate_discovery(value: Any) -> None:
     import discovery
     for scope in scopes:
         discovery.validate_scope(scope)
+
+
+SENTRY_KEYS: Final[frozenset[str]] = frozenset(
+    {"enabled", "interval_sec", "speed", "tracking_hold_sec", "cameras"}
+)
+SENTRY_CAMERA_KEYS: Final[frozenset[str]] = frozenset(
+    {"enabled", "interval_sec", "speed", "tracking_hold_sec", "points"}
+)
+
+
+def _sentry_number(value: Any, name: str, low: float, high: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f'"{name}" must be a number')
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'"{name}" must be a number') from exc
+    if not low <= number <= high:
+        raise ValueError(f'"{name}" must be a number from {low:g} to {high:g}')
+    return number
+
+
+def _sentry_speed(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f'"{name}" must be an integer')
+    try:
+        speed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'"{name}" must be an integer') from exc
+    if not ptz.MIN_SPEED <= speed <= ptz.MAX_SPEED_LIMIT:
+        raise ValueError(
+            f'"{name}" must be an integer from {ptz.MIN_SPEED} to {ptz.MAX_SPEED_LIMIT}'
+        )
+    return speed
+
+
+def _sentry_points(value: Any, name: str) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f'"{name}" must be a list')
+    points: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f'"{name}[{index}]" must be an object')
+        unknown = set(item) - {"name", "dwell_sec"}
+        if unknown:
+            raise ValueError(
+                f'"{name}[{index}]" has unknown keys: {", ".join(sorted(unknown))}'
+            )
+        point_name = item.get("name")
+        if not isinstance(point_name, str) or not point_name.strip():
+            raise ValueError(f'"{name}[{index}].name" must be a non-empty string')
+        key = point_name.strip().casefold()
+        if key in seen:
+            raise ValueError(f'"{name}" repeats the point {point_name.strip()!r}')
+        seen.add(key)
+        dwell_raw = item.get("dwell_sec")
+        dwell = (
+            None if dwell_raw is None
+            else _sentry_number(dwell_raw, f'"{name}[{index}].dwell_sec"', 1.0, 86400.0)
+        )
+        points.append({"name": point_name.strip(), "dwell_sec": dwell})
+    return points
+
+
+def validate_sentry(value: Any) -> dict[str, Any]:
+    """Validate the ``sentry`` block: one idle patrol per camera.
+
+    The block holds defaults that every camera inherits and a ``cameras`` map
+    keyed by camera MAC, because each camera gets its own points, cadence and
+    speed.  A MAC is the key for the same reason it keys the camera registry:
+    an address can change, a camera's identity should not.
+    """
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError('"sentry" must be an object')
+    unknown = set(value) - SENTRY_KEYS
+    if unknown:
+        raise ValueError(f'unknown sentry setting(s): {", ".join(sorted(unknown))}')
+
+    enabled = value.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError('"sentry.enabled" must be a boolean')
+    interval = _sentry_number(
+        value.get("interval_sec", DEFAULTS["sentry"]["interval_sec"]),
+        "sentry.interval_sec", 1.0, 86400.0,
+    )
+    speed = _sentry_speed(value.get("speed", DEFAULTS["sentry"]["speed"]), "sentry.speed")
+    hold = _sentry_number(
+        value.get("tracking_hold_sec", DEFAULTS["sentry"]["tracking_hold_sec"]),
+        "sentry.tracking_hold_sec", 1.0, 3600.0,
+    )
+
+    raw_cameras = value.get("cameras", {})
+    if not isinstance(raw_cameras, dict):
+        raise ValueError('"sentry.cameras" must be an object keyed by camera MAC')
+    cameras: dict[str, Any] = {}
+    for key, raw in raw_cameras.items():
+        mac = str(key).replace(":", "").replace("-", "").upper()
+        if re.fullmatch(r"[0-9A-F]{12}", mac) is None:
+            raise ValueError(
+                f'"sentry.cameras" key {key!r} must be a 12-digit hexadecimal MAC'
+            )
+        if mac in cameras:
+            raise ValueError(
+                f'"sentry.cameras" names the camera {mac} more than once'
+            )
+        if not isinstance(raw, dict):
+            raise ValueError(f'"sentry.cameras.{mac}" must be an object')
+        unknown = set(raw) - SENTRY_CAMERA_KEYS
+        if unknown:
+            raise ValueError(
+                f'unknown sentry setting(s) for camera {mac}: {", ".join(sorted(unknown))}'
+            )
+        camera_enabled = raw.get("enabled", enabled)
+        if not isinstance(camera_enabled, bool):
+            raise ValueError(f'"sentry.cameras.{mac}.enabled" must be a boolean')
+        cameras[mac] = {
+            "enabled": camera_enabled,
+            "interval_sec": _sentry_number(
+                raw.get("interval_sec", interval),
+                f"sentry.cameras.{mac}.interval_sec", 1.0, 86400.0,
+            ),
+            "speed": _sentry_speed(
+                raw.get("speed", speed), f"sentry.cameras.{mac}.speed"
+            ),
+            "tracking_hold_sec": _sentry_number(
+                raw.get("tracking_hold_sec", hold),
+                f"sentry.cameras.{mac}.tracking_hold_sec", 1.0, 3600.0,
+            ),
+            "points": _sentry_points(
+                raw.get("points", []), f"sentry.cameras.{mac}.points"
+            ),
+        }
+    return {
+        "enabled": enabled,
+        "interval_sec": interval,
+        "speed": speed,
+        "tracking_hold_sec": hold,
+        "cameras": cameras,
+    }
 
 
 def validate_onvif(value: Any, cameras: list[dict[str, Any]] | None = None) -> None:
@@ -283,6 +426,17 @@ DEFAULTS: Final[dict[str, Any]] = {
     # Northbound ONVIF identity overrides; unset values are derived and never
     # equal the physical camera's MAC or serial (see identity.py).
     "onvif": {"identity": {}},
+    # Idle patrol ("sentry"). The camera sweeps a list of named presets and
+    # steps aside for a person or an autotracker. Each camera has its own
+    # points, cadence and speed under "cameras", keyed by camera MAC.
+    # See docs/sentry.md.
+    "sentry": {
+        "enabled": False,
+        "interval_sec": 45,
+        "speed": ptz.DEFAULT_SPEED,
+        "tracking_hold_sec": 15,
+        "cameras": {},
+    },
     # WS-Discovery: pin multicast to one LAN interface/address, repeat Hello
     # every hello_interval seconds (0 = only at startup), add scopes.
     "discovery": {"interface": None, "address": None, "hello_interval": 300, "scopes": []},

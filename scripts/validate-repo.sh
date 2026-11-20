@@ -53,6 +53,8 @@ if not re.fullmatch(r"\d+\.\d+\.\d+((a|b|rc)\d+)?", version):
 checks = {
     "homeassistant/addon/osprey/config.yaml": r'^version: "([^"]+)"$',
     "packaging/homebrew/osprey.rb": r'^  version "([^"]+)"$',
+    "packaging/npm/package.json": r'"version": "([^"]+)"',
+    "packaging/chocolatey/osprey.nuspec": r"<version>([^<]+)</version>",
     "pyunifiwire/pyproject.toml": r'^version = "([^"]+)"$',
     "pyunifiwire/src/unifiwire/__init__.py": r'^__version__ = "([^"]+)"$',
 }

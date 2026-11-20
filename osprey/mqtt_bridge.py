@@ -8,12 +8,17 @@ callback receives bytes).  The default contract is::
     osprey/<device>/command/ptz/zoom   {"percent":50}
     osprey/<device>/command/preset/goto {"name":"gate"}
     osprey/<device>/command/home       {}
+    osprey/<device>/command/sentry     {"camera":"...","enabled":true,"points":[{"name":"gate"}]}
     osprey/<device>/event/control      structured result/error JSON
     osprey/<device>/state/ptz          PTZ state/position JSON (on change, <=1/s)
+    osprey/<device>/state/sentry       idle patrol state JSON
 
 Commands are deliberately allow-listed and always execute under a shared
 MovementGate.  MQTT must never become an unauthenticated arbitrary movement
 API; broker ACLs and authentication remain the embedding application's job.
+The sentry command is the one exception to the MovementGate: it configures a
+patrol rather than moving the camera, and it must not hold up a move or start
+a manual hold.
 """
 
 from __future__ import annotations
@@ -157,6 +162,7 @@ class MqttBridge:
         zoom: Callable[[dict[str, object]], object] | None = None,
         goto_preset: Callable[[str], object] | None = None,
         home: Callable[[], object] | None = None,
+        sentry: Callable[[dict[str, object]], object] | None = None,
     ) -> None:
         self.config, self.adapter, self.gate = config, adapter, gate
         self._handlers: dict[str, Callable[[dict[str, object]], object]] = {}
@@ -168,6 +174,8 @@ class MqttBridge:
             self._handlers["preset/goto"] = lambda data: goto_preset(str(data["name"]))
         if home:
             self._handlers["home"] = lambda _data: home()
+        if sentry:
+            self._handlers["sentry"] = sentry
 
     def start(self) -> None:
         if not self.config.enabled:
@@ -191,12 +199,17 @@ class MqttBridge:
                 if not isinstance(data, dict):
                     raise ValueError("payload must be a JSON object")
                 self._validate(action, data)
-                token = arbitration.source.set(arbitration.MANUAL)
-                try:
-                    with self.gate.lease("mqtt"):
-                        result["result"] = self._handlers[action](data)
-                finally:
-                    arbitration.source.reset(token)
+                if action == "sentry":
+                    # Configuring a patrol is not a movement: it must not take
+                    # the movement lease, and it must not start a manual hold.
+                    result["result"] = self._handlers[action](data)
+                else:
+                    token = arbitration.source.set(arbitration.MANUAL)
+                    try:
+                        with self.gate.lease("mqtt"):
+                            result["result"] = self._handlers[action](data)
+                    finally:
+                        arbitration.source.reset(token)
                 result["accepted"] = True
             except (ValueError, TypeError, json.JSONDecodeError, BlockingIOError) as exc:
                 result["error"] = str(exc) or type(exc).__name__
@@ -231,6 +244,32 @@ class MqttBridge:
         elif action == "home":
             if data:
                 raise ValueError("home takes an empty object")
+        elif action == "sentry":
+            allowed = {"camera", "enabled", "interval_sec", "speed", "tracking_hold_sec", "points"}
+            unknown = set(data) - allowed
+            if unknown:
+                raise ValueError(f"unexpected field(s): {', '.join(sorted(unknown))}")
+            camera = data.get("camera")
+            if camera is not None and (not isinstance(camera, str) or not camera.strip()):
+                raise ValueError("camera must be a non-empty string")
+            if "enabled" in data and not isinstance(data["enabled"], bool):
+                raise ValueError("enabled must be a boolean")
+            for key in ("interval_sec", "tracking_hold_sec"):
+                value = data.get(key)
+                if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                    raise ValueError(f"{key} must be a number")
+            speed = data.get("speed")
+            if speed is not None and (isinstance(speed, bool) or not isinstance(speed, int)):
+                raise ValueError("speed must be an integer")
+            points = data.get("points")
+            if points is not None:
+                if not isinstance(points, list):
+                    raise ValueError("points must be a list")
+                for item in points:
+                    if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                        raise ValueError("each point needs a name")
+                    if set(item) - {"name", "dwell_sec"}:
+                        raise ValueError("each point takes only name and dwell_sec")
 
     def publish_state(self, state: dict[str, object]) -> None:
         """Publish the current PTZ state; a no-op unless MQTT is enabled."""
@@ -238,6 +277,13 @@ class MqttBridge:
             return
         payload = json.dumps(state, separators=(",", ":")).encode()
         self.adapter.publish(f"{self.config.prefix}/state/ptz", payload)
+
+    def publish_sentry(self, state: dict[str, object]) -> None:
+        """Publish the idle patrol state; a no-op unless MQTT is enabled."""
+        if not self.config.enabled:
+            return
+        payload = json.dumps(state, separators=(",", ":")).encode()
+        self.adapter.publish(f"{self.config.prefix}/state/sentry", payload)
 
     def _emit(self, result: dict[str, object]) -> None:
         payload = json.dumps(result, separators=(",", ":")).encode()

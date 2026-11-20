@@ -346,6 +346,11 @@ class Controller:
         self._acks: dict[int, tuple[threading.Event, list[Envelope]]] = {}
         self._acks_lock = threading.Lock()
         self._continuous_moves: dict[str, ContinuousMove] = {}
+        # When an autotracker last drove this camera. The sentry patrol reads
+        # it to stand down while Frigate is tracking; a patrol's own moves are
+        # tagged PATROL and are deliberately not counted here.
+        self._auto_activity: dict[str, float] = {}
+        self._auto_activity_lock = threading.Lock()
         self._selector: selectors.BaseSelector | None = None
         self.on_adopted: Callable[[Camera], None] | None = None
         self.on_motion: Callable[[Camera], None] | None = None
@@ -1048,7 +1053,32 @@ class Controller:
         allowed, supersede = self.arbiter.admit(mac, kind)
         if not allowed:
             log.debug("dropped %s PTZ command for %s during manual hold", kind, mac)
+        elif kind == arbitration.AUTO:
+            # An autotracker is driving this camera right now. The sentry
+            # patrol stands down while this is fresh, so that a patrol can
+            # never mistake its own moves (tagged PATROL) for tracking.
+            self._note_auto_activity(mac)
         return allowed, supersede
+
+    def _note_auto_activity(self, mac: str) -> None:
+        with self._auto_activity_lock:
+            self._auto_activity[mac] = time.monotonic()
+
+    def auto_active(self, mac: str, within_sec: float) -> bool:
+        """True when an autotracking command reached this camera recently.
+
+        There is no "I am tracking now" signal from Frigate; the traffic is the
+        signal. While its ONVIF autotracker follows an object it keeps issuing
+        PTZ moves, so a fresh autotracking command means the camera is being
+        driven by a machine rather than by a patrol.
+        """
+        if within_sec <= 0:
+            return False
+        with self._auto_activity_lock:
+            last = self._auto_activity.get(mac)
+        if last is None:
+            return False
+        return (time.monotonic() - last) < within_sec
 
     def move(self, mac: str, position: Any, speed: int = ptz.DEFAULT_SPEED) -> bool:
         """Point the head somewhere. Returns False if no PTZ channel is up."""
@@ -1192,7 +1222,15 @@ class Controller:
                 return False
             return True
 
-    def goto_preset(self, mac: str, index: int, speed: int = ptz.DEFAULT_SPEED) -> bool:
+    def goto_preset(self, mac: str, index: int, speed: int = ptz.DEFAULT_SPEED,
+                    strict: bool = False) -> bool:
+        """Point the head at a stored preset.
+
+        A command dropped by arbitration normally reports success, because a
+        fault would make an autotracker log errors or back off. A patrol needs
+        the truth instead: it must not consume a tour point for a move that
+        never went out, so it asks for ``strict``.
+        """
         session = self._ptz_session(mac)
         if session is None:
             return False
@@ -1200,7 +1238,7 @@ class Controller:
         target = preset.position if preset is not None else None
         allowed, supersede = self._admit(mac)
         if not allowed:
-            return True
+            return not strict
         with session.move_lock:
             self._continuous_moves.pop(mac, None)
             if not session.camera.motion.begin(target, supersede=supersede):

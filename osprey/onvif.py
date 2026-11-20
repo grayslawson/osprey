@@ -33,8 +33,11 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections.abc import Mapping
-from typing import Callable, ClassVar, Final
+from typing import Callable, ClassVar, Final, TYPE_CHECKING
 from xml.etree import ElementTree
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from sentry_manager import SentryManager
 
 import arbitration
 import discovery
@@ -573,6 +576,10 @@ class Backend:
     reboot_counters: Callable[[], dict[str, int]] = dict
     # Ceiling of the G5 speed scale; ONVIF speeds map linearly onto 1..max_speed.
     max_speed: int = ptz.DEFAULT_MAX_SPEED
+    # The idle patrol manager (see sentry_manager.py), when the deployment has
+    # one. It owns one tour per camera and shares the movement gate with every
+    # other PTZ producer, so the operator API can configure and report on it.
+    sentry: Callable[[], "SentryManager | None"] = lambda: None
 
 
 # ------------------------------------------------------------------------ events
