@@ -47,7 +47,7 @@ from controller import CONTROL_PORT, Controller, PtzWatchdog, normalise_mac
 from presets import PresetStore
 from unifiwire.envelope import Envelope
 from model import Camera, Codec, Position
-from sentry_manager import SentryManager
+from sentry_manager import SentryManager, SentryStore
 from sentry_runtime import MovementGate, SentryConfig
 from frigate_config import validate_url
 
@@ -478,9 +478,11 @@ def build(options: Options) -> Stack:
         camera_idle=sentry_idle,
         gate=movement_gate,
         preset_names=sentry_presets,
+        store=SentryStore(options.cert.parent / "sentry.json"),
     )
-    for mac, raw in dict(options.sentry.get("cameras") or {}).items():
-        sentry_manager.configure(str(mac), SentryConfig.from_mapping(raw))
+    # The config file is the baseline; the state file holds whatever an
+    # operator changed at runtime, so a restart does not drop a running patrol.
+    sentry_manager.restore(dict(options.sentry.get("cameras") or {}))
 
     def current() -> Camera | None:
         adopted = [c for c in control.cameras.values() if c.adopted]
