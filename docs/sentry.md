@@ -40,6 +40,14 @@ The same checks run again inside the movement lease, immediately before the
 command goes out. A check on its own cannot close the window where Frigate
 starts tracking between the check and the command; the shared lease does.
 
+The checks above keep the patrol from taking the camera. They are not enough on
+their own, because a patrol move leaves the head travelling for a while. An
+autotracking command that arrives in that window is handed the camera: the
+autotracker replaces the patrol move, and the patrol stands down. Without that,
+the first autotracking command of a detection is refused as "the camera is
+already moving" and the tracking never starts — which is the opposite of what
+a sentry patrol is for.
+
 The patrol keeps its place in the tour across a yield. When tracking ends it
 waits out the rest of the current dwell and continues with the **next** point.
 It does not jump back to the start.
