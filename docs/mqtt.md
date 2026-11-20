@@ -30,13 +30,21 @@ Commands are JSON and use QoS 1:
 | `osprey/driveway/command/ptz/zoom` | `{"percent":50}` |
 | `osprey/driveway/command/preset/goto` | `{"name":"gate"}` |
 | `osprey/driveway/command/home` | `{}` |
+| `osprey/driveway/command/sentry` | `{"camera":"AABBCCDDEEFF","enabled":true,"points":[{"name":"gate"}]}` |
+
+The sentry command configures the idle [patrol](sentry.md). `camera` is a
+camera MAC or a display name; every other field is optional and an absent field
+keeps its current value. Unlike the movement commands it does not take the
+movement gate and does not start a manual hold — it configures a patrol rather
+than moving the camera, and it must not hold up a move in progress.
 
 Osprey publishes a structured, non-retained result or error on
 `osprey/driveway/event/control`. PTZ state is published on
 `osprey/driveway/state/ptz` whenever it changes and at most once per second
 while it is unchanged, for example
 `{"camera":"g5-ptz-…","state":"UNKNOWN","pan_tilt":"UNKNOWN","zoom":"UNKNOWN","error":"motor state timeout","position":{…},"at":…}`
-(see [PTZ health](ptz-health.md)). Retained command messages are deliberately
+(see [PTZ health](ptz-health.md)). Patrol state is published on
+`osprey/driveway/state/sentry`. Retained command messages are deliberately
 ignored so reconnecting never replays camera movement. MQTT commands enter the
 same movement gate as console, sentry, and tracking producers; contention is
 reported as an error instead of bypassing camera safety.

@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -46,7 +47,8 @@ from controller import CONTROL_PORT, Controller, PtzWatchdog, normalise_mac
 from presets import PresetStore
 from unifiwire.envelope import Envelope
 from model import Camera, Codec, Position
-from sentry_runtime import MovementGate
+from sentry_manager import SentryManager
+from sentry_runtime import MovementGate, SentryConfig
 from frigate_config import validate_url
 
 DEFAULT_CERT: Final = "osprey.pem"
@@ -85,6 +87,7 @@ class Options:
     setup_mode: bool = False
     frigate_url: str | None = None
     ptz: dict[str, Any] = field(default_factory=lambda: config.validate_ptz(None))
+    sentry: dict[str, Any] = field(default_factory=lambda: config.validate_sentry(None))
     onvif_identity: identity.IdentityConfig = field(default_factory=identity.IdentityConfig)
     onvif_log_calls: bool = False
     discovery_interface: str | None = None
@@ -109,6 +112,7 @@ class Stack:
     finder: discovery.DiscoveryServer
     read_only_north: onvif.OnvifServer | None = None
     mqtt: mqtt_bridge.MqttBridge | None = None
+    sentry: SentryManager | None = None
 
     def start_servers(self) -> None:
         self.ingest.start()
@@ -120,9 +124,13 @@ class Stack:
         self.finder.start()
         if self.mqtt is not None:
             self.mqtt.start()
+        if self.sentry is not None:
+            self.sentry.start()
 
     def stop(self) -> None:
         self.controller.stop()
+        if self.sentry is not None:
+            self.sentry.stop()
         if self.mqtt is not None:
             self.mqtt.stop()
         for server in (self.finder, self.read_only_north, self.north, self.stream, self.uploads, self.ingest):
@@ -244,6 +252,10 @@ def resolve_options(args: argparse.Namespace) -> Options:
         ptz_settings = config.validate_ptz(effective.get("ptz"))
     except ValueError as exc:
         raise SystemExit(f"invalid runtime configuration: {exc}") from exc
+    try:
+        sentry_settings = config.validate_sentry(effective.get("sentry"))
+    except ValueError as exc:
+        raise SystemExit(f"invalid runtime configuration: {exc}") from exc
     frigate_url: str | None = None
     frigate_config = effective.get("frigate")
     if isinstance(frigate_config, dict) and frigate_config.get("url") is not None:
@@ -282,6 +294,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
         setup_mode=setup_mode and not config_had_host,
         frigate_url=frigate_url,
         ptz=ptz_settings,
+        sentry=sentry_settings,
         onvif_identity=identity.IdentityConfig.from_mapping(onvif_settings.get("identity")),
         onvif_log_calls=bool(onvif_settings.get("log_calls", False)),
         discovery_interface=discovery_settings.get("interface"),
@@ -407,6 +420,67 @@ def build(options: Options) -> Stack:
         arbiter=arbitration.Arbiter(float(options.ptz.get("manual_hold_sec", arbitration.DEFAULT_HOLD_SEC))),
     )
     refusal_warning = RateLimitedWarning(log)
+
+    # One movement gate for every PTZ producer: the operator console, MQTT,
+    # autotracking and the idle patrol. Sharing it is what keeps a patrol from
+    # moving the camera while a person is moving it.
+    movement_gate = MovementGate()
+
+    def sentry_preset_slot(mac: str, name: str) -> int | None:
+        """The slot a named preset occupies, matched case-insensitively."""
+        camera = control.cameras.get(mac)
+        if camera is None:
+            return None
+        wanted = name.strip().casefold()
+        for slot, preset in camera.presets.items():
+            if preset.name.strip().casefold() == wanted:
+                return slot
+        return None
+
+    def sentry_goto(mac: str, name: str, speed: int) -> bool:
+        """Move the camera to a named preset on behalf of a patrol."""
+        slot = sentry_preset_slot(mac, name)
+        if slot is None:
+            log.warning("sentry: camera %s has no preset named %r", mac, name)
+            return False
+        moved = control.goto_preset(mac, slot, speed, strict=True)
+        if not moved:
+            # A refusal because a person is in control, or because the head is
+            # still moving, is contention rather than failure: defer the move
+            # without consuming a point of the tour.
+            if control.arbiter.remaining(mac) > 0:
+                raise BlockingIOError("a person is in control")
+            camera = control.cameras.get(mac)
+            if camera is not None and camera.motion.activity != 0:
+                raise BlockingIOError("the camera is still moving")
+        return moved
+
+    def sentry_tracking(mac: str, hold_sec: float) -> bool:
+        """True while an autotracker is driving this camera."""
+        return control.auto_active(mac, hold_sec)
+
+    def sentry_idle(mac: str) -> bool:
+        """True when the camera is adopted, has PTZ, and has settled."""
+        camera = control.cameras.get(mac)
+        if camera is None or not camera.adopted or not camera.motion.available:
+            return False
+        return camera.motion.activity == 0
+
+    def sentry_presets(mac: str) -> list[str]:
+        camera = control.cameras.get(mac)
+        if camera is None:
+            return []
+        return sorted(preset.name for preset in camera.presets.values())
+
+    sentry_manager = SentryManager(
+        goto_preset=sentry_goto,
+        tracking_active=sentry_tracking,
+        camera_idle=sentry_idle,
+        gate=movement_gate,
+        preset_names=sentry_presets,
+    )
+    for mac, raw in dict(options.sentry.get("cameras") or {}).items():
+        sentry_manager.configure(str(mac), SentryConfig.from_mapping(raw))
 
     def current() -> Camera | None:
         adopted = [c for c in control.cameras.values() if c.adopted]
@@ -577,6 +651,7 @@ def build(options: Options) -> Stack:
             },
             telemetry=lambda: rtsp.telemetry(hub, stream),
             max_speed=options.ptz_max_speed,
+            sentry=lambda: sentry_manager,
         )
 
     backend = backend_for(None)
@@ -637,7 +712,6 @@ def build(options: Options) -> Stack:
             "this network, block the physical camera from it first: `osprey protect-guard` "
             "(docs/protect-guard.md)", read_only_north.port,
         )
-    movement_gate = MovementGate()
 
     def mqtt_result(status: HTTPStatus, result: dict[str, object]) -> dict[str, object]:
         if status != HTTPStatus.OK:
@@ -664,11 +738,44 @@ def build(options: Options) -> Stack:
             status, result = services.control_home()
             return mqtt_result(status, result)
 
+    def sentry_resolve(value: object) -> str:
+        """Resolve a camera reference — a MAC or a display name — to a MAC."""
+        wanted = str(value).strip() if value is not None else ""
+        if not wanted:
+            camera = current()
+            if camera is None:
+                raise ValueError("no camera is available")
+            return camera.mac
+        normalised = wanted.replace(":", "").replace("-", "").upper()
+        if re.fullmatch(r"[0-9A-F]{12}", normalised) and normalised in control.cameras:
+            return normalised
+        for camera in control.cameras.values():
+            if camera.name.strip().casefold() == wanted.casefold():
+                return camera.mac
+        raise ValueError(f"unknown camera {wanted!r}")
+
+    def mqtt_sentry(data: dict[str, object]) -> object:
+        """Configure one camera's idle patrol."""
+        mac = sentry_resolve(data.get("camera"))
+        existing = sentry_manager.config(mac)
+        base: dict[str, object] = existing.as_dict() if existing is not None else {
+            "enabled": False,
+            "interval_sec": float(options.sentry.get("interval_sec", 45)),
+            "speed": int(options.sentry.get("speed", ptz.DEFAULT_SPEED)),
+            "tracking_hold_sec": float(options.sentry.get("tracking_hold_sec", 15)),
+            "points": [],
+        }
+        merged = {**base, **{key: value for key, value in data.items() if key != "camera"}}
+        sentry_config = SentryConfig.from_mapping(merged)
+        sentry_manager.configure(mac, sentry_config)
+        return {"ok": True, "camera": mac, "sentry": sentry_manager.snapshot(mac)}
+
     mqtt_runtime: mqtt_bridge.MqttBridge | None = None
     if options.mqtt.enabled:
         mqtt_runtime = mqtt_bridge.MqttBridge(
             options.mqtt, mqtt_bridge.PahoMqttAdapter(options.mqtt), movement_gate,
             step=mqtt_step, zoom=mqtt_zoom, goto_preset=mqtt_goto, home=mqtt_home,
+            sentry=mqtt_sentry,
         )
 
     def announced(name: str, ptz: bool) -> discovery.Identity:
@@ -785,6 +892,7 @@ def build(options: Options) -> Stack:
         mqtt=mqtt_runtime,
         finder=finder,
         read_only_north=read_only_north,
+        sentry=sentry_manager,
     )
 
 

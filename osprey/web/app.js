@@ -8,6 +8,7 @@ import { Locked, Login } from "./components/session.js";
 import { LivePage } from "./components/live.js";
 import { HealthPage } from "./components/health.js";
 import { LogsPage } from "./components/logs.js";
+import { SentryPage } from "./components/sentry.js";
 import { SettingsPage } from "./components/settings.js";
 import { boot, selectCamera, signOut } from "./actions.js";
 import {
@@ -19,6 +20,7 @@ const VIEWS = [
   ["health", "Health"],
   ["logs", "Logs"],
   ["settings", "Settings"],
+  ["patrol", "Patrol"],
 ];
 
 function ThemeButton() {
@@ -82,6 +84,8 @@ function View() {
       return html`<${HealthPage} />`;
     case "logs":
       return html`<${LogsPage} />`;
+    case "patrol":
+      return html`<${SentryPage} />`;
     case "settings":
       return html`<${SettingsPage} />`;
     default:

@@ -7,9 +7,14 @@ Every PTZ command is tagged with the kind of client that sent it, through the
     A person: the operator console, MQTT commands, and ONVIF principals that are
     not autotrackers (for example a UniFi Protect user with the ``ptz`` role).
 ``AUTO``
-    An autotracker or patrol: the ONVIF principals listed in
-    ``ptz.autotrack_users`` (default ``frigate``), anonymous ONVIF callers, and
-    the sentry patrol.
+    An autotracker: the ONVIF principals listed in ``ptz.autotrack_users``
+    (default ``frigate``) and anonymous ONVIF callers.
+``PATROL``
+    The sentry patrol. It behaves like an autotracker for arbitration — a
+    manual hold stops it — but it is a separate kind so the controller can
+    tell an autotracker apart from a patrol. The patrol needs that
+    distinction because it has to stand down while Frigate is tracking, and a
+    patrol that mistook its own moves for tracking would never advance.
 ``None`` (untagged)
     Osprey itself (auto-home, recovery). It is never held back and never starts
     a hold.
@@ -28,6 +33,7 @@ from typing import Callable, Final
 
 MANUAL: Final = "manual"
 AUTO: Final = "auto"
+PATROL: Final = "patrol"
 
 source: contextvars.ContextVar[str | None] = contextvars.ContextVar("ptz_source", default=None)
 

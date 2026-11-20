@@ -1,4 +1,9 @@
-# Osprey Home Assistant add-on
+# Osprey Home Assistant app
+
+Home Assistant 2026.11 renamed "add-ons" to **apps**. The manifest, the
+`add-on` directory name and the Supervisor API are unchanged; only the wording
+in the interface differs. Everything below uses the current names, with the
+old ones in brackets where it helps.
 
 Osprey bridges a UniFi G5 PTZ camera to an existing Frigate installation
 through ONVIF and RTSP. It does not bundle, install, or manage Frigate.
@@ -14,7 +19,22 @@ through ONVIF and RTSP. It does not bundle, install, or manage Frigate.
 3. Install **Osprey**, then set `advertised_host` to the Home Assistant host
    address reachable by the camera. Optionally set `camera_ip` and
    `camera_mac` as identity guards.
-4. Start the add-on and use **Open Web UI** (Home Assistant ingress is enabled).
+4. Start the app and use **Open Web UI** (Home Assistant ingress is enabled).
+
+### Why not the Marketplace
+
+Home Assistant 2026.11 folded HACS into Core as **Settings → Marketplace**.
+The Marketplace distributes integrations, dashboard cards, themes and
+templates — it never distributed apps, and it does not now. Osprey is
+installed from its own app repository through the **Repositories** menu, as
+above, and the Marketplace change does not affect it.
+
+Two things did change and are worth knowing:
+
+- Dashboard resources moved from `/hacsfiles/` to `/local/community/`.
+- Marketplace projects must live in a public GitHub repository, and adding a
+  custom repository needs a GitHub device sign-in. The app repository has the
+  same public-repository requirement.
 
 The manifest declares `amd64` and `aarch64`; each needs a matching GHCR image
 before that architecture is supported. The public release still
