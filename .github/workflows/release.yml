@@ -172,6 +172,11 @@ jobs:
     needs: [distributions, image]
     runs-on: ubuntu-latest
     environment: pypi
+    # PyPI publishes through a trusted publisher bound to this workflow file.
+    # Until that binding exists the job fails with "no trusted publisher",
+    # and every other channel still has to ship.  The failure is recorded on
+    # the run rather than blocking the GitHub Release.
+    continue-on-error: true
     permissions:
       contents: read
       id-token: write
