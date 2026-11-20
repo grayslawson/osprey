@@ -26,31 +26,52 @@ canonical and Forgejo mirrors from it.
 
 ## Configure the GitHub → Forgejo mirror
 
-Configure this once in the Forgejo repository settings. The official [Forgejo
-repository mirror guide](https://forgejo.org/docs/latest/user/repo-mirror/)
-documents the current UI and API behavior.
+This is configured on the Forgejo instance: `grays/osprey` is a **pull
+mirror** of `https://github.com/grayslawson/osprey.git`, synchronised
+hourly, and Forgejo refuses pushes to a mirror, so the copy is read-only
+for everyone who works on the project. The official [Forgejo repository
+mirror guide](https://forgejo.org/docs/latest/user/repo-mirror/) documents
+the current UI and API behaviour.
 
-1. Retain `grays/osprey` on Forgejo as the mirror target.
-2. Create a GitHub fine-grained token restricted to this repository with only
-   **Contents: read** permission.
-3. In Forgejo, open **Repository settings → Mirrors → Add Pull Mirror**.
-4. Use `https://github.com/grayslawson/osprey.git` as the source. Supply the
-   token through the mirror authentication fields; never put it in a URL,
-   workflow file, or checked-in config.
-5. Add a branch/ref filter that pulls only the public `main` and release tags.
-   Do not leave the filter empty: a full pull can overwrite mirror-local
-   branches.
-6. Synchronize once, then verify the Forgejo `main` commit and a test tag.
-   Treat a mirror failure as a release-blocking alert.
+The mirror was created on 2026-11-20 with the Forgejo migration API:
 
-The mirror is one-way in effect: the source of truth is GitHub, and the
-Forgejo copy is read-only for everyone who works on the project. Developers
-push to GitHub only. If a public contribution is accepted, review and merge it
-on GitHub and let the mirror publish the result to Forgejo.
+```sh
+curl -X POST https://git.example.org/api/v1/repos/migrate \
+  -H "Authorization: token $FORGEJO_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"clone_addr":"https://github.com/grayslawson/osprey.git",
+       "service":"git","mirror":true,"mirror_interval":"1h",
+       "private":true,"repo_owner":"grays","repo_name":"osprey"}'
+```
+
+The source repository is public, so the mirror needs no credentials. A
+private source would need a GitHub fine-grained token restricted to that
+repository with only **Contents: read** permission, supplied through the
+mirror authentication fields — never in a URL, a workflow file, or a
+checked-in config.
+
+Synchronise on demand with:
+
+```sh
+curl -X POST https://git.example.org/api/v1/repos/grays/osprey/mirror-sync \
+  -H "Authorization: token $FORGEJO_TOKEN" -d '{}'
+```
+
+A mirror failure is a release-blocking alert.
+
+### The frozen Forgejo tree
+
+The Forgejo repository that preceded the mirror carried the pre-rename
+`cuckoo/` package layout. It is kept as `grays/osprey-legacy`, private and
+frozen, so that history is not lost when the name `grays/osprey` was taken
+by the mirror. It is not updated by the mirror and must not be used as a
+base for new work.
 
 The historical `master` branch on Forgejo and the
-`archive/pre-osprey-main-2026-09-15` branch on GitHub are frozen snapshots.
-They are not updated by the mirror and must not be used as a base for new work.
+`archive/pre-osprey-main-2026-09-15` branch on GitHub are frozen snapshots
+for the same reason. The mirror carries every GitHub branch, including the
+`dependabot/` ones and that archive branch, so a filter is not needed to
+keep them out of the copy.
 
 ## CI and releases
 
