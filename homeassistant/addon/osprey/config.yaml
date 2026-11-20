@@ -1,6 +1,8 @@
 name: Osprey
 version: "0.9.0b1"
 slug: osprey
+# A beta: it works, but expect rough edges and changes.
+stage: experimental
 description: Osprey PTZ operator and Frigate camera bridge
 url: https://github.com/grayslawson/osprey
 startup: services
