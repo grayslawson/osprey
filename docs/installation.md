@@ -313,8 +313,8 @@ docker compose -f compose.release.yaml exec osprey \
   /usr/local/bin/osprey-entrypoint doctor --host 192.0.2.10
 ```
 
-The image has no `ip`, `ss` or `curl`, so there `--camera` and `--callback`
-report errors and the port and `--frigate` checks are skipped. npm runs
+The image has no `ss`, so the local port checks are skipped there; the
+camera route, callback and Frigate checks work. npm runs
 `doctor` in a fresh copy of the same image, without your config file. For
 those checks, run the wheel, Homebrew or a checkout on the host.
 

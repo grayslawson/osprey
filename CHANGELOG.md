@@ -10,6 +10,12 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
   image, which the Supervisor rejects ("Docker image must not contain a
   tag"); it now names the untagged image and the Supervisor pulls it at the
   app's version.
+- **homeassistant:** `init: false`, since the image runs its own tini, and
+  the unused `config:rw` mapping is gone.
+- **doctor:** Inside the release image (and so through npm and Chocolatey)
+  the camera route, callback and Frigate checks fall back to Python instead
+  of failing for lack of `ip` and `curl`. Run from a launcher-only install, a
+  config file it cannot validate is a warning, not an error.
 
 ## [0.9.0b2] - 2026-11-21
 

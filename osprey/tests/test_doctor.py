@@ -163,3 +163,29 @@ def test_launcher_without_the_controller_warns_instead_of_failing(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     assert "WARNING configuration not validated" in result.stdout
     assert "ERROR" not in result.stdout
+
+
+def test_route_and_http_checks_work_without_ip_or_curl(tmp_path: Path) -> None:
+    # The release image has python3 but neither ip nor curl.
+    import http.server
+    import shutil
+    import threading
+
+    tools = tmp_path / "bare"
+    tools.mkdir()
+    for name in ("sh", "python3", "awk", "sed", "tr", "grep", "cat", "dirname", "id", "cut", "head"):
+        found = shutil.which(name)
+        if found:
+            (tools / name).symlink_to(found)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        result = subprocess.run(
+            ["sh", str(DOCTOR), "--host", "192.0.2.10", "--camera", "127.0.0.1",
+             "--callback", f"http://127.0.0.1:{server.server_port}/", "--config", str(tmp_path / "none.json")],
+            cwd=tmp_path, env={"PATH": str(tools)}, text=True, capture_output=True, check=False,
+        )
+    finally:
+        server.shutdown()
+    assert "OK      camera has a kernel route: 127.0.0.1" in result.stdout, result.stdout + result.stderr
+    assert "OK      callback URL responded" in result.stdout, result.stdout + result.stderr
