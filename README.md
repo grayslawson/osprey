@@ -58,7 +58,7 @@ networking. Pin a release tag or digest, never `latest`:
 curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b1/compose.release.yaml
 
 export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:v0.9.0b1
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b1
 export OSPREY_SETUP=1           # open the setup wizard
 
 docker compose -f compose.release.yaml up -d
