@@ -1,85 +1,72 @@
-# Connecting an existing Frigate installation
+# Frigate
 
-Osprey is a controller for supported UniFi PTZ cameras, not an NVR. Install
-and operate Frigate independently, then add Osprey as an ONVIF/RTSP camera.
+Osprey is not an NVR. Run Frigate as you already do, and add Osprey to it as
+an ONVIF camera with an RTSP stream. Use Osprey's address, not the physical
+camera's. Frigate sends PTZ commands to Osprey, and Osprey moves the camera
+over its private control channel.
 
-## Network contract
-
-Use the Osprey host address in Frigate, not the physical camera's Protect
-address. Frigate sends ONVIF PTZ commands to Osprey; Osprey translates them to
-the camera's private control channel and re-publishes the camera's media.
+## Camera entry
 
 ```yaml
-# Existing Frigate configuration — addresses are examples.
 cameras:
   driveway_ptz:
-    onvif:
-      host: osprey.local
-      port: 8000
     ffmpeg:
       inputs:
-        - path: rtsp://osprey.local:8554/video2
+        - path: rtsp://osprey:RTSP_PASSWORD@192.0.2.10:8554/video2
           roles: [detect, record]
+    onvif:
+      host: 192.0.2.10
+      port: 8000
 ```
 
-Configure labels, zones, detectors, recording, retention, autotracking mode,
-and zoom behavior in Frigate. Those choices belong to the Frigate owner;
-Osprey never rewrites them.
+The tracks are `video1` (2688×1512), `video2` (1280×720) and `video3`
+(640×360), all H.264 by default. Leave the RTSP credentials out if RTSP
+authentication is off. If ONVIF authentication is on, add `onvif.user` and
+`onvif.password` and keep `onvif.tls_insecure: false`; see
+[security](security.md#onvif-authentication).
 
-## Frigate URL in the Osprey console
+Labels, zones, detectors, recording, retention, autotracking and zoom are
+configured in Frigate. Osprey never changes them.
 
-In **Settings → Frigate**, enter the base URL of the Frigate instance associated
-with the selected camera, such as `http://frigate.local:5000`. This is used for
-health feedback and a convenient operator link; it is not a remote-control
-channel and does not grant Osprey permission to modify Frigate. Use a complete
-`https://` URL when TLS is enabled and do not embed credentials in the URL.
+## Frigate URL in the console
 
-## Verify the connection
+In **Settings → Frigate**, enter the Frigate base URL, such as
+`http://frigate.example.com:5000`. Osprey uses it for the Health check and a
+link. It is not a control channel and grants no access to Frigate. See
+[Frigate connection settings](frigate-connection.md).
 
-1. Confirm Frigate can reach Osprey's ONVIF endpoint and selected RTSP stream.
-2. Confirm the stream appears in Frigate and decodes correctly.
-3. Save at least one Home or named Osprey position before enabling automatic
-   return-to-home behavior.
-4. Enable and tune Frigate autotracking with a supervised test.
-5. Review Osprey camera status and control-event history for rejected or
-   contended moves before leaving the system unattended.
+## Check the connection
 
-Healthy Osprey status does not prove Frigate detection or tracking is correct;
-inspect Frigate's own logs and event pipeline. For the Protect custody
-limitation, see [Protect and Osprey](protect-dual-adoption.md).
+1. Frigate can reach Osprey's ONVIF port and the RTSP stream decodes.
+2. A `home` preset exists, or another preset you name in `return_preset`.
+3. Autotracking works in a supervised test.
+4. Osprey's Health tab and logs show no refused or contended moves.
 
-## Named-position discovery and refresh
+A healthy Osprey does not mean Frigate is detecting or tracking correctly.
+Check Frigate's own logs too.
 
-Osprey returns every saved named position from the ONVIF `GetPresets` response;
-the `home` position is not privileged on the wire. Named positions persist across
-Osprey restarts, and when no `home` exists Osprey saves the camera's current view
-as `home` on first connection so a `return_preset: home` is valid (disable with
-`ptz.auto_home: false`; see [PTZ health](ptz-health.md)). Frigate discovers that list
-when its ONVIF controller initializes a camera and then keeps the list in memory.
-Consequently, a position saved in Osprey after Frigate connected will not appear
-in Frigate's live-view preset menu immediately.
+## Presets
 
-After adding or renaming positions in Osprey, restart Frigate or trigger an
-ONVIF camera reinitialization (for example, save the camera's ONVIF settings in
-Frigate). Reloading only the browser page is not sufficient if Frigate's
-ONVIF controller is still initialized. Verify the refresh in Frigate's logs;
-it should report the number of presets found. Osprey's operator console and an
-ONVIF client such as the included `harness/ptz_walk.py` show the authoritative
-list served by Osprey.
+ONVIF `GetPresets` returns every saved preset. Presets persist across
+restarts, and if no `home` exists Osprey saves the camera's first confirmed
+position as `home`, so `return_preset: home` works out of the box. Turn this
+off with `ptz.auto_home: false`; see [PTZ health](ptz-health.md).
 
-Frigate normalizes preset names to lower case for its menu and command matching,
-so names that differ only by capitalization are treated as one position. Keep
-names unique (for example, `home`, `lower-loitering`, and `back-porch`) and set
-`onvif.autotracking.return_preset` to the exact name you want Frigate to use.
-
-This behavior follows Frigate's ONVIF controller implementation, which loads
-presets during camera initialization: [Frigate PTZ ONVIF controller](https://github.com/blakeblackshear/frigate/blob/dev/frigate/ptz/onvif.py).
+Frigate reads the preset list when it initialises the camera and keeps it in
+memory. After you add or rename a preset in Osprey, restart Frigate or save
+the camera's ONVIF settings in Frigate to reload it; its log reports how many
+presets it found. Frigate also lower-cases preset names, so names that differ
+only in case collide. Use names such as `home`, `back-porch` and
+`lower-gate`, and set `onvif.autotracking.return_preset` to the exact one.
 
 ## Manual control and autotracking
 
-When someone moves the camera from the Osprey console, MQTT, or another ONVIF
-user (for example UniFi Protect), Osprey holds Frigate's PTZ commands back for
-`ptz.manual_hold_sec` seconds (default 30), then lets autotracking resume. Give
-Frigate its own ONVIF user and keep it in `ptz.autotrack_users` (default
-`["frigate"]`). See
-[Letting Protect move the camera](protect-dual-adoption.md#letting-protect-move-the-camera-manual-wins-then-resume).
+When a person moves the camera from the console, MQTT or a non-autotracker
+ONVIF user, Osprey holds back Frigate's PTZ commands for `ptz.manual_hold_sec`
+(default 30 seconds) and then lets autotracking resume. Give Frigate its own
+ONVIF user and keep it in `ptz.autotrack_users` (default `["frigate"]`).
+Anonymous ONVIF callers always count as autotrackers. The details are in
+[UniFi Protect alongside Frigate](protect-dual-adoption.md#letting-protect-move-the-camera).
+
+If you run a [sentry patrol](sentry.md), gate autotracking on a full-frame
+zone, as that page explains.

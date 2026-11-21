@@ -1,7 +1,7 @@
 {
   "name": "@osprey-ptz/cli",
   "version": "0.9.0b1",
-  "description": "Container launcher and diagnostics for the Osprey PTZ controller",
+  "description": "Runs the Osprey UniFi PTZ controller tools from its container image",
   "bin": { "osprey": "bin/osprey.js" },
   "files": ["bin"],
   "repository": {

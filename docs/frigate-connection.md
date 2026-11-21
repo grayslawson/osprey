@@ -1,22 +1,21 @@
 # Frigate connection settings
 
-Osprey connects to an existing Frigate installation for health feedback and
-convenient operator links. It does not install, start, configure, or modify
-Frigate.
+Osprey stores a Frigate base URL for the console's Health check and links. It
+never installs, starts, configures or calls Frigate's API to change anything.
 
-Authenticated operators can inspect or change the non-secret Frigate base URL:
+Signed-in operators can read or change it:
 
 ```text
 GET  /api/frigate
-POST /api/frigate  {"base_url":"http://frigate.example:5000"}
+POST /api/frigate  {"base_url":"http://frigate.example.com:5000"}
 ```
 
-The POST requires the normal operator session and CSRF token. Only `http` and
-`https` URLs with a valid host and port are accepted. Credentials, query
-strings, fragments, and other schemes are rejected. Set
-`OSPREY_FRIGATE_CONFIG_FILE` to a root-owned JSON path if the value should
-survive a restart; without it, the setting is memory-only.
+The POST needs the session and CSRF token, like every other change. Only
+`http` and `https` URLs with a valid host and port are accepted; credentials,
+query strings, fragments and other schemes are rejected.
 
-This metadata is an integration hint. Osprey never uses it to mutate Frigate
-configuration or grant access to the Frigate API. Keep Frigate's own
-authentication and authorization in Frigate.
+The value is kept in the file named by `OSPREY_FRIGATE_CONFIG_FILE`. The setup
+wizard and the NixOS module set it to `frigate.json` in the state directory.
+Without it, the setting lasts until the next restart.
+
+Frigate's own authentication stays in Frigate.

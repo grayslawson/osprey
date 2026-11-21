@@ -5,198 +5,115 @@
 <h1 align="center">Osprey</h1>
 
 <p align="center">
-  A local controller that brings UniFi G5 PTZ cameras to Frigate.
+  A self-hosted controller that serves UniFi PTZ cameras to Frigate over ONVIF
+  and RTSP.
 </p>
 
 <p align="center">
-  <a href="https://github.com/grayslawson/osprey/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/grayslawson/osprey?style=flat-square"></a>
+  <a href="https://github.com/grayslawson/osprey/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/grayslawson/osprey?include_prereleases&style=flat-square"></a>
   <img alt="Stage: beta" src="https://img.shields.io/badge/stage-beta-b7791f?style=flat-square">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2f6f54?style=flat-square">
-  <img alt="Local-first video" src="https://img.shields.io/badge/video-local--first-304b61?style=flat-square">
 </p>
 
-Osprey moves a UniFi G5 PTZ camera out of Protect’s unreliable tracking path and
-into an existing Frigate installation. Frigate remains the detector, recorder,
-and tracking engine. Osprey owns the camera connection and exposes standard
-ONVIF and RTSP endpoints for Frigate and other clients.
+Osprey takes the place of the UniFi controller for a PTZ camera. The camera
+connects to Osprey, and Osprey serves its video as RTSP and its pan, tilt and
+zoom as a standard ONVIF device. Frigate stays the detector, recorder and
+autotracker. Osprey does not install, configure or run Frigate.
 
 > [!WARNING]
-> Osprey 0.9 is beta software. Keep camera-facing ports on a trusted LAN or VLAN,
-> never forward them to the Internet, and supervise adoption and tracking tests.
-> Osprey does not install, configure, or run Frigate.
+> 0.9 is a beta. Keep Osprey's ports on a trusted LAN or VLAN, never forward
+> them to the Internet, and watch the first adoption and tracking tests.
+
+## What you get
+
+- RTSP restreams of the camera's encoder channels, H.264 or H.265 per channel.
+- ONVIF PTZ, presets and events, including Frigate autotracking.
+- A browser console with live view, presets, patrol, settings, logs and health,
+  behind a password with CSRF protection.
+- A first-run setup wizard (`--setup` or `OSPREY_SETUP=1`).
+- [Sentry patrol](docs/sentry.md): an idle tour of presets that steps aside for
+  autotracking and for a person, and survives a restart.
+- A [media-only ONVIF device](docs/protect-dual-adoption.md) on its own port,
+  so UniFi Protect can record the camera alongside Frigate without moving it.
+- [`osprey protect-guard`](docs/protect-guard.md), which checks for or creates
+  the UniFi firewall rule that keeps Protect from adopting the camera itself.
+- Optional [MQTT](docs/mqtt.md) commands and state.
+- `osprey doctor` and [`osprey probe`](docs/camera-models.md) for diagnostics,
+  and [`/healthz` and `/metrics`](docs/ptz-health.md#health-endpoint) for
+  monitoring.
 
 ## Supported cameras
 
 | Camera | Status |
 |---|---|
 | UniFi G5 PTZ | Supported |
-| Other UniFi PTZ cameras | Experimental: they adopt and stream, and PTZ uses the ranges the camera reports. Run [`osprey probe`](docs/camera-models.md) to help add full support. |
+| Other UniFi PTZ cameras | Experimental. They adopt and stream, and PTZ uses the ranges the camera reports. See [camera models](docs/camera-models.md). |
 
-## Install
+## Quick start
 
-| Path | Guide |
-|---|---|
-| Docker / Docker Compose / Podman | [Quick start](#quick-start-with-docker), [installation guide](docs/installation.md#docker-or-rootless-podman) |
-| Home Assistant app (add-on) | [Home Assistant](docs/installation.md#home-assistant) |
-| pip (`osprey-ptz` on PyPI) | [pip](docs/installation.md#pip-pypi) |
-| NixOS module | [NixOS](docs/nixos.md) |
-| Proxmox LXC helper | [Proxmox](docs/installation.md#proxmox) |
+The release image runs on `linux/amd64` and `linux/arm64` with host
+networking. Pin a release tag or digest, never `latest`:
 
-## What Osprey provides
+```sh
+curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b1/compose.release.yaml
 
-- Frigate integration through ONVIF PTZ and RTSP media endpoints.
-- Pan, tilt, and zoom control with bounded movement, arbitration, and presets.
-- Multiple named positions, including a configurable home position.
-- A browser operator console with live video, PTZ controls, settings, metrics,
-  and recent-log warnings.
-- Optional MQTT commands and control events with retained-command protection.
-- Multiple cameras in one controller, with camera-specific ONVIF personas.
-- UniFi Protect can adopt Osprey as a third-party ONVIF camera: media only
-  through a read-only persona, or with PTZ under "manual wins, then resume"
-  arbitration. `osprey protect-guard` keeps Protect from adopting the physical
-  camera. See [Protect dual adoption](docs/protect-dual-adoption.md).
-- Manual control wins over Frigate's autotracking for a configurable hold,
-  then autotracking resumes.
-- Docker/Podman, Proxmox, NixOS, and Home Assistant add-on deployment paths.
-
-## How it fits together
-
-```text
-                    ONVIF/PTZ
-                 ┌──────────────┐
-                 │   Frigate    │
-                 │ detector +   │
-                 │ autotracker  │
-                 └──────┬───────┘
-                        │ RTSP + PTZ
-┌─────────────────┐     ▼     ┌──────────────────┐
-│ UniFi G5 PTZ    │◀─────────▶│ Osprey           │
-│ camera          │  private  │ controller       │
-└─────────────────┘  camera   └────────┬─────────┘
-                                       │ RTSP
-                                       ▼
-                                NVR, VLC, Protect
-```
-
-The physical camera has one native UniFi controller relationship. Osprey owns
-that relationship; Protect cannot natively adopt the same physical camera at
-the same time. The optional read-only ONVIF persona is a separate, generic
-camera backed by Osprey’s republished stream. See
-[`docs/protect-dual-adoption.md`](docs/protect-dual-adoption.md).
-
-## Quick start with Docker
-
-The published image supports `linux/amd64` and `linux/arm64`. Pin a release tag
-or digest in production:
-
-```bash
-git clone https://github.com/grayslawson/osprey.git
-cd osprey
-
-export OSPREY_HOST=192.0.2.10  # address reachable by the camera and clients
-export OSPREY_BIND=192.0.2.10  # interface exposed to Frigate
+export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
 export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:v0.9.0b1
+export OSPREY_SETUP=1           # open the setup wizard
 
 docker compose -f compose.release.yaml up -d
+docker compose -f compose.release.yaml logs osprey | grep 'setup token'
 ```
 
-On a new state volume, open `http://<osprey-host>:8000/setup` and enter the
-one-time token shown by `docker compose ... logs osprey`. The wizard writes the
-runtime configuration and 0600 deployment secrets; restart the service after
-saving. Full installation and upgrade paths are in
-[`docs/installation.md`](docs/installation.md).
+Open `http://192.0.2.10:8000/setup`, enter the token from the log, and fill
+in the camera's MAC and name, the Frigate URL and an admin password. The
+wizard writes the configuration and `0600` secret files to the state volume
+and shows generated RTSP and ONVIF passwords once. Save them, then restart:
 
-The ONVIF/operator endpoint uses port `8000`; RTSP uses `8554`. Configure the
-camera identity and any additional cameras in `osprey.json` (older installs:
-`cuckoo.json`, still read) as described in
-[`docs/multi-camera.md`](docs/multi-camera.md). Keep credentials in a secret
-manager or an untracked deployment file.
+```sh
+docker compose -f compose.release.yaml restart osprey
+```
 
-See [`docs/installation.md`](docs/installation.md) for rootless Podman,
-Proxmox, NixOS, Home Assistant, updates, rollback, and development setup.
-
-## Connect an existing Frigate installation
-
-In Osprey’s operator console, open **Settings → Frigate** and enter the base URL
-of the Frigate instance you already run, such as `http://frigate.local:5000`.
-Osprey uses this URL for health feedback and links; it never starts or rewrites
-Frigate.
-
-Then add the Osprey stream to Frigate. The exact configuration depends on your
-Frigate version, but the endpoints have this shape:
+The wizard closes itself once a configuration is saved, so `OSPREY_SETUP` can
+stay set. Next, [point the camera at Osprey](docs/installation.md#point-the-camera-at-osprey)
+and add it to your existing Frigate, using the RTSP password the wizard
+showed:
 
 ```yaml
 cameras:
   g5_ptz:
-    onvif:
-      host: osprey.local
-      port: 8000
     ffmpeg:
       inputs:
-        - path: rtsp://osprey.local:8554/video2
+        - path: rtsp://osprey:RTSP_PASSWORD@192.0.2.10:8554/video2
           roles: [detect, record]
+    onvif:
+      host: 192.0.2.10
+      port: 8000
 ```
 
-Keep object classes, zones, recording, retention, and Frigate’s zoom/autotrack
-settings in Frigate. See the
-[`docs/frigate-integration.md`](docs/frigate-integration.md) guide.
+The [Frigate guide](docs/frigate-integration.md) covers credentials,
+autotracking and presets.
 
-## Home Assistant and NixOS
+Other ways to install: Home Assistant app, NixOS module, Proxmox LXC, PyPI,
+Homebrew, Chocolatey and npm. See [installation](docs/installation.md).
 
-The repository includes an alpha Home Assistant add-on and a declarative NixOS
-package/module. Both run Osprey only; Frigate can be another Home Assistant
-add-on or a service on another host.
+## Documentation
 
-- [Home Assistant add-on guide](homeassistant/addon/osprey/README.md)
-- [NixOS package and module guide](docs/nixos.md)
-
-## Security
-
-- Keep control, ONVIF, RTSP, ingest, and snapshot ports on a trusted network.
-- Set an admin password before exposing the browser console beyond that network.
-- ONVIF UsernameToken authentication is opt-in while Frigate interoperability
-  is being validated. Anonymous ONVIF allows reachable clients to issue PTZ
-  commands, so use a firewall or VLAN when it is enabled.
-- RTSP supports optional expiring-nonce Digest authentication via
-  `OSPREY_RTSP_USERNAME` plus `OSPREY_RTSP_PASSWORD` (or a password file).
-  Authentication does not encrypt video; keep RTSP on a trusted network or
-  behind a TLS tunnel.
-- Keep camera, Protect, MQTT, admin, and Frigate credentials out of Git and
-  issue reports. Use `*_FILE` variables or the setup wizard's 0600 secrets file
-  rather than plain environment values. See [`docs/security.md`](docs/security.md).
-- If UniFi Protect runs on the same network, block the physical camera from it
-  with [`osprey protect-guard`](docs/protect-guard.md).
-
-## Stay current
-
-Releases publish versioned multi-architecture images. Follow the repository’s
-**Releases** page (or choose **Watch → Custom → Releases**) for notifications.
-The [`scripts/osprey-update.sh`](scripts/osprey-update.sh) helper is check-only
-by default; review the release and approve a pinned update with `--apply`.
-Optional systemd units provide scheduled checks without forcing unattended
-restarts. See [updates, approval, and rollback](docs/installation.md#updates-approval-and-rollback).
-
-## Built on prior open source work
-
-Osprey builds on the original [Cuckoo](https://github.com/rjmotion/cuckoo) and
-[pyunifiwire](https://github.com/rjmotion/pyunifiwire) projects. Their authors’
-protocol research and code are credited under the applicable license notices.
+Start at the [documentation index](docs/README.md). Security guidance is in
+[`docs/security.md`](docs/security.md), and vulnerability reports go through
+[`SECURITY.md`](SECURITY.md).
 
 ## Contributing
 
-Run `./osprey/test.sh` and `./pyunifiwire/test.sh` before submitting changes.
-Use the issue forms (bug report, camera model support). When reporting an issue, include the Osprey version, host platform, camera
-model, Frigate version, and a redacted reproducible log. Never include
-credentials, private addresses, MAC addresses, or video from someone else’s
-property.
-
-Contributors and coding agents should start with [`AGENTS.md`](AGENTS.md), use
-the [`docs/` map](docs/README.md) for repository context, and run `make check`
-before review. The full contribution contract is in
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md), and run
+`make check` before you open a pull request. Use the issue forms for bugs and
+camera model support. Leave credentials, private addresses, MAC addresses and
+recordings out of every report.
 
 ## License
 
-Osprey is available under the [MIT License](LICENSE). Upstream components keep
-their own license notices; see [`NOTICE`](NOTICE) for attribution and
-the statement that Osprey is not affiliated with Ubiquiti Inc.
+MIT. See [`LICENSE`](LICENSE). Osprey builds on the original
+[Cuckoo](https://github.com/rjmotion/cuckoo) and
+[pyunifiwire](https://github.com/rjmotion/pyunifiwire) projects; attribution
+and the statement that Osprey is not affiliated with Ubiquiti Inc. are in
+[`NOTICE`](NOTICE).
