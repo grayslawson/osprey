@@ -27,6 +27,26 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
+# Supervisor mounts /data root-owned at run time, so the state directory is
+# made here, as root, and the controller then runs as the unprivileged user.
+install -d -o osprey -g osprey -m 0750 /data/osprey
+
+# The sidebar console reaches Osprey through the Supervisor's ingress proxy,
+# which has this fixed address; Home Assistant has already signed that user in.
+export OSPREY_TRUSTED_INGRESS_PEER=172.30.32.2
+
+# Optional password for the console on the direct port (the Web UI link).
+PASSWORD=$(get_option admin_password)
+if [ -n "$PASSWORD" ]; then
+  umask 077
+  printf '%s' "$PASSWORD" > /data/osprey/admin-password
+  chown osprey:osprey /data/osprey/admin-password
+  export OSPREY_ADMIN_PASSWORD_FILE=/data/osprey/admin-password
+else
+  rm -f /data/osprey/admin-password
+fi
+unset PASSWORD
+
 # Upgrade path: add-on builds before the rename kept the control certificate as
 # cuckoo.pem. The camera trusts that certificate, so keep using it.
 CERT=/data/osprey/osprey.pem
@@ -34,15 +54,15 @@ if [ ! -e "$CERT" ] && [ -e /data/osprey/cuckoo.pem ]; then
   CERT=/data/osprey/cuckoo.pem
 fi
 
-set -- python3 /opt/osprey/osprey/main.py \
+set -- /usr/bin/setpriv --reuid=osprey --regid=osprey --init-groups \
+  python3 /opt/osprey/osprey/main.py \
   --host "$HOST" \
   --cert "$CERT" \
   --name "$(get_option camera_name)" \
   --tracks "$(get_option tracks)" \
   --onvif-port "$(get_option onvif_port)" \
   --rtsp-port "$(get_option rtsp_port)" \
-  --control-port 7442 --ingest-port 7550 --snapshot-port 7444 \
-  --dump /data/osprey/messages.jsonl
+  --control-port 7442 --ingest-port 7550 --snapshot-port 7444
 
 CAMERA_IP=$(get_option camera_ip)
 CAMERA_MAC=$(get_option camera_mac)
