@@ -144,3 +144,48 @@ def test_missing_container_runtime_is_only_a_warning(tmp_path: Path) -> None:
     # Native installs (wheel, NixOS, Proxmox) and the container itself have no compose.
     assert result.returncode == 0, result.stdout
     assert "WARNING neither Docker Compose nor Podman Compose is available" in result.stdout
+
+
+def test_launcher_without_the_controller_warns_instead_of_failing(tmp_path: Path) -> None:
+    # Homebrew and Chocolatey install the launcher scripts without the controller.
+    launcher = tmp_path / "bin" / "osprey-doctor.sh"
+    launcher.parent.mkdir()
+    launcher.write_text(DOCTOR.read_text(encoding="utf-8"), encoding="utf-8")
+    launcher.chmod(0o755)
+    config = tmp_path / "osprey.json"
+    _config(config)
+    environment = os.environ.copy()
+    environment.update(doctor_fixture_environment(tmp_path))
+    result = subprocess.run(
+        [str(launcher), "--host", "192.0.2.10", "--config", str(config)],
+        cwd=tmp_path, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WARNING configuration not validated" in result.stdout
+    assert "ERROR" not in result.stdout
+
+
+def test_route_and_http_checks_work_without_ip_or_curl(tmp_path: Path) -> None:
+    # The release image has python3 but neither ip nor curl.
+    import http.server
+    import shutil
+    import threading
+
+    tools = tmp_path / "bare"
+    tools.mkdir()
+    for name in ("sh", "python3", "awk", "sed", "tr", "grep", "cat", "dirname", "id", "cut", "head"):
+        found = shutil.which(name)
+        if found:
+            (tools / name).symlink_to(found)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        result = subprocess.run(
+            ["sh", str(DOCTOR), "--host", "192.0.2.10", "--camera", "127.0.0.1",
+             "--callback", f"http://127.0.0.1:{server.server_port}/", "--config", str(tmp_path / "none.json")],
+            cwd=tmp_path, env={"PATH": str(tools)}, text=True, capture_output=True, check=False,
+        )
+    finally:
+        server.shutdown()
+    assert "OK      camera has a kernel route: 127.0.0.1" in result.stdout, result.stdout + result.stderr
+    assert "OK      callback URL responded" in result.stdout, result.stdout + result.stderr

@@ -26,6 +26,8 @@
 
 ## Operate
 
+- [Verify a deployment](installation.md#verify-a-deployment): `osprey doctor`,
+  the first stop when something does not work.
 - [Operator console](operator-ui.md): the browser app and its API.
 - [PTZ health](ptz-health.md): motion rules, watchdog, `/healthz`, `/metrics`
   and the `home` preset.

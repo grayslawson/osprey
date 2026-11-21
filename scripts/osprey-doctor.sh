@@ -4,7 +4,9 @@
 set -u
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-controller_dir=$(CDPATH='' cd -- "$script_dir/../osprey" && pwd)
+# Empty when only the launcher is installed (Homebrew, Chocolatey); the checks
+# that need the controller's code then say so instead of failing.
+controller_dir=$(CDPATH='' cd -- "$script_dir/../osprey" 2>/dev/null && pwd) || controller_dir=
 
 usage() {
     cat <<'EOF'
@@ -33,6 +35,23 @@ warnings=0
 ok() { printf 'OK      %s\n' "$*"; }
 warn() { printf 'WARNING %s\n' "$*"; warnings=$((warnings + 1)); }
 fail() { printf 'ERROR   %s\n' "$*"; errors=$((errors + 1)); }
+
+# The release image has python3 but no ip or curl; fall back to the standard
+# library so doctor gives the same answers inside the container.
+has_route() {
+    if command -v ip >/dev/null 2>&1; then
+        ip route get "$1" >/dev/null 2>&1
+    else
+        python3 -c 'import socket,sys; s=socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET, socket.SOCK_DGRAM); s.connect((sys.argv[1], 9))' "$1" 2>/dev/null
+    fi
+}
+http_ok() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --connect-timeout 3 --max-time 5 "$1" >/dev/null 2>&1
+    else
+        python3 -c 'import sys,urllib.request; urllib.request.urlopen(sys.argv[1], timeout=5).read(1)' "$1" >/dev/null 2>&1
+    fi
+}
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -67,7 +86,9 @@ else
     fail "invalid advertised host: $host"
 fi
 
-if [ -f "$config_file" ]; then
+if [ -f "$config_file" ] && [ -z "$controller_dir" ]; then
+    warn "configuration not validated: the Osprey controller is not installed next to this launcher"
+elif [ -f "$config_file" ]; then
     if command -v python3 >/dev/null 2>&1 && PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$controller_dir" python3 - "$config_file" <<'PY'
 import sys
 import config
@@ -85,7 +106,7 @@ fi
 
 # Protect dual adoption: the physical camera must not be adoptable by Protect.
 if [ -f "$config_file" ] && grep -q '"onvif_read_only"[[:space:]]*:[[:space:]]*[0-9]' "$config_file" 2>/dev/null; then
-    if [ -n "${OSPREY_UNIFI_API_KEY_FILE:-}" ] && [ -n "${OSPREY_UNIFI_CONSOLE:-}" ] && [ -n "$camera" ]; then
+    if [ -n "$controller_dir" ] && [ -n "${OSPREY_UNIFI_API_KEY_FILE:-}" ] && [ -n "${OSPREY_UNIFI_CONSOLE:-}" ] && [ -n "$camera" ]; then
         if PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$controller_dir" python3 "$controller_dir/protect_guard.py" \
             --console "$OSPREY_UNIFI_CONSOLE" --camera-ip "$camera" >/dev/null 2>&1; then
             ok 'UniFi firewall guard keeps Protect off the physical camera'
@@ -121,7 +142,7 @@ else
 fi
 
 if [ -n "$camera" ]; then
-    if command -v ip >/dev/null 2>&1 && ip route get "$camera" >/dev/null 2>&1; then
+    if has_route "$camera"; then
         ok "camera has a kernel route: $camera"
     else
         fail "camera has no kernel route: $camera"
@@ -133,27 +154,19 @@ if [ -n "$callback" ]; then
         http://*|https://*) ;;
         *) fail 'callback URL must start with http:// or https://' ;;
     esac
-    if command -v curl >/dev/null 2>&1; then
-        if curl -fsS --connect-timeout 3 --max-time 5 "$callback" >/dev/null 2>&1; then
-            ok "callback URL responded: $callback"
-        else
-            fail "callback URL did not respond: $callback"
-        fi
+    if http_ok "$callback"; then
+        ok "callback URL responded: $callback"
     else
-        fail 'curl is unavailable; cannot check callback reachability'
+        fail "callback URL did not respond: $callback"
     fi
 fi
 
 if [ -n "$frigate" ]; then
     case "$frigate" in http://*|https://*) ;; *) fail 'Frigate URL must start with http:// or https://' ;; esac
-    if command -v curl >/dev/null 2>&1; then
-        if curl -fsS --connect-timeout 3 --max-time 5 "$frigate/api/version" >/dev/null 2>&1; then
-            ok "Frigate API responded: $frigate"
-        else
-            warn "Frigate API did not respond (it may require auth or be firewalled): $frigate"
-        fi
+    if http_ok "$frigate/api/version"; then
+        ok "Frigate API responded: $frigate"
     else
-        warn 'curl is unavailable; skipped Frigate reachability check'
+        warn "Frigate API did not respond (it may require auth or be firewalled): $frigate"
     fi
 fi
 
