@@ -7,6 +7,7 @@ are identical across installation paths.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,13 @@ def main() -> int:
     # import certs``), so both bundled roots must be importable.
     sys.path[:0] = [str(_APP / "osprey"), str(_APP)]
     sys.argv[0] = "osprey"  # argparse prog name in --help
+    if sys.argv[1:2] == ["doctor"]:
+        # The same POSIX shell diagnostics the container and checkout run.
+        script = str(_APP / "scripts" / "osprey-doctor.sh")
+        os.environ["PYTHONPATH"] = os.pathsep.join(
+            filter(None, [str(_APP), os.environ.get("PYTHONPATH")])
+        )
+        os.execv("/bin/sh", ["sh", script, *sys.argv[2:]])
     if sys.argv[1:2] == ["probe"]:
         from probe import main as probe_main  # osprey/probe.py
 

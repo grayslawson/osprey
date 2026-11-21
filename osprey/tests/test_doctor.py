@@ -123,26 +123,24 @@ def test_unreachable_frigate_is_a_warning_when_other_checks_pass(tmp_path: Path)
     assert "WARNING Frigate API did not respond" in result.stdout
 
 
-def test_missing_container_runtime_is_required_error(tmp_path: Path) -> None:
+def test_missing_container_runtime_is_only_a_warning(tmp_path: Path) -> None:
     config = tmp_path / "osprey.json"
     _config(config)
-    tools = tmp_path / "minimal-tools"
-    tools.mkdir()
-    for name, body in {
-        "python3": "#!/bin/sh\nexec /run/current-system/sw/bin/python3 \"$@\"\n",
-        "ss": "#!/bin/sh\nexit 0\n",
-    }.items():
-        path = tools / name
-        path.write_text(body, encoding="utf-8")
-        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    environment = os.environ.copy()
+    environment.update(doctor_fixture_environment(tmp_path))
+    tools = Path(environment["PATH"].split(":", 1)[0])
+    for name in ("docker", "podman"):
+        (tools / name).write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (tools / name).chmod(0o755)
     result = subprocess.run(
         [str(DOCTOR), "--host", "192.0.2.10", "--config", str(config)],
         cwd=ROOT,
-        env={**os.environ, "PATH": str(tools)},
+        env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
 
-    assert result.returncode == 1
-    assert "ERROR   neither Docker Compose nor Podman Compose is available" in result.stdout
+    # Native installs (wheel, NixOS, Proxmox) and the container itself have no compose.
+    assert result.returncode == 0, result.stdout
+    assert "WARNING neither Docker Compose nor Podman Compose is available" in result.stdout

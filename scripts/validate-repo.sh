@@ -54,6 +54,8 @@ checks = {
     "homeassistant/addon/osprey/config.yaml": r'^version: "([^"]+)"$',
     "packaging/homebrew/osprey.rb": r'^  version "([^"]+)"$',
     "packaging/npm/package.json": r'"version": "([^"]+)"',
+    # The launcher pulls this image; a stale pin would run the previous release.
+    "packaging/npm/bin/osprey.js": r'ghcr.io/grayslawson/osprey:([^"]+)"',
     "packaging/chocolatey/osprey.nuspec": r"<version>([^<]+)</version>",
     "pyunifiwire/pyproject.toml": r'^version = "([^"]+)"$',
     "pyunifiwire/src/unifiwire/__init__.py": r'^__version__ = "([^"]+)"$',
