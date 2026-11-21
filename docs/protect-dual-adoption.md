@@ -1,38 +1,27 @@
-# UniFi Protect and Osprey: custody versus re-sharing
+# UniFi Protect alongside Frigate
 
-This note explains what can and cannot be shared when a G5 PTZ is controlled
-by Osprey. It is intentionally conservative and does not require a production
-camera or controller for validation.
+A UniFi camera has one native controller at a time. When Osprey is that
+controller, Protect cannot natively adopt the same camera. Protect can still
+record it, by adopting Osprey as a third-party ONVIF camera that serves the
+media Osprey already receives.
 
-## Native adoption is exclusive
+There are two ways to set this up. Both leave the PTZ head with Frigate.
 
-The physical G5 has one native UniFi controller relationship. Its private TLS
-WebSocket (`secure_transfer`), PTZ channel (`ptz1`), settings acknowledgements,
-and camera-originated media belong to that controller session. A second native
-controller cannot subscribe to the same session.
+| | A: media persona (recommended) | B: one device, two users |
+|---|---|---|
+| What Protect adopts | A second ONVIF device on its own port | The primary device on port 8000 |
+| How PTZ is withheld | The device has no PTZ at all | The `protect` user has no `ptz` role |
+| Depends on ONVIF authentication | No | Yes: anonymous callers count as autotrackers |
+| Extra setup | One port | An ONVIF users file |
 
-Therefore a physical G5 cannot be natively adopted by Osprey and Protect at
-the same time. Releasing, unmanaging, resetting, or re-adopting a camera is an
-operational action outside routine software validation.
+Before either, block the physical camera from Protect with
+[`osprey protect-guard`](protect-guard.md). Otherwise Protect lists the
+camera with an **Adopt** button, and one click takes it from Osprey.
 
-## Media-only re-sharing
+## A: the media persona
 
-Osprey can remain the sole native controller and re-publish the media it
-already receives as standard RTSP and ONVIF. Frigate uses the normal Osprey
-ONVIF endpoint (port `8000` by default) for PTZ and the RTSP endpoint (port
-`8554`) for video. This does not create a second G5 controller and does not
-give another consumer native custody of the physical camera.
-
-Protect may be able to adopt a separate, generic ONVIF camera backed by this
-re-published media. Protect's exact firmware and profile requirements vary, so
-this remains an interoperability experiment rather than a compatibility claim.
-
-## The media persona
-
-The optional media persona serves the same ingested media while omitting PTZ
-from capabilities, services, and media profiles. It returns a
-standards-compliant fault for every PTZ read/write. Enable it on a separate
-port, for example:
+Set `ports.onvif_read_only` (or `--onvif-read-only-port`) to serve the camera
+a second time with media and no PTZ:
 
 ```json
 {
@@ -41,182 +30,115 @@ port, for example:
 }
 ```
 
-That gives one physical camera two ONVIF devices:
-
-| Device | Port | PTZ | Who it is for |
+| Device | Port | PTZ | For |
 |---|---|---|---|
-| Primary | `8000` | yes | Frigate: video, events, autotracking |
-| Media | `8001` | no | Protect: live view, recording, events |
+| Primary | 8000 | Yes | Frigate: video, events, autotracking |
+| Media | 8001 | No | Protect: live view, recording, events |
 
-### Two devices, not two views of one
+The media persona has no PTZ service, no PTZ scope and no PTZ in its
+profiles, and every PTZ call returns a SOAP fault. RTSP is shared on port
+8554.
 
-The media persona is a **separate device**, not a second name for the first.
-It has its own serial, its own MAC, its own hostname, its own endpoint UUID
-and its own friendly name — `<camera name> (media)`. An NVR therefore records
-it as a camera of its own and never merges it with the physical G5 or with
-the primary device.
+### Its own identity
 
-Its identity is derived, so it does not repeat the primary's identifiers —
-including the ones an operator pinned under `onvif.identity`. Those describe
-one device; a second device that shared them would be the same device.
+The media persona is a separate device, so an NVR never merges it with the
+primary. It has its own serial, MAC, hostname, endpoint UUID and friendly name,
+`<camera name> (media)`. These are derived and do not inherit
+`onvif.identity` overrides, which describe the primary device.
 
-### Finding it
+### Discovery
 
-WS-Discovery answers a probe with **one ProbeMatch per device**, so a client
-that discovers Osprey sees both and can tell them apart by name and port. The
-media persona is listed **first**, so a client that takes the first match
-adopts the one that cannot move the camera.
+WS-Discovery answers a probe with one ProbeMatch per device. The media
+persona is listed first, so a client that takes the first match gets the one
+that cannot move the camera. A probe that asks for a PTZ device gets the
+primary alone. The reply fits in one 1472-byte datagram, so it is not
+fragmented on a 1500-byte MTU.
 
-A probe that asks specifically for a PTZ device is answered by the primary
-device alone: the media persona does not advertise the PTZ scope, so it never
-satisfies such a request.
+WS-Discovery is link-local multicast. It does not cross subnets or a container
+bridge; in those cases add the device by address instead.
 
-WS-Discovery is link-local multicast, so it only works when the probe can
-reach Osprey and the reply can get back. A container on a plain bridge
-network usually cannot do either — the multicast never crosses into the
-container, and the container cannot multicast onto the LAN. When that is the
-case, adopt the media persona by address instead: **Advanced Adoption**, the
-Osprey host and port `8001`. The device is the same either way; only the way
-you find it differs.
+### Adopt it in Protect
 
-### Adopting it in Protect
+1. In Protect, open **Settings → System → Discover Third-Party Cameras** and
+   pick `<camera name> (media)`. Or use **Advanced Adoption** with the Osprey
+   host and port 8001.
+2. Enter the ONVIF credentials, if ONVIF authentication is on. Choose an H.264
+   stream: `video1` for full resolution, `video2` for less bandwidth. Protect
+   pulls one profile; changing it later means removing and re-adding the
+   camera.
+3. Check live view, a recording and a motion event. Frigate's frame rate and
+   detect latency should not change.
 
-1. Add the Osprey host and port `8001` as a **generic ONVIF camera** in
-   Protect, or use **Settings → System → Discover Third-Party Cameras** and
-   pick the entry named `<camera name> (media)`.
-2. Enter the `protect` credentials. Choose the H.264 stream (`video1` for HQ,
-   or `video2` if bandwidth is limited). Protect pulls one profile, and
-   changing it later needs a remove and re-add.
-3. Confirm live view, a recording, and a motion event before relying on it.
-   Frigate should keep the same frame rate and detect latency it had before.
+Do not adopt the primary device in Protect. It carries PTZ, and Protect 7.3
+and later can drive PTZ on third-party cameras.
 
-**Do not adopt the primary device in Protect.** It carries PTZ, and Protect
-can drive PTZ on third-party ONVIF cameras; two clients moving one head
-fight each other. The primary device is Frigate's.
+Protect's third-party ONVIF support varies by release. Until you have tested
+yours, firewall ports 8001 and 8554 so only the Protect console can reach them,
+and keep them off untrusted networks.
 
-Protect may reject the media persona or require additional profiles. Until
-tested on the exact Protect release, firewall the media persona's ONVIF port
-and the shared RTSP port to the Protect host, and never expose them outside
-the trusted LAN.
+## B: one device, two users
 
-## Safe validation
+Give Frigate and Protect their own principals in the
+[ONVIF users file](authentication.md#multiple-onvif-principals):
 
-Run the fake-camera stack tests before trying a real NVR:
-
-```sh
-./osprey/test.sh
-```
-
-For a disposable client, verify that the normal endpoint exposes PTZ and the
-media persona exposes media but faults on PTZ calls. Do not run custody,
-reset, unmanage, or re-adoption commands against a production camera as part
-of this compatibility test.
-
-## Evidence in this repository
-
-- [`pyunifiwire/SPEC.md`](../pyunifiwire/SPEC.md) records the measured camera
-  control and media channels.
-- [`osprey/ARCHITECTURE.md`](../osprey/ARCHITECTURE.md) documents the custody
-  and northbound ONVIF/RTSP boundary.
-- [`osprey/tests/test_stack.py`](../osprey/tests/test_stack.py) exercises the
-  fake-camera session and ONVIF/RTSP faces without hardware.
-
-## Running Frigate and Protect together
-
-There are two ways to serve Protect and Frigate at once. Both keep the head
-with one client; they differ in what Protect sees.
-
-| | Option A — the media persona | Option B — one endpoint, two principals |
+| Client | Roles | Gets |
 |---|---|---|
-| What Protect adopts | a second ONVIF device on `8001` | the primary device on `8000` |
-| How PTZ is withheld | the persona has no PTZ at all | the `protect` principal has no `ptz` role |
-| If Protect's calls are anonymous | still no PTZ — the persona has none | every anonymous caller counts as an autotracker |
-| Extra configuration | a second port | a users file with two principals |
+| `frigate` | `media`, `events`, `ptz` | Video, events, autotracking |
+| `protect` | `media`, `events` | Live view, recording, motion events |
+| `admin` | `admin` | Everything, including encoder writes |
 
-Option A is the safer of the two: the persona is structurally unable to move
-the camera, so it makes no difference whether Protect sends credentials.
+Every PTZ call from `protect` is refused with `ter:NotAuthorized`. Set
+`allow_from` on `protect` to the Protect console's address.
 
-### Option B in detail
+To adopt, use **Discover Third-Party Cameras** or **Advanced Adoption** with
+the Osprey host and port 8000, enter the `protect` credentials, and check as
+in option A. Keep the clocks on Osprey and the console correct: WS-Security
+rejects timestamps more than 300 seconds off (`OSPREY_ONVIF_MAX_SKEW_SECONDS`).
 
-Each client gets its own principal in the users file (see
-[authentication](authentication.md#multiple-onvif-principals)):
+### Letting Protect move the camera
 
-| Client | Endpoint | Roles | What it gets |
-|---|---|---|---|
-| Frigate | `:8000` ONVIF, `:8554` RTSP | `media`, `events`, `ptz` | Video, events, autotracking PTZ |
-| UniFi Protect | `:8000` ONVIF, `:8554` RTSP | `media`, `events` | Live view, recording, motion events |
-| Operator | `:8000` ONVIF | `admin` | Everything, including encoder writes |
+Add `ptz` to the `protect` user's roles. Osprey then arbitrates with "manual
+wins, then resume":
 
-By default Protect gets no PTZ: its `protect` principal is denied on every PTZ
-call with `ter:NotAuthorized`, so Frigate keeps sole control of the head.
-
-### Letting Protect move the camera (manual wins, then resume)
-
-Protect 7.3 and later can drive PTZ on third-party ONVIF cameras. To allow it,
-add `ptz` to the `protect` principal's roles. Osprey then arbitrates:
-
-- ONVIF users listed in `ptz.autotrack_users` (default `["frigate"]`) and
-  anonymous ONVIF callers are autotrackers. Every other PTZ client is a person:
-  other ONVIF users such as `protect`, the operator console, and MQTT commands.
-- A person's command replaces an autotracker move that is still running and
-  starts a hold of `ptz.manual_hold_sec` seconds (default 30). Each further
-  manual command restarts the hold.
-- During the hold, autotracker moves and Stops are answered with success but
-  not sent to the camera, so Frigate does not log errors. When the hold ends,
-  Frigate's autotracking takes over again.
-- Set `ptz.manual_hold_sec` to `0` to turn arbitration off.
+- Users in `ptz.autotrack_users` (default `["frigate"]`) and anonymous ONVIF
+  callers are autotrackers. Every other PTZ client counts as a person: other
+  ONVIF users, the console and MQTT.
+- A person's command replaces a running autotracker move and starts a hold of
+  `ptz.manual_hold_sec` (default 30). Each manual command restarts the hold.
+- During the hold, autotracker moves and stops are answered with success but
+  not sent, so Frigate logs no errors. Autotracking resumes when the hold
+  ends.
+- `ptz.manual_hold_sec: 0` turns arbitration off.
 
 ```json
 {"ptz": {"manual_hold_sec": 30, "autotrack_users": ["frigate"]}}
 ```
 
-This only works when Frigate and Protect use different ONVIF users. If ONVIF
-authentication is off, every ONVIF caller counts as an autotracker.
+This needs ONVIF authentication on and separate users for Frigate and
+Protect. Without authentication every caller is an autotracker.
 
-### Seeing what an ONVIF client sends
+## Tell the entries apart
+
+Osprey reports its model as `Osprey <camera model>`, a serial starting with
+`OSP`, and a stable, locally administered MAC. It never reports the camera's
+own MAC or serial. Refuse any Adopt prompt whose MAC or serial is not
+Osprey's, or that is not an ONVIF device on the Osprey host and port. If the
+derived MAC clashes with another device, set `onvif.identity.mac`.
+
+If Protect adopts the physical camera by mistake, Osprey loses its controller
+session. Remove the camera from Protect, then point it back at Osprey.
+Plan this, because it changes who controls a production camera.
+
+## Debugging an ONVIF client
 
 Set `"onvif": {"log_calls": true}` to log every SOAP call at INFO with its
-action, user, source address and PTZ source (`auto` or `manual`). Without it the
-same line is logged at DEBUG. Use it while adopting a new client; it is noisy
-while Frigate is tracking.
+action, user, source address and PTZ source (`auto` or `manual`). It is noisy
+while Frigate tracks, so turn it off after adoption.
 
-Adoption steps for option B (Protect 7.2 or later; pin the console version and
-re-test after each Protect update):
+## Test without hardware
 
-1. Create the `frigate` and `protect` users, with a separate password for each,
-   and set `"allow_from"` on `protect` to the Protect console's address.
-2. In Protect, use **Settings → System → Discover Third-Party Cameras**. If
-   Osprey is on another subnet, use **Advanced Adoption** and enter the Osprey
-   host and port `8000` by IP, because WS-Discovery is link-local multicast.
-3. Enter the `protect` credentials. Choose the H.264 stream (`video1` for HQ, or
-   `video2` if bandwidth is limited). Protect pulls one profile, and changing it
-   later needs a remove and re-add.
-4. Confirm live view, a recording, and a motion event before relying on it.
-   Frigate should keep the same frame rate and detect latency it had before.
-
-Keep the clock on Osprey and the console correct. WS-Security rejects a
-timestamp more than 300 seconds from the server's clock.
-
-### Keeping the physical G5 out of Protect
-
-The G5 stays on the main LAN, so there is no camera VLAN. Use these controls
-instead, and verify each one:
-
-- **Firewall the physical camera away from the console.** Block the camera's
-  traffic to the Protect console on TCP `7442`, `7444`, `7550` and UDP `10001`.
-  `osprey protect-guard --apply` creates this policy on a UniFi gateway. See
-  [Keep UniFi Protect off the physical camera](protect-guard.md). This stops
-  Protect from natively adopting the physical camera while Osprey is its only
-  controller.
-- **Check the identity before adopting.** Osprey reports its model as
-  `Osprey <camera model>`, a serial that starts with `OSP`, and a stable,
-  locally administered MAC. Refuse any Adopt prompt whose MAC or serial is not
-  one of Osprey's, or that is not an ONVIF device on the Osprey host and port.
-- **Osprey never reports the G5's MAC or serial.** `GetNetworkInterfaces` and
-  the device serial come from Osprey's own identity, so Protect cannot merge
-  the two records. Set `onvif.identity.mac` explicitly if the derived MAC clashes
-  with another device on the LAN.
-- **If the physical camera is adopted by mistake,** Osprey loses its controller
-  session. Stop the Protect adoption from the console, then restore Osprey's
-  control from the Osprey admin console. Do this with a plan, because the
-  step changes custody of the production camera.
+`make test` runs the fake-camera stack tests, which check that the primary
+device serves PTZ and the media persona faults on it. The evidence is in
+[`osprey/tests/test_media_persona.py`](../osprey/tests/test_media_persona.py),
+[`osprey/tests/test_stack.py`](../osprey/tests/test_stack.py) and
+[`specs/004-nvr-media-persona`](../specs/004-nvr-media-persona/spec.md).

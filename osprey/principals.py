@@ -39,7 +39,7 @@ the device.
 applies to ONVIF, RTSP and snapshot requests alike. ``rtsp.anonymous_from`` lets
 specific hosts play RTSP without Digest credentials while RTSP auth is otherwise
 required — a fallback for an NVR that does not send RTSP credentials (to be
-confirmed by packet capture; see ``docs/protect-onvif.md``).
+confirmed by packet capture; see ``docs/protect-dual-adoption.md``).
 
 ``replay_protection`` (default ``true``) rejects a WS-Security nonce that has
 already been accepted. Setting it to ``false`` for one principal weakens that

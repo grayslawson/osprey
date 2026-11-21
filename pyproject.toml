@@ -15,7 +15,7 @@ build-backend = "hatchling.build"
 [project]
 name = "osprey-ptz"
 dynamic = ["version"]
-description = "Self-hosted controller for UniFi G5 PTZ cameras: RTSP restream, ONVIF, and a web UI for an existing Frigate installation"
+description = "Self-hosted controller that serves UniFi PTZ cameras to Frigate over ONVIF and RTSP"
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
