@@ -3,6 +3,14 @@
 All notable changes to Osprey are listed here. Entries are generated from
 Conventional Commit subjects by git-cliff (see cliff.toml).
 
+## Unreleased
+
+### Bug fixes
+- **homeassistant:** The app can be installed. Its manifest named a tagged
+  image, which the Supervisor rejects ("Docker image must not contain a
+  tag"); it now names the untagged image and the Supervisor pulls it at the
+  app's version.
+
 ## [0.9.0b2] - 2026-11-21
 
 ### Features

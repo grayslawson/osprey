@@ -11,7 +11,8 @@ init: true
 arch:
   - amd64
   - aarch64
-image: ghcr.io/grayslawson/{arch}-osprey-addon:0.9.0b2
+# The Supervisor pulls <image>:<version>; a tag here makes it reject the app.
+image: ghcr.io/grayslawson/{arch}-osprey-addon
 host_network: true
 webui: http://[HOST]:[PORT:8000]/
 ingress: true

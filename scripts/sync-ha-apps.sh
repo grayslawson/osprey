@@ -39,11 +39,10 @@ rm -rf "$addon/translations"
 cp -R "$upstream/homeassistant/addon/osprey/translations" "$addon/translations"
 chmod 0755 "$addon/run.sh"
 
-# The manifest names the version and the image it installs.  Both follow the
-# release, so they are written rather than copied.
+# The manifest's version follows the release; the Supervisor pulls the image at
+# that version, so the version is written rather than copied.
 awk -v version="$version" '
   /^version:/ { print "version: \"" version "\""; next }
-  /^image:/ { print "image: ghcr.io/grayslawson/{arch}-osprey-addon:" version; next }
   { print }
 ' "$upstream/homeassistant/addon/osprey/config.yaml" > "$addon/config.yaml"
 
