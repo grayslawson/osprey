@@ -37,6 +37,7 @@ H.264 on every channel; set any to ``h265`` for an efficient stream.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from typing import Any, Final
@@ -461,7 +462,8 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[st
     So a file that sets ``ports.onvif`` leaves the other ports alone, and a file
     that sets ``tracks.video2`` re-codecs just that channel.
     """
-    out = dict(base)
+    # A deep copy: callers mutate the result, and that must never reach DEFAULTS.
+    out = copy.deepcopy(base)
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
             out[key] = deep_merge(out[key], value)

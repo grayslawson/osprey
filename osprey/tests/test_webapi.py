@@ -618,6 +618,14 @@ def test_codec_and_frigate_settings(served: Any) -> None:
     assert client.json("PUT", "/api/v1/cameras/default/tracks/nope", {"codec": "h264"})[0] == 404
     status, body = client.json("PUT", "/api/v1/cameras/default/frigate", {"base_url": "ftp://x"})
     assert status == 400 and body["error"]["message"]
+    # The console clears the address by sending null.
+    status, body = client.json(
+        "PUT", "/api/v1/cameras/default/frigate", {"base_url": "http://frigate.example.test:5000"}
+    )
+    assert status == 200
+    status, body = client.json("PUT", "/api/v1/cameras/default/frigate", {"base_url": None})
+    assert status == 200 and not service.frigate_settings()["configured"]
+    assert client.json("PUT", "/api/v1/cameras/default/frigate", {})[0] == 400
 
 
 def test_legacy_preset_delete(served: Any) -> None:

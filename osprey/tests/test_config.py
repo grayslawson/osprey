@@ -272,3 +272,27 @@ def test_pre_rename_cuckoo_files_are_still_used(tmp_path: Path, monkeypatch: pyt
     opts = main.resolve_options(_args(config=None))
     assert opts.host == "4.4.4.4"
     assert str(opts.cert) == "osprey.pem"
+
+
+def test_merged_results_never_alias_the_defaults() -> None:
+    effective = config.merged({})
+    effective["ports"]["onvif"] = 1
+    effective["ptz"]["max_speed"] = 1
+    assert config.DEFAULTS["ports"]["onvif"] != 1
+    assert config.DEFAULTS["ptz"].get("max_speed") != 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{not json",
+        json.dumps({"host": "192.0.2.10", "mqtt": {"enabled": True, "host": "x", "port": "x"}}),
+        json.dumps({"host": "192.0.2.10", "discovery": {"hello_interval": "soon"}}),
+    ],
+)
+def test_a_bad_config_file_is_a_clean_error(tmp_path: Path, body: str) -> None:
+    cfg = tmp_path / "osprey.json"
+    cfg.write_text(body)
+    with pytest.raises(SystemExit) as raised:
+        main.resolve_options(_args(config=str(cfg)))
+    assert "invalid" in str(raised.value)

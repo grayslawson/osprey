@@ -41,8 +41,10 @@ class Store:
         except (OSError, ValueError, json.JSONDecodeError):
             return None
 
-    def save(self, value: str) -> str:
-        value = validate_url(value)
+    def save(self, value: str | None) -> str | None:
+        """Store a validated URL, or clear it with ``None``."""
+        if value is not None:
+            value = validate_url(value)
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd, temporary = tempfile.mkstemp(prefix=".frigate-", dir=self.path.parent)
