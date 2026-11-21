@@ -59,6 +59,30 @@ presets it found. Frigate also lower-cases preset names, so names that differ
 only in case collide. Use names such as `home`, `back-porch` and
 `lower-gate`, and set `onvif.autotracking.return_preset` to the exact one.
 
+## Autotracking
+
+Autotracking is a Frigate setting on the same camera entry. A minimal block,
+with a full-frame zone because Frigate needs a non-empty `required_zones`:
+
+```yaml
+cameras:
+  driveway_ptz:
+    zones:
+      ptz_viewport:
+        coordinates: 0,0,1,0,1,1,0,1
+    onvif:
+      host: 192.0.2.10
+      port: 8000
+      autotracking:
+        enabled: true
+        track: [person]
+        required_zones: [ptz_viewport]
+        return_preset: home
+```
+
+Frigate's autotracking documentation covers the other keys, such as
+`zooming` and `timeout`.
+
 ## Manual control and autotracking
 
 When a person moves the camera from the console, MQTT or a non-autotracker

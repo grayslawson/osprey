@@ -41,6 +41,18 @@ uses the zone-based firewall.
      --api-key-file ~/.config/osprey/unifi-api-key --apply
    ```
 
+`osprey` here is the command from the Python wheel or `./scripts/osprey` in a
+source checkout. With only the container image, mount the key into a one-off
+container:
+
+```sh
+docker run --rm --network host --user "$(id -u)" \
+  -v ~/.config/osprey/unifi-api-key:/run/unifi-api-key:ro \
+  ghcr.io/grayslawson/osprey:0.9.0b2 protect-guard \
+  --console https://192.0.2.1 --camera-ip 192.0.2.20 \
+  --api-key-file /run/unifi-api-key
+```
+
 Without `--apply` the command only reads. With it, the command creates one
 policy named `Osprey guard: camera to Protect` and changes nothing else. Use
 `--site` for a site other than `default`. The console certificate is usually
