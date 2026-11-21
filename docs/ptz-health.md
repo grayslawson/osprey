@@ -1,21 +1,15 @@
-# PTZ health, recovery, and the home preset
+# PTZ health, recovery and the home preset
 
-This guide explains how Osprey keeps the camera's PTZ channel truthful and
-recoverable, what the operator console and `/healthz` report, and how the
-`home` preset that Frigate returns to is provisioned and persisted.
+How Osprey detects and recovers a stuck PTZ channel, what `/healthz` and
+`/metrics` report, and how the `home` preset is created and kept.
 
 ## What can go wrong
 
-The camera opens a dedicated `ptz1` websocket back to Osprey. That socket can
-stay connected, with keepalives still flowing, while the camera's PTZ process
-has stopped answering position queries. A socket that is still open does not
-prove the PTZ process is alive. Only a motor-state push or a
-`GetCurrentPosition` reply proves that.
-
-Before this change, a move that never reported its final position put ONVIF
-`GetStatus` into `UNKNOWN` with `motor state timeout`, and that state cleared
-only when the camera next sent a position. When the camera had stopped
-answering, the state stayed stuck until Osprey was restarted.
+The camera opens a dedicated `ptz1` WebSocket back to Osprey. That socket can
+stay open, keepalives and all, after the camera's PTZ process has stopped
+answering. Only a motor-state push or a `GetCurrentPosition` reply proves the
+PTZ process is alive, so Osprey watches for those and recovers the channel
+when they stop.
 
 ## Motion state rules
 
@@ -40,7 +34,7 @@ or push resets the count. Osprey recycles the `ptz1` socket when
 `max_unanswered` requests (default 3) have gone unanswered **and** the oldest
 has been silent for at least `min_silence_sec` (default 10 s) while no video
 track is live, or when the oldest unanswered request is more than
-`reply_timeout_sec` old (default 30 s of silence, regardless of video). The existing recovery then
+`reply_timeout_sec` old (default 30 s, regardless of video). Recovery then
 sends Disable/Enable PTZ on the management channel. Recovery retries are
 bounded and back off exponentially (up to 5 attempts, at most 30 s apart). A
 camera that reconnects but still never answers uses up the same attempt
@@ -57,21 +51,28 @@ the position every `probe_interval_sec` (2 s). A healthy idle channel is asked
 every `idle_probe_sec` (60 s) so that a silent failure is found before the next
 move needs the camera.
 
-All of these values can be set in `osprey.json`:
+The `ptz` block in `osprey.json`, with its defaults:
 
 ```json
 {
   "ptz": {
+    "max_speed": 1000,
     "auto_home": true,
     "reply_timeout_sec": 30.0,
     "min_silence_sec": 10.0,
     "max_unanswered": 3,
     "probe_interval_sec": 2.0,
     "idle_probe_sec": 60.0,
-    "presets_file": null
+    "presets_file": null,
+    "manual_hold_sec": 30.0,
+    "autotrack_users": ["frigate"]
   }
 }
 ```
+
+`max_speed` is described in [configuration](configuration.md#ptz-speed), and
+`manual_hold_sec` and `autotrack_users` in
+[Frigate integration](frigate-integration.md#manual-control-and-autotracking).
 
 The operator console's **Recover PTZ** button sends `POST /control/ptz/recover`.
 Like the other `/control/*` routes, it requires the admin session and the CSRF
@@ -80,7 +81,7 @@ even if an earlier recovery gave up.
 
 Log lines to alert on: `PTZ watchdog:` (ERROR), `PTZ recovery timed out`
 (ERROR), `PTZ motor state timeout` (WARNING), `PTZ move refused:` (WARNING,
-rate-limited to once every 30 s per reason). RTSP client disconnects are now
+rate-limited to once every 30 s per reason). RTSP client disconnects are
 logged at DEBUG.
 
 ## Health endpoint
@@ -91,8 +92,9 @@ degraded, or an adopted camera has delivered no video frame on any track for
 more than 30 s (`status` is `degraded`; a camera that has never sent a frame
 counts once Osprey has been up that long). `camera_connected` is whether the
 camera's management socket is up; `tracks` holds each track's `last_frame_age`
-in seconds and `video_frame_age_sec` is the smallest of them. The response holds state and counters only: no MAC address, IP
-address, preset name, or credential.
+in seconds, and `video_frame_age_sec` is the smallest of them. The response
+holds state and counters only: no MAC address, IP address, preset name or
+credential.
 
 ```json
 {"status":"degraded","camera":true,"camera_connected":true,"adopted":true,
@@ -121,7 +123,7 @@ the same state is also published to `osprey/<device>/state/ptz` (see
 ## Home preset and persistence
 
 The camera stores preset slots itself, but it has no known command for listing
-them back. Osprey now saves its own table of named positions in
+them back. Osprey keeps its own table of named positions in
 `osprey-presets.json`, next to the TLS certificate in the writable state
 directory. You can change the location with `ptz.presets_file` or the
 `OSPREY_PRESETS_FILE` environment variable. Osprey reloads the table when the
@@ -134,16 +136,14 @@ warning. This does not move the camera. To turn it off, set
 `ptz.auto_home: false`. To replace the automatic home, point the camera where
 you want it and click **Save current view as home**, or call ONVIF
 `SetHomePosition`. ONVIF `GotoHomePosition` moves to that preset, and
-`HomeSupported` is now advertised.
+`HomeSupported` is advertised.
 
 After `home` is first created, restart Frigate or reinitialize its ONVIF
 connection so that it reloads the preset list. See
-[Frigate integration](frigate-integration.md#named-position-discovery-and-refresh).
+[Frigate integration](frigate-integration.md#presets).
 
 ### Upgrade and rollback
 
-Upgrading needs no action. The first start creates `osprey-presets.json`. Any
-presets saved before the upgrade only ever lived in memory, so save them again.
-To roll back, revert the release. The older release ignores the extra file and
-the `ptz` config block, but it rejects nothing, because the older config loader
-does not validate unknown keys.
+The first start of a release with this feature creates `osprey-presets.json`.
+Presets saved before that lived only in memory, so save them again. An older
+release ignores the file and the `ptz` block.

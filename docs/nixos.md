@@ -1,15 +1,15 @@
-# NixOS packaging
+# NixOS
 
-`flake.nix` exports `packages.<system>.default` and `nixosModules.default`. The
-package is built from the source tree and its version comes from the root
-`VERSION` file. The module runs Osprey as a DynamicUser systemd service:
+`flake.nix` exports `packages.<system>.default` and `nixosModules.default`.
+The package builds from the source tree, with its version from `VERSION`. The
+module runs Osprey as a hardened `DynamicUser` systemd service:
 
-- writable state (certificate, first-run wizard overlay, `frigate.json`) lives
-  in `/var/lib/osprey`, which systemd creates and owns;
-- the generated configuration is a read-only file in the Nix store;
-- admin, ONVIF, and RTSP passwords are read from files with `LoadCredential`,
-  so they never enter the store;
-- `openssl` and `ffmpeg` are on the service PATH through the package wrapper.
+- State (certificate, presets, patrols, `frigate.json`) lives in
+  `/var/lib/osprey`, which systemd creates and owns.
+- The configuration is generated into the Nix store and is read-only.
+- Admin, ONVIF and RTSP passwords are read from files with `LoadCredential`,
+  so they never enter the store.
+- The package wrapper puts `openssl` and `ffmpeg` on the service's `PATH`.
 
 Add the flake to a NixOS host configuration:
 
@@ -46,14 +46,16 @@ Add the flake to a NixOS host configuration:
 | `enable` | Start the service. |
 | `host` | Concrete LAN address the camera and clients use. Wildcards are rejected by an assertion. |
 | `announce` | Send and answer WS-Discovery on UDP 3702 (default `true`). |
+| `stateDirectory` | Name of the state directory under `/var/lib`. Read-only, `osprey`. |
 | `ports.*` | Listener ports; defaults are control 7442, ingest 7550, snapshot 7444, RTSP 8554, ONVIF 8000, discovery 3702. |
 | `adminPasswordFile`, `onvifPasswordFile`, `rtspPasswordFile` | Paths to secret files, usually from sops-nix or agenix. Each is loaded through `LoadCredential`. |
 | `openFirewall` | Open the TCP ports for control, ingest, snapshot, RTSP, and ONVIF, and UDP for discovery. Default `false`. |
 | `package` | Override the Osprey package. |
 
-The MQTT password is not read from a file by this module yet. Keep MQTT
-disabled in NixOS deployments until that is added, or set it through the
-first-run wizard.
+The module has no options for MQTT or the
+[media persona](protect-dual-adoption.md) yet, and its generated
+configuration is read-only, so neither can be enabled through it. Patrols set
+up in the console work, because they are saved in the state directory.
 
 ## Networking
 
@@ -73,8 +75,8 @@ nix flake check               # builds the package
 nixos-rebuild dry-build --flake .#example
 ```
 
-The VM test that boots the module and checks `/healthz` is planned for Phase 2
-(see `specs/002-python-package-cli`); it is not in the flake yet.
+A VM test that boots the module and checks `/healthz` is planned in
+`specs/002-python-package-cli`. It is not in the flake yet.
 
 Keep the flake input pinned with a lock file and review Osprey releases before
 updating it. Use your deployment's secret manager for admin, camera, and ONVIF

@@ -1,52 +1,50 @@
-# Osprey documentation map
+# Osprey documentation
 
-This index is the shortest route into the repository knowledge base. Start here
-after reading [`AGENTS.md`](../AGENTS.md), then open only the domain guide that
-matches the task.
+## Set up
 
-## Product and architecture
+- [Installation](installation.md): container, Home Assistant, NixOS, Proxmox,
+  PyPI and package managers, updates and rollback.
+- [NixOS](nixos.md): the flake package and module.
+- [Configuration](configuration.md): config keys, environment variables and
+  flags.
+- [Onboarding checks](onboarding-runbook.md): local preflight before a camera
+  is connected.
+- [Camera models](camera-models.md): what is supported, and `osprey probe`.
+- [Multiple cameras](multi-camera.md): the camera allow-list and per-camera
+  routes.
 
-- [Architecture](../osprey/ARCHITECTURE.md) — process boundaries, protocol layers,
-  and runtime ownership.
-- [Design notes](../DESIGN.md) — user-facing design decisions and trade-offs.
-- [Camera models](camera-models.md): supported and experimental models, and `osprey probe`
-- [Multi-camera setup](multi-camera.md) — registering and operating more than one
-  camera.
+## Use with Frigate and Protect
 
-## Install and operate
+- [Frigate](frigate-integration.md): the camera entry, presets, autotracking
+  and manual hold.
+- [Frigate connection settings](frigate-connection.md): the Frigate URL API.
+- [Sentry patrol](sentry.md): idle preset tours and the Frigate zone caveat.
+- [UniFi Protect alongside Frigate](protect-dual-adoption.md): the media-only
+  ONVIF device.
+- [Protect guard](protect-guard.md): keep Protect from adopting the camera.
+- [MQTT](mqtt.md): commands and state topics.
 
-- [Installation](installation.md) — Docker/Podman, Proxmox, NixOS, Home Assistant,
-  updates, rollback, and development setup.
-- [Onboarding runbook](onboarding-runbook.md) — first-run setup and recovery.
-- [Frigate integration](frigate-integration.md) — connect Osprey to an existing
-  Frigate instance.
-- [Frigate connection settings](frigate-connection.md) — endpoint and health
-  configuration.
-- [Sentry patrol](sentry.md) — the idle PTZ patrol: tours per camera, and how it
-  steps aside for a person or for Frigate's autotracking.
-- [MQTT](mqtt.md) — optional commands and event publishing.
-- [PTZ health](ptz-health.md) — motion state rules, watchdog recovery, `/healthz`,
-  and the persisted `home` preset.
-- [Security](security.md) — trust boundaries, authentication, and exposure rules.
-- [Operator app](operator-ui.md) — the browser app, its JSON API, and Home
-  Assistant ingress.
-- [Protect dual adoption](protect-dual-adoption.md) — the media persona, and the
-  limits of sharing one camera with two clients.
+## Operate
 
-## Development and validation
+- [Operator console](operator-ui.md): the browser app and its API.
+- [PTZ health](ptz-health.md): motion rules, watchdog, `/healthz`, `/metrics`
+  and the `home` preset.
+- [Authentication](authentication.md): console password, sessions, ingress and
+  ONVIF users.
+- [Security](security.md): trust boundaries and what each port exposes.
 
-- [Harnesses](../osprey/harness/README.md) — opt-in hardware and client acceptance
-  checks.
-- [Repository sync](repository-sync.md) — Forgejo ownership, GitHub mirroring, and
-  GHCR release responsibilities.
-- [NixOS](nixos.md) — declarative package and module usage.
-- [Tests](../osprey/tests/README.md) — test layout and focused commands.
-- [Quality map](quality.md) — domain-by-domain evidence and known limits.
+## Develop
 
-## Maintenance rules
+- [Architecture](../osprey/ARCHITECTURE.md): the controller and ONVIF layers.
+- [Controller README](../osprey/README.md): running from source and protocol
+  notes.
+- [Tests](../osprey/tests/README.md) and
+  [harnesses](../osprey/harness/README.md).
+- [Console design notes](../DESIGN.md).
+- [Quality map](quality.md): evidence per domain.
+- [Repository and mirrors](repository-sync.md): which system owns what.
+- [Contributing](../CONTRIBUTING.md) and [agent guide](../AGENTS.md).
 
-When behavior changes, update the relevant guide and this index if a new domain
-or entry point is introduced. Keep private addresses, credentials, recordings,
-and deployment state out of all documentation. If a guide is provisional, label
-the limitation and verification date in that guide rather than relying on chat
-history.
+When behavior changes, update the guide that covers it and add new guides to
+this index. Keep credentials, private addresses and recordings out of every
+page.

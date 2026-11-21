@@ -6,42 +6,37 @@ configuration:
   advertised_host:
     name: "Advertised host"
     description: >-
-      The address of this Home Assistant host that the camera can reach. The
-      camera connects to Osprey, so this has to be an address on the camera's
-      network, not an internal one.
+      This host's address on the camera's network. Osprey gives it to the
+      camera and to ONVIF clients, so it cannot be an internal address.
   camera_ip:
     name: "Camera IP address"
     description: >-
-      The camera's IP address. Optional, and only an identity guard: Osprey
-      checks that the camera it talks to is the one that was set up.
+      Optional. Osprey rejects a camera that connects from any other address.
   camera_mac:
     name: "Camera MAC address"
     description: >-
-      The camera's MAC address. Optional, and only an identity guard: Osprey
-      checks that the camera it talks to is the one that was set up.
+      Optional. Osprey rejects a camera with any other MAC address.
   camera_name:
     name: "Camera name"
     description: >-
-      The name Osprey announces to the camera and shows in the operator
-      console.
+      The controller name shown to the camera and in ONVIF discovery.
   announce:
-    name: "Announce to the camera"
+    name: "Announce on the network"
     description: >-
-      Whether Osprey announces itself to the camera when it starts. Turn it
-      off when the camera is managed by another controller.
+      Multicast a WS-Discovery Hello so ONVIF clients find Osprey. Osprey
+      answers discovery probes either way.
   tracks:
     name: "Tracks"
     description: >-
-      The camera's video tracks and their codecs, for example
-      "video1:h264,video2:h265". Osprey reads them from the camera when it
-      starts, so this only has to be set when the camera will not report them.
+      The video tracks to arm and their codecs, for example
+      "video1:h264,video2:h265". Osprey arms exactly these tracks.
   onvif_port:
     name: "ONVIF port"
     description: >-
-      The port the ONVIF service listens on. Frigate connects to this port.
+      The port for ONVIF and the operator console. Frigate connects here.
   rtsp_port:
     name: "RTSP port"
     description: >-
-      The port the RTSP service listens on. Frigate connects to this port.
+      The port for RTSP streams. Frigate connects here.
 network:
   8000/tcp: "Operator console (HTTP)"

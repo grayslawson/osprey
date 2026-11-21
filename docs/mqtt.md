@@ -1,53 +1,72 @@
-# MQTT automation
+# MQTT
 
-MQTT is optional and disabled by default. When enabled, Osprey connects to the
-configured broker; it does not run or expose a broker of its own.
+MQTT is off by default. When enabled, Osprey connects to your broker as a
+client; it does not run a broker. The bridge needs the `paho-mqtt` package,
+which the container image includes and the wheel installs with
+`osprey-ptz[mqtt]`.
 
 ```json
 {
   "mqtt": {
     "enabled": true,
-    "host": "mqtt.example",
+    "host": "mqtt.example.com",
     "port": 8883,
     "tls": true,
     "username": "osprey",
-    "password": "read-from-your-secret-manager",
+    "password": "change-me",
     "base_topic": "osprey",
     "device": "driveway"
   }
 }
 ```
 
-Put credentials in a root-owned deployment secret, not in `osprey.json` or
-documentation. TLS verifies broker certificates when `tls` is enabled. Use
-broker ACLs so only trusted publishers can write Osprey command topics.
+`port` defaults to 8883 with `tls` and 1883 without. With `tls` on, the
+broker certificate is verified. `base_topic` and `device` default to
+`osprey`.
 
-Commands are JSON and use QoS 1:
+`mqtt.password` in `osprey.json` is the only way to give Osprey the broker
+password; there is no environment variable or file option yet. Keep the file
+mode `0600` and out of Git, and use a broker account that can only reach
+Osprey's topics.
 
-| Topic | Payload |
-| --- | --- |
+## Commands
+
+Commands are JSON on QoS 1, under `<base_topic>/<device>/command/`:
+
+| Topic | Example payload |
+|---|---|
 | `osprey/driveway/command/ptz/step` | `{"axis":"pan","direction":1,"step":4}` |
 | `osprey/driveway/command/ptz/zoom` | `{"percent":50}` |
 | `osprey/driveway/command/preset/goto` | `{"name":"gate"}` |
 | `osprey/driveway/command/home` | `{}` |
 | `osprey/driveway/command/sentry` | `{"camera":"AABBCCDDEEFF","enabled":true,"points":[{"name":"gate"}]}` |
 
-The sentry command configures the idle [patrol](sentry.md). `camera` is a
-camera MAC or a display name; every other field is optional and an absent field
-keeps its current value. Unlike the movement commands it does not take the
-movement gate and does not start a manual hold — it configures a patrol rather
-than moving the camera, and it must not hold up a move in progress.
+Movement commands go through the same per-camera movement lease as the
+console, the patrol and Frigate, and start a manual hold. If the camera is
+busy, the command fails with an error rather than forcing the move. Retained
+commands are ignored, so a reconnect never replays a move.
 
-Osprey publishes a structured, non-retained result or error on
-`osprey/driveway/event/control`. PTZ state is published on
-`osprey/driveway/state/ptz` whenever it changes and at most once per second
-while it is unchanged, for example
-`{"camera":"g5-ptz-…","state":"UNKNOWN","pan_tilt":"UNKNOWN","zoom":"UNKNOWN","error":"motor state timeout","position":{…},"at":…}`
-(see [PTZ health](ptz-health.md)). Patrol state is published on
-`osprey/driveway/state/sentry`. Retained command messages are deliberately
-ignored so reconnecting never replays camera movement. MQTT commands enter the
-same movement gate as console, sentry, and tracking producers; contention is
-reported as an error instead of bypassing camera safety.
+The `sentry` command configures the [patrol](sentry.md). `camera` is a MAC or
+display name. Every other field is optional, and a missing field keeps its
+current value. It does not take the movement lease or start a manual hold,
+because it changes configuration rather than moving the camera.
 
-For multiple cameras, give each camera a distinct `device` value and follow the
-[multi-camera schema](multi-camera.md).
+## State and events
+
+| Topic | Contents |
+|---|---|
+| `osprey/driveway/event/control` | Result or error for each command. Not retained. |
+| `osprey/driveway/state/ptz` | PTZ state and position, on change and at most once a second. |
+| `osprey/driveway/state/sentry` | Patrol state. |
+
+A `state/ptz` message looks like this (see [PTZ health](ptz-health.md)):
+
+```json
+{"camera":"g5-ptz-aabbccddeeff","state":"UNKNOWN","pan_tilt":"UNKNOWN",
+ "zoom":"UNKNOWN","error":"motor state timeout","position":{},"at":0}
+```
+
+Payloads are validated: `step` is 1 to 20, `percent` is 0 to 100, and a
+preset name is at most 64 characters. Movement commands carry no camera field,
+so MQTT movement suits a controller with one camera. Only `sentry` names a
+camera.

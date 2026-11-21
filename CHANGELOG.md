@@ -6,108 +6,97 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
 ## Unreleased
 
 ### Features
-- **onvif:** A media persona for NVRs. `ports.onvif_read_only` now serves the
-  camera as a second ONVIF device — the same media, no PTZ at all — with its
-  own serial, MAC, hostname and friendly name (`<camera name> (media)`), so an
-  NVR such as UniFi Protect records it as a camera of its own and can never
-  move the camera head. WS-Discovery answers with one ProbeMatch per device,
-  the media persona first, and a probe that asks for a PTZ device is answered
-  by the primary persona alone. See docs/protect-dual-adoption.md.
+- **onvif:** Media persona for NVRs. `ports.onvif_read_only` serves the camera
+  as a second ONVIF device with the same media and no PTZ. It has its own
+  serial, MAC, hostname and friendly name (`<camera name> (media)`), so an NVR
+  such as UniFi Protect records it as a separate camera and cannot move the
+  head. WS-Discovery answers with one ProbeMatch per device, media persona
+  first, and a probe for a PTZ device gets the primary alone. See
+  docs/protect-dual-adoption.md.
 
-### Fixes
-- **discovery:** A discovery message that names every persona now stays inside
-  one datagram — the 1472 bytes a 1500-byte MTU leaves for the UDP payload —
-  so it is not split into IP fragments, which some networks drop and some
-  clients reassemble badly. The metadata version, the device type, the `To`
-  header, the XML declaration and the hardware scope are given up, in that
-  order, and only when the personas would
-  not otherwise fit; a controller that serves one camera still sends the full,
-  standard message.
+### Bug fixes
+- **discovery:** A reply that names both personas now fits in one datagram
+  (1472 bytes on a 1500-byte MTU), so it is not split into IP fragments that
+  some networks drop. When needed, the reply drops, in order, the metadata
+  version, the device type, the `To` header, the XML declaration and the
+  hardware scope. A controller with one camera still sends the full message.
 
 ## [0.9.0b1] - 2026-11-20
 
 First beta. G5 PTZ fully supported; other UniFi PTZ models experimental.
 
 ### Features
-- **sentry:** Idle PTZ patrol mode. Set named preset points per camera and
-  the camera cycles between them at a fixed cadence and speed while idle. The
-  patrol yields to a manual hold and to Frigate autotracking: autotracking
-  commands take priority, and the patrol waits out `tracking_hold_sec` before
-  resuming its sweep. Configurable per camera, with its own points, cadence,
-  speed and tracking hold. See docs/sentry.md.
-- **sentry:** Patrols survive a restart. The operator config file is the
-  baseline and runtime changes (including patrols removed at runtime) are
-  persisted to `<state_dir>/sentry.json`.
-- **sentry:** Patrol control and status are exposed on all four surfaces:
-  the operator config file, the REST API, the operator web console (Patrol
-  panel) and MQTT (`command/sentry`, `state/sentry`).
-- **sentry:** A third arbitration source, `patrol`, joins `manual` and
-  `auto`, so the controller can tell a patrol move apart from an autotracking
-  move and record autotracking activity per camera.
-- **ptz:** `goto_preset` reports a refused move instead of silently
-  succeeding, so a patrol never consumes a tour point for a move that never
-  went out.
-- **ptz:** Manual wins, then resume. A person's PTZ command (console, MQTT, a
-  non-autotrack ONVIF user such as Protect) overrides Frigate and holds it off for
-  `ptz.manual_hold_sec` (default 30 s). New `ptz.autotrack_users` setting.
-- **protect-guard:** `osprey protect-guard --check/--apply` checks for or
-  creates the UniFi firewall policy that keeps Protect from adopting the
-  physical camera; `osprey doctor` and startup warn when the read-only ONVIF
+- **sentry:** Idle PTZ patrol. Each camera cycles through named presets at
+  its own cadence and speed while idle. Frigate autotracking and a manual hold
+  take priority, and the patrol waits `tracking_hold_sec` after tracking ends.
+  See docs/sentry.md.
+- **sentry:** Patrols survive a restart. `osprey.json` is the baseline, and
+  runtime changes, including removals, are saved to `sentry.json` in the
+  state directory.
+- **sentry:** Patrols can be controlled from the config file, the REST API,
+  the console's Patrol page and MQTT (`command/sentry`, `state/sentry`).
+- **sentry:** A third arbitration source, `patrol`, joins `manual` and `auto`,
+  so a patrol move is told apart from an autotracking move and autotracking
+  activity is recorded per camera.
+- **ptz:** `goto_preset` reports a refused move instead of returning success,
+  so a patrol never spends a point on a move that did not happen.
+- **ptz:** Manual wins, then resume. A person's PTZ command (console, MQTT, or
+  a non-autotrack ONVIF user such as Protect) overrides Frigate and holds it
+  off for `ptz.manual_hold_sec` (default 30 s). New `ptz.autotrack_users`
+  setting.
+- **protect-guard:** `osprey protect-guard` checks for, and with `--apply`
+  creates, the UniFi firewall policy that keeps Protect from adopting the
+  physical camera. `osprey doctor` and startup warn while the read-only ONVIF
   persona is on. See docs/protect-guard.md.
 - **probe:** `osprey probe` writes a redacted, read-only data bundle for an
   unsupported UniFi PTZ model. Models other than the G5 PTZ are marked
-  experimental (log warning, `support` in the operator API).
-- **onvif:** `onvif.log_calls` logs every SOAP call with user, peer and PTZ source.
-- **health:** Degrade `/healthz` on stalled video and add `/metrics`.
+  experimental (a log warning and `support` in the operator API).
+- **onvif:** `onvif.log_calls` logs every SOAP call with user, peer and PTZ
+  source.
+- **health:** `/healthz` degrades on stalled video, and `/metrics` is new.
 
 ### Packaging
-- **logs:** Application logs persist to a rotating file in the state volume
-  (`<state_dir>/logs/osprey.log`, 5 MiB x 3) instead of being lost with the
-  container. Log output is redacted before it is written.
-- Version 0.9.0b1. Release workflow accepts PEP 440 pre-release tags and
-  publishes them as pre-releases (image tags `0.9.0b1` and `v0.9.0b1`; `latest`
-  moves only on final releases).
-- **npm:** Restored the `@osprey-ptz/cli` channel. The launcher runs the
-  entrypoint rather than a non-existent binary and exposes `doctor`, `probe`,
-  `protect-guard` and `version`.
-- **chocolatey:** Restored the Chocolatey channel with the `osprey` package.
+- **logs:** Logs persist to a rotating, redacted file in the state volume
+  (`<state_dir>/logs/osprey.log`, 5 MiB x 3).
+- Version 0.9.0b1. The release workflow accepts PEP 440 pre-release tags and
+  publishes them as pre-releases, with image tags `0.9.0b1` and `v0.9.0b1`.
+  `latest` moves only on final releases.
+- **npm:** `@osprey-ptz/cli` is back. It runs the image entrypoint and offers
+  `doctor`, `probe`, `protect-guard` and `version`.
+- **chocolatey:** The `osprey` Chocolatey package is back.
 - **homebrew:** The Homebrew tap ships a formula for the CLI.
-- **homeassistant:** The add-on is published as a Home Assistant app, and the
-  documentation uses the current 2026.11 apps terminology.
-- **homeassistant:** The app repository `grayslawson/osprey-ha-apps` exists
-  and is kept in step by a scheduled mirror, so the app can be installed from
-  Home Assistant. The add-on pins the image it installs to the add-on version
-  instead of pulling whatever was published last.
-- Issue forms: bug report and camera model support.
+- **homeassistant:** The add-on is published as a Home Assistant app, using
+  the 2026.11 "apps" wording.
+- **homeassistant:** The app repository `grayslawson/osprey-ha-apps` is live
+  and kept in step by a scheduled mirror. The add-on pins its image to the
+  add-on version.
+- Issue forms for bug reports and camera model support.
 
 ### Repository
-- GitHub `grayslawson/osprey` is the canonical repository. The Forgejo
-  instance is a read-only pull mirror of it, synchronised hourly; the
-  pre-rename Forgejo tree is kept frozen as `grays/osprey-legacy`.
-  See docs/repository-sync.md.
+- GitHub `grayslawson/osprey` is the canonical repository. Forgejo holds a
+  read-only pull mirror, synchronised hourly, and keeps the pre-rename tree
+  frozen as `grays/osprey-legacy`. See docs/repository-sync.md.
 
 ### Renamed: cuckoo to osprey
 - The controller source moved from `cuckoo/` to `osprey/`. Deployments that
-  mount or run `cuckoo/main.py` directly must switch to `osprey/main.py`. The
-  release image, Home Assistant add-on, NixOS package and PyPI wheel are updated.
+  run `cuckoo/main.py` directly must switch to `osprey/main.py`. The image,
+  Home Assistant add-on, NixOS package and PyPI wheel are updated.
 - Default file names are now `osprey.json` and `osprey.pem`. An existing
-  `cuckoo.json` or `cuckoo.pem` is still used when the new file does not exist,
-  so an upgraded camera keeps trusting its certificate.
-- Logger names changed from `cuckoo.*` to `osprey.*`. Update any log filters.
-- `handoff.sh` reads `OSPREY_*` variables and falls back to the old `CUCKOO_*` names.
+  `cuckoo.json` or `cuckoo.pem` is used when the new file is missing, so an
+  upgraded camera keeps trusting its certificate.
+- Logger names changed from `cuckoo.*` to `osprey.*`. Update log filters.
+- `handoff.sh` reads `OSPREY_*` variables and falls back to `CUCKOO_*`.
 - The WS-Discovery device UUID is unchanged, so NVRs keep the same device.
 
 ### Bug fixes
 - **sentry:** An autotracker now takes the camera from a patrol that is still
-  travelling to its next point. The first autotracking command of a detection
-  used to be refused as "the camera is already moving" for as long as the head
-  was moving, so the tracking never started.
-- **homeassistant:** The release workflow's add-on version check ran a shell
-  expression whose quoting built a different regular expression than it
-  appeared to, and the Home Assistant image job failed. The check now runs,
-  and a test executes the workflow step for real.
+  travelling. The first tracking command of a detection was refused as "the
+  camera is already moving" while the head moved, so tracking never started.
+- **homeassistant:** The release workflow's add-on version check built a
+  different regular expression than it appeared to, and the image job failed.
+  The check now works, and a test runs the workflow step.
 - **homeassistant:** A pre-release no longer moves the `latest` add-on image
-  tag, so a beta cannot become the add-on that an existing install pulls.
+  tag, so existing installs never pull a beta.
 - **ptz:** Compare the recovery re-arm deadline without float subtraction.
 - **ptz:** Chain FOV-scaled `ContinuousMove` steps and avoid reversing on Stop.
 - **ptz:** Cap camera reboot requests and back off the recovery re-arm.
