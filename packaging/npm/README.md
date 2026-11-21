@@ -6,7 +6,7 @@ not install Docker or Podman and never starts the controller.
 ```sh
 npm install --global @osprey-ptz/cli@next   # pre-releases; drop @next for stable
 export OSPREY_RUNTIME=docker                # or podman
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b1
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2
 osprey doctor --host 192.0.2.10 --camera 192.0.2.20 \
   --frigate http://frigate.example.com:5000
 ```
