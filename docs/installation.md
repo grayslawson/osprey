@@ -367,3 +367,8 @@ maintenance window first.
 
 `compose.yaml` builds from the checkout and mounts the source trees. Run
 `make test` first. It is not an upgrade path for a production camera.
+
+It publishes only ONVIF and RTSP. To point a real camera at a development
+build, add `-f compose.physical.yaml` with an env file copied from
+`.env.physical.example`; add `-f compose.readonly.yaml` for the
+[media-only ONVIF device](protect-dual-adoption.md).
