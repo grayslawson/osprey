@@ -48,7 +48,7 @@ container:
 ```sh
 docker run --rm --network host --user "$(id -u)" \
   -v ~/.config/osprey/unifi-api-key:/run/unifi-api-key:ro \
-  ghcr.io/grayslawson/osprey:0.9.0b2 protect-guard \
+  ghcr.io/grayslawson/osprey:0.9.0b3 protect-guard \
   --console https://192.0.2.1 --camera-ip 192.0.2.20 \
   --api-key-file /run/unifi-api-key
 ```

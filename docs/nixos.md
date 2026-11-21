@@ -15,7 +15,7 @@ Add the flake to a NixOS host configuration:
 
 ```nix
 {
-  inputs.osprey.url = "github:grayslawson/osprey/v0.9.0b2";
+  inputs.osprey.url = "github:grayslawson/osprey/v0.9.0b3";
 
   outputs = { self, nixpkgs, osprey, ... }: {
     nixosConfigurations.example = nixpkgs.lib.nixosSystem {

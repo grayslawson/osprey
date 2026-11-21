@@ -3,7 +3,7 @@
 All notable changes to Osprey are listed here. Entries are generated from
 Conventional Commit subjects by git-cliff (see cliff.toml).
 
-## Unreleased
+## [0.9.0b3] - 2026-11-21
 
 ### Bug fixes
 - **homeassistant:** The app can be installed. Its manifest named a tagged
@@ -16,6 +16,12 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
   the camera route, callback and Frigate checks fall back to Python instead
   of failing for lack of `ip` and `curl`. Run from a launcher-only install, a
   config file it cannot validate is a warning, not an error.
+
+### Documentation
+- Every install path was walked end to end as a new user. Gaps fixed: the
+  compose `.env`, the ONVIF user Frigate needs for autotracking, wheel and
+  npm installs from the release assets, the Chocolatey local source, and
+  signing in to the sentry API with `curl`.
 
 ## [0.9.0b2] - 2026-11-21
 
