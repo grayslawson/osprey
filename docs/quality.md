@@ -1,8 +1,8 @@
 # Osprey quality map
 
-This is a lightweight, reviewable quality ledger—not a claim that every
-integration is production-ready. Update a row when code, tests, or supported
-installations change. Use the linked evidence instead of relying on memory.
+This ledger records what each domain's tests prove. It does not claim that
+every integration is production-ready. Update a row when code, tests or
+supported installations change.
 
 | Domain | Primary code | Evidence | Current bar |
 | --- | --- | --- | --- |
@@ -11,6 +11,7 @@ installations change. Use the linked evidence instead of relying on memory.
 | Media and RTSP | `osprey/media.py`, `osprey/rtsp.py`, `osprey/snapshots.py` | `osprey/tests/test_rtsp.py`, `osprey/tests/test_rtsp_session.py`, `osprey/tests/test_media.py`, `osprey/tests/test_snapshots.py` | Codec and authentication behavior covered without hardware |
 | Administration and setup | `osprey/setup_wizard.py`, `osprey/main.py` | `osprey/tests/test_setup_wizard.py`, `osprey/tests/test_stack.py` | Safe generated state, error paths, and restart behavior |
 | Distribution | `docker/`, `homeassistant/`, `nix/`, `packaging/` | `homeassistant/validate.sh`, package workflow, Compose checks | Metadata and build inputs validated in CI |
+| Patrol and media persona | `osprey/sentry*.py`, `osprey/identity.py`, `osprey/discovery.py` | `osprey/tests/test_sentry*.py`, `osprey/tests/test_media_persona.py` | Fake-peer coverage; no hardware run in CI |
 | Security and operations | `SECURITY.md`, `scripts/osprey-doctor.sh` | `scripts/validate-repo.sh`, Trivy workflow, doctor tests | Explicit trust boundaries; deployment-specific verification remains required |
 
 ## Updating the ledger

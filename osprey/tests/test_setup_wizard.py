@@ -65,6 +65,15 @@ def test_setup_http_route_requires_token_and_returns_credentials(tmp_path: Path)
         assert response.getheader("Location") == "/setup"
         response.read()
 
+        # The page's inline script must be allowed to run, and a form that
+        # submits without it must never put the password in the URL.
+        client.request("GET", "/setup")
+        response = client.getresponse()
+        page = response.read().decode()
+        assert response.status == 200
+        assert "'unsafe-inline'" in response.getheader("Content-Security-Policy", "")
+        assert "<form id='setup-form' method='post'" in page
+
         payload = json.dumps({"setup_token": "wrong", "host": "x", "bind": "0.0.0.0"})
         client.request("POST", "/api/setup", payload, {"Content-Type": "application/json"})
         response = client.getresponse()
@@ -147,3 +156,9 @@ def test_setup_commit_rolls_back_all_artifacts_when_replacement_fails(
 
     assert manager.pending
     assert not list(tmp_path.glob("*"))
+
+
+def test_non_ascii_setup_token_is_refused_not_a_crash(tmp_path: Path) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="setup-token")
+    with pytest.raises(SetupError):
+        manager.save({}, "é")

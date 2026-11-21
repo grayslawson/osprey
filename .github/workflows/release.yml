@@ -94,7 +94,7 @@ jobs:
       - name: Record checksums
         run: |
           cd dist
-          sha256sum * > SHA256SUMS
+          sha256sum -- * > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: python-dist
@@ -133,7 +133,9 @@ jobs:
           tags: |
             type=pep440,pattern={{version}}
             # v-prefixed twin: the docs and scripts/osprey-update.sh pin vX.Y.Z tags.
-            type=pep440,pattern=v{{version}}
+            # A raw tag, because pep440 patterns collapse to {{version}} for
+            # pre-releases.
+            type=raw,value=v${{ needs.verify.outputs.version }}
             type=pep440,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ needs.verify.outputs.prerelease == 'false' }}
       - id: build
@@ -202,7 +204,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           registry-url: https://registry.npmjs.org
@@ -217,9 +219,16 @@ jobs:
             echo "npm package version ($package_version) does not match release version ($RELEASE_VERSION)" >&2
             exit 1
           fi
+      # Trusted publishing (OIDC) needs npm 11.5.1 or later; Node 22 bundles npm 10.
+      - name: Install an npm that supports trusted publishing
+        run: npm install -g npm@11.17.0
       - name: Publish the launcher
         working-directory: packaging/npm
-        run: npm publish --provenance --access public
+        env:
+          # npm 11 refuses a prerelease without a dist-tag, and `latest` must
+          # stay on the newest stable release.
+          DIST_TAG: ${{ needs.verify.outputs.prerelease == 'true' && 'next' || 'latest' }}
+        run: npm publish --provenance --access public --tag "$DIST_TAG"
 
   github-release:
     name: Create GitHub Release
@@ -249,8 +258,24 @@ jobs:
           set -euo pipefail
           mkdir -p ../../dist
           npm pack --pack-destination ../../dist
-          cp ../homebrew/osprey.rb ../../dist/osprey.rb
-          cp ../chocolatey/osprey.nuspec ../../dist/osprey.nuspec
+      # The tagged formula cannot hold its own archive's checksum, so the
+      # published one is computed from the archive the tag just created.
+      # Chocolatey ships through its feed as a built .nupkg, not as a bare nuspec.
+      - name: Build the Homebrew formula
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/sync-homebrew-tap.sh "$PWD" "$RUNNER_TEMP/tap" "$VERSION"
+          cp "$RUNNER_TEMP/tap/Formula/osprey.rb" dist/osprey.rb
+      - name: Record checksums for every asset
+        run: |
+          set -euo pipefail
+          cp compose.release.yaml dist/
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -258,7 +283,7 @@ jobs:
           PRERELEASE: ${{ needs.verify.outputs.prerelease == 'true' && '1' || '' }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" dist/* compose.release.yaml \
+          gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "Osprey $TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" \

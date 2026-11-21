@@ -196,7 +196,10 @@ def resolve_options(args: argparse.Namespace) -> Options:
     setup_mode = bool(getattr(args, "setup", False)) or os.environ.get("OSPREY_SETUP") == "1"
     if args.config and not os.path.exists(path) and not setup_mode:
         raise SystemExit(f"config file not found: {path}")
-    effective = config.merged(config.load(path))
+    try:
+        effective = config.merged(config.load(path))
+    except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError
+        raise SystemExit(f"invalid config file {path}: {exc}") from exc
     config_had_host = bool(effective.get("host"))
 
     if args.host is not None:
@@ -268,6 +271,11 @@ def resolve_options(args: argparse.Namespace) -> Options:
             frigate_url = validate_url(frigate_config["url"])
         except ValueError as exc:
             raise SystemExit(f"invalid runtime configuration: {exc}") from exc
+    try:
+        mqtt_config = mqtt_bridge.MqttConfig.from_mapping(effective.get("mqtt"))
+        hello_interval = float(discovery_settings.get("hello_interval", 300))
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(f"invalid runtime configuration: {exc}") from exc
     return Options(
         host=effective["host"],
         bind_host=str(effective.get("bind") or os.environ.get("OSPREY_BIND") or "0.0.0.0"),
@@ -292,7 +300,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
             else None
         ),
         cameras=registered,
-        mqtt=mqtt_bridge.MqttConfig.from_mapping(effective.get("mqtt")),
+        mqtt=mqtt_config,
         config_path=Path(path),
         setup_mode=setup_mode and not config_had_host,
         frigate_url=frigate_url,
@@ -302,7 +310,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
         onvif_log_calls=bool(onvif_settings.get("log_calls", False)),
         discovery_interface=discovery_settings.get("interface"),
         discovery_address=discovery_settings.get("address"),
-        hello_interval=float(discovery_settings.get("hello_interval", 300)),
+        hello_interval=hello_interval,
         discovery_scopes=tuple(discovery_settings.get("scopes") or ()),
     )
 

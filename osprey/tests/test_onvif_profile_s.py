@@ -282,6 +282,16 @@ def test_snapshot_token_from_get_snapshot_uri_is_accepted() -> None:
     assert headers["Cache-Control"] == "no-store"
 
 
+def test_snapshot_token_from_the_media_persona_works_on_the_primary_listener() -> None:
+    # The media persona's GetSnapshotUri points at the primary port, so both
+    # Services instances must accept each other's tokens.
+    media, _ = service()
+    primary, _ = service()
+    token = media.snapshot_token("protect", "video1")
+    status, _, _ = primary.snapshot_response("video1", query_token=token)
+    assert status == HTTPStatus.OK
+
+
 def test_snapshot_token_is_bound_to_its_profile() -> None:
     svc, _ = service()
     token = svc.snapshot_token("protect", "video1")
@@ -434,3 +444,9 @@ def test_each_soap_call_is_logged_with_user_peer_and_ptz_source(caplog: pytest.L
     assert f"ONVIF call Stop user=frigate peer={PROTECT_PEER} ptz_source=auto" in caplog.text
     assert "user=admin" in caplog.text and "ptz_source=manual" in caplog.text
     assert arbitration.source.get() is None  # reset after the call
+
+
+def test_non_ascii_snapshot_token_is_refused_not_a_crash() -> None:
+    svc, _ = service()
+    status, _, _ = svc.snapshot_response("video1", query_token="protect.é")
+    assert status == HTTPStatus.UNAUTHORIZED

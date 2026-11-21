@@ -112,7 +112,7 @@ function buildPayload(draft, enabled) {
 export function SentryPage() {
   const body = sentry.value;
   const [draft, setDraft] = useState(null);
-  const [load, setLoad] = useState("loading"); // loading | ready | absent | unsupported
+  const [load, setLoad] = useState("loading"); // loading | ready | absent | unsupported | nocamera
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const dirty = useRef(false);
@@ -140,6 +140,10 @@ export function SentryPage() {
           // no patrol at all. Neither is an operator error.
           setLoad(err.status === 503 ? "unsupported" : "absent");
           if (err.status !== 503 && !dirty.current) setDraft(draftFrom(null));
+          return;
+        }
+        if (err instanceof ApiError && err.code === "unknown_camera") {
+          setLoad("nocamera"); // keeps polling, so the page fills in once the camera adopts
           return;
         }
         setLoad("error");
@@ -251,6 +255,11 @@ export function SentryPage() {
         ? html`<p class="alert tone-warn" role="status">This deployment has no idle patrol.</p>`
         : null}
 
+      ${load === "nocamera"
+        ? html`<p class="alert tone-warn" role="status">No camera is connected yet. The patrol
+          settings appear once the camera has adopted.</p>`
+        : null}
+
       ${load === "absent"
         ? html`<p class="alert tone-warn" role="status">No patrol is configured for this camera.
           Add positions below and save to create one.</p>`
@@ -275,7 +284,7 @@ export function SentryPage() {
           : null}
       </${Card}>
 
-      ${load === "unsupported" ? null : html`
+      ${load === "unsupported" || load === "nocamera" ? null : html`
         <${Card} id="patrol-settings" title="Patrol settings">
           ${!draft
             ? html`<p class="muted" role="status">Loading the patrol…</p>`

@@ -3,7 +3,7 @@ version: "0.9.0b1"
 slug: osprey
 # A beta: it works, but expect rough edges and changes.
 stage: experimental
-description: Osprey PTZ operator and Frigate camera bridge
+description: Serve a UniFi PTZ camera to Frigate over ONVIF and RTSP
 url: https://github.com/grayslawson/osprey
 startup: services
 boot: auto
@@ -33,6 +33,7 @@ options:
   tracks: video1:h264,video2:h265
   onvif_port: 8000
   rtsp_port: 8554
+  admin_password: ""
 schema:
   advertised_host: str
   camera_ip: str?
@@ -42,3 +43,4 @@ schema:
   tracks: str
   onvif_port: port
   rtsp_port: port
+  admin_password: password?

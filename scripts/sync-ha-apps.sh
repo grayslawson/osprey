@@ -23,10 +23,14 @@ target="${2:?usage: sync-ha-apps.sh <upstream-checkout> <app-repository-checkout
 version="$(tr -d '[:space:]' < "$upstream/VERSION")"
 addon="$target/osprey"
 
-rm -rf "$target/src"
-mkdir -p "$addon" "$target/src"
-cp -R "$upstream/osprey" "$target/src/osprey"
-cp -R "$upstream/pyunifiwire" "$target/src/pyunifiwire"
+# The Supervisor builds an add-on with its own directory as the build context,
+# so the vendored source lives inside it.
+rm -rf "$target/src" "$addon/src"
+mkdir -p "$addon/src"
+cp -R "$upstream/osprey" "$addon/src/osprey"
+cp -R "$upstream/pyunifiwire" "$addon/src/pyunifiwire"
+rm -rf "$addon/src/osprey/tests" "$addon/src/osprey/harness" "$addon/src/pyunifiwire/tests"
+find "$addon/src" -name __pycache__ -type d -prune -exec rm -rf {} +
 cp "$upstream/homeassistant/addon/osprey/run.sh" "$addon/run.sh"
 cp "$upstream/homeassistant/addon/osprey/README.md" "$addon/README.md"
 cp "$upstream/homeassistant/addon/osprey/DOCS.md" "$addon/DOCS.md"
@@ -45,42 +49,15 @@ awk -v version="$version" '
 
 cp "$upstream/packaging/homeassistant-repo/repository.yaml" "$target/repository.yaml"
 
-# The build context is the app repository root, so the application source is
-# vendored under src/ and the copy paths differ from the ones in the Osprey
-# repository.
-cat > "$addon/Dockerfile" <<'DOCKERFILE'
-# The add-on image is built from this repository.  The application source is
-# vendored under src/, so the image can be built without a checkout of the
-# Osprey repository.
-ARG BUILD_FROM=python:3.13-slim-bookworm
-FROM ${BUILD_FROM}
-
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/opt/osprey/pyunifiwire/src:/opt/osprey/osprey
-
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates ffmpeg tini \
-    && rm -rf /var/lib/apt/lists/* \
- && printf '%s\n' \
-      'paho-mqtt==2.1.0 --hash=sha256:6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee' \
-      > /tmp/requirements-runtime.txt \
-    && python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-runtime.txt \
-    && rm /tmp/requirements-runtime.txt
-
-COPY osprey/src/osprey /opt/osprey/osprey
-COPY osprey/src/pyunifiwire /opt/osprey/pyunifiwire
-COPY osprey/run.sh /run.sh
-
-RUN chmod 0755 /run.sh \
-    && mkdir -p /data/osprey \
-    && addgroup --system osprey \
-    && adduser --system --ingroup osprey osprey \
-    && chown -R osprey:osprey /opt/osprey /data/osprey
-
-WORKDIR /opt/osprey/osprey
-USER osprey
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/run.sh"]
-DOCKERFILE
+# Same image as the upstream add-on, with the copy paths rewritten for the
+# vendored layout.
+sed -e 's|^COPY osprey /opt/osprey/osprey$|COPY src/osprey /opt/osprey/osprey|' \
+    -e 's|^COPY pyunifiwire /opt/osprey/pyunifiwire$|COPY src/pyunifiwire /opt/osprey/pyunifiwire|' \
+    -e 's|^COPY homeassistant/addon/osprey/run.sh /run.sh$|COPY run.sh /run.sh|' \
+    "$upstream/homeassistant/addon/osprey/Dockerfile" > "$addon/Dockerfile"
+if grep -q '^COPY \(osprey\|pyunifiwire\|homeassistant\)' "$addon/Dockerfile"; then
+  echo "sync-ha-apps.sh: an upstream COPY line was not rewritten" >&2
+  exit 1
+fi
 
 echo "Synced the Osprey $version add-on into $target."

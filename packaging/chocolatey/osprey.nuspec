@@ -5,11 +5,12 @@
     <authors>Osprey contributors</authors>
     <licenseUrl>https://github.com/grayslawson/osprey/blob/main/LICENSE</licenseUrl>
     <projectUrl>https://github.com/grayslawson/osprey</projectUrl>
-    <description>Ubiquiti PTZ controller for an existing Frigate installation. Requires Docker or Podman.</description>
+    <description>Installs the Compose file for Osprey, a self-hosted controller that serves UniFi PTZ cameras to an existing Frigate over ONVIF and RTSP. Starts nothing; requires Docker or Podman.</description>
     <tags>ptz camera frigate onvif rtsp</tags>
   </metadata>
   <files>
     <file src="..\..\compose.release.yaml" target="tools" />
     <file src="tools\chocolateyInstall.ps1" target="tools" />
+    <file src="tools\chocolateyUninstall.ps1" target="tools" />
   </files>
 </package>
