@@ -28,12 +28,23 @@ serials, UUIDs, tokens, names and credentials are replaced by placeholders.
    osprey --config osprey.json --dump /tmp/osprey-messages.jsonl
    ```
 
+   In the container, set `OSPREY_EXTRA_ARGS="--dump /tmp/osprey-messages.jsonl"`
+   in the service's `environment` and recreate it.
+
 2. Build the bundle:
 
    ```sh
    osprey probe --camera 192.0.2.20 --dump /tmp/osprey-messages.jsonl --out probe.json
-   # container: docker compose exec osprey /usr/local/bin/osprey-entrypoint probe ...
    # source checkout: ./scripts/osprey probe ...
+   ```
+
+   In the container, write the bundle to `/tmp`, the only writable path
+   besides the state volume, and copy it out:
+
+   ```sh
+   docker compose -f compose.release.yaml exec osprey /usr/local/bin/osprey-entrypoint \
+     probe --camera 192.0.2.20 --dump /tmp/osprey-messages.jsonl --out /tmp/probe.json
+   docker compose -f compose.release.yaml cp osprey:/tmp/probe.json .
    ```
 
 3. Read `probe.json`, then attach it to a **Camera model support** issue.

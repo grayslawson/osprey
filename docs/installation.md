@@ -9,7 +9,7 @@ configure or run Frigate. Pick one install path:
 | [Home Assistant app](#home-assistant) | Yes | Host networking and ingress. |
 | [NixOS module](nixos.md) | Yes | Flake package and systemd service. |
 | [Proxmox](#proxmox) | Yes | Container in a guest, or a native LXC (pending). |
-| [PyPI wheel](#pypi) | Yes | `osprey-ptz`, Python 3.13. |
+| [Python wheel](#python-wheel) | Yes | `osprey-ptz`, Python 3.13. |
 | [Homebrew](#homebrew-chocolatey-and-npm) | No | `osprey doctor` launcher. |
 | [Chocolatey](#homebrew-chocolatey-and-npm) | No | Installs the release Compose file. |
 | [npm](#homebrew-chocolatey-and-npm) | No | Runs the read-only tools from the image. |
@@ -22,8 +22,8 @@ Every path uses the same ports. The camera connects to Osprey on TCP 7442
 
 `ghcr.io/grayslawson/osprey` is published for `linux/amd64` and
 `linux/arm64`. A final release is tagged `X.Y.Z`, `vX.Y.Z`, `X.Y` and
-`latest`. A pre-release such as `0.9.0b1` gets only `0.9.0b1` and
-`v0.9.0b1`. Each image is signed by digest with keyless cosign;
+`latest`. A pre-release such as `0.9.0b2` gets only `0.9.0b2` and
+`v0.9.0b2`. Each image is signed by digest with keyless cosign;
 [`CONTRIBUTING.md`](../CONTRIBUTING.md#releasing) has the verify command.
 
 ### First run
@@ -32,6 +32,7 @@ Every path uses the same ports. The camera connects to Osprey on TCP 7442
 networking. `OSPREY_HOST` and `OSPREY_IMAGE` are required:
 
 ```sh
+curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b2/compose.release.yaml
 export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
 export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2
 export OSPREY_SETUP=1           # open the setup wizard
@@ -39,7 +40,9 @@ docker compose -f compose.release.yaml up -d
 docker compose -f compose.release.yaml logs osprey | grep 'setup token'
 ```
 
-You can put the same values in a `.env` file instead; see `.env.example`.
+Every later `docker compose` command needs the same variables. To avoid
+exporting them in each shell, put them in a `.env` file next to
+`compose.release.yaml`, as in [`.env.example`](../.env.example).
 
 Open `http://<OSPREY_HOST>:8000/setup` and enter the token from the log. The
 wizard asks for the advertised host, bind address, camera MAC and name,
@@ -71,6 +74,24 @@ memory. If you lose it, restart and read the new one from the log. If a save
 fails, setup stays pending; restart and try again rather than copying
 temporary files.
 
+### ONVIF authentication
+
+When you turn ONVIF authentication on, name the user `frigate`. Only users in
+`ptz.autotrack_users` (default `["frigate"]`) count as autotrackers, so with
+the wizard's `osprey` user every Frigate move would count as a person taking
+control. This uncomments both lines and renames the user:
+
+```sh
+docker compose -f compose.release.yaml exec osprey sed -i \
+  -e 's/^# OSPREY_ONVIF_USERNAME=osprey$/OSPREY_ONVIF_USERNAME=frigate/' \
+  -e 's/^# OSPREY_ONVIF_PASSWORD_FILE=/OSPREY_ONVIF_PASSWORD_FILE=/' \
+  /var/lib/osprey/osprey-secrets.env
+docker compose -f compose.release.yaml restart osprey
+```
+
+Then give Frigate `onvif.user: frigate` and the ONVIF password the wizard
+showed.
+
 ### Rootless Podman
 
 ```sh
@@ -93,15 +114,23 @@ Osprey's listeners to one local address.
 ### Your own configuration file
 
 To manage `osprey.json` yourself, for example for
-[several cameras](multi-camera.md), mount it over the wizard's copy in a
-Compose override:
+[several cameras](multi-camera.md), [MQTT](mqtt.md) or the
+[media persona](protect-dual-adoption.md), copy the wizard's file out of the
+state volume and mount your copy over it in a Compose override:
+
+```sh
+docker compose -f compose.release.yaml cp osprey:/var/lib/osprey/osprey.json .
+```
 
 ```yaml
+# compose.override.yaml
 services:
   osprey:
     volumes:
       - ./osprey.json:/var/lib/osprey/osprey.json:ro
 ```
+
+Then run `docker compose -f compose.release.yaml -f compose.override.yaml up -d`.
 
 All keys and environment variables are listed in
 [configuration](configuration.md).
@@ -109,16 +138,21 @@ All keys and environment variables are listed in
 ## Point the camera at Osprey
 
 The camera has one native controller at a time. A camera already adopted by
-UniFi Protect keeps talking to Protect until it is released. A factory-reset
-camera can be pointed at Osprey from a source checkout:
+UniFi Protect keeps talking to Protect until it is released: remove it from
+Protect and factory-reset it, so it is back on the default `ubnt`/`ubnt`
+login. Then point it at Osprey from a source checkout on any machine that can
+reach the camera over HTTPS (Python 3 is enough):
 
 ```sh
+git clone https://github.com/grayslawson/osprey.git && cd osprey
 ./osprey/manage.sh --camera 192.0.2.20 --user ubnt --password ubnt \
   --host 192.0.2.10
 ```
 
-The camera then dials `--host` on port 7442 and Osprey adopts it. To move a
-camera from a running Protect controller, see `osprey/handoff.sh` and
+`--host` is Osprey's address (`OSPREY_HOST`, or `advertised_host` in Home
+Assistant). The camera dials it on port 7442 and Osprey adopts it; the
+console's Health tab shows the adoption. To move a camera from a running
+Protect controller without a reset, see `osprey/handoff.sh` and
 [the controller README](../osprey/README.md#testing-with-the-real-camera).
 Afterwards, keep Protect from re-adopting it with
 [`osprey protect-guard`](protect-guard.md).
@@ -148,38 +182,52 @@ The flake exports a package and a NixOS module that runs Osprey as a
 
 The supported path today is a Debian or Ubuntu VM or unprivileged LXC running
 Docker or Podman. Give it a bridged LAN interface that can reach the camera
-and Frigate. Copy
+and Frigate. Download
 [`scripts/proxmox-install.sh`](../scripts/proxmox-install.sh) into the guest
 and read its plan first:
 
 ```sh
+curl -fsSLO https://raw.githubusercontent.com/grayslawson/osprey/v0.9.0b2/scripts/proxmox-install.sh
 sh proxmox-install.sh --host 192.0.2.10 \
-  --image ghcr.io/grayslawson/osprey:0.9.0b2 --runtime podman
+  --image ghcr.io/grayslawson/osprey:v0.9.0b2 --runtime podman
 ```
 
-It is a dry run until you add `--apply`. Other options: `--bind-address`
+It is a dry run until you add `--apply`, which must run as root. Other options: `--bind-address`
 (defaults to `--host`), `--state-dir` (default `/var/lib/osprey`),
 `--onvif-port`, `--rtsp-port`, and `--force` to overwrite an existing Compose
-file. The image must be a version tag (`X.Y.Z` or `vX.Y.Z`) or a digest.
-The script can install the runtime with `apt-get`, writes the Compose file
-under the state directory and starts only Osprey. It never creates or changes a Proxmox VM or LXC.
+file. The image must use the `v` tag form (`v0.9.0b2`) or a digest; the
+script rejects `0.9.0b2`. It can install the runtime with `apt-get`, writes
+`compose.yaml` under the state directory and starts only Osprey. It never
+creates or changes a Proxmox VM or LXC. The setup wizard is off in that file:
+add `OSPREY_SETUP: "1"` to its `environment`, run
+`podman compose -f /var/lib/osprey/compose.yaml up -d` again, and continue as
+in [first run](#first-run).
 
 A native LXC in the community-scripts style is in
 [`packaging/proxmox`](../packaging/proxmox/README.md). It has not yet been run
 on a Proxmox host.
 
-## PyPI
+## Python wheel
 
 The `osprey-ptz` wheel bundles the controller and pyunifiwire behind one
-`osprey` command. It needs Python 3.13. FFmpeg is optional and only used for
-the console's MJPEG preview.
+`osprey` command. It needs Python 3.13 and `openssl` for the first-run
+certificate. FFmpeg is optional and only used for the console's MJPEG
+preview.
+
+PyPI publishing starts with a later release. For 0.9.0b2, install the wheel
+attached to the GitHub release:
 
 ```sh
 python3.13 -m venv ~/.local/osprey && . ~/.local/osprey/bin/activate
-pip install --pre "osprey-ptz==0.9.0b2"    # "osprey-ptz[mqtt]" for MQTT
-osprey --host 192.0.2.10 --config ~/.config/osprey/osprey.json \
+pip install "osprey-ptz[mqtt] @ https://github.com/grayslawson/osprey/releases/download/v0.9.0b2/osprey_ptz-0.9.0b2-py3-none-any.whl"
+osprey --setup --host 192.0.2.10 --config ~/.config/osprey/osprey.json \
   --cert ~/.config/osprey/osprey.pem
 ```
+
+Drop `[mqtt]` if you do not use [MQTT](mqtt.md). `--setup` opens the wizard
+and logs its token, as in [first run](#first-run), and the wizard writes its
+files next to `--config`. Without `--setup`, a `--config` file that does not
+exist is an error.
 
 `osprey doctor`, `osprey probe` and `osprey protect-guard` ship in the same
 command. Run the controller as an unprivileged user under systemd or launchd;
@@ -191,30 +239,58 @@ package layout in `specs/002-python-package-cli` lands.
 These packages do not run the controller. Deploy it with the release Compose
 file.
 
-**Homebrew** installs the `osprey doctor` launcher:
+### Homebrew
+
+The formula installs `osprey doctor` only, without `probe` or
+`protect-guard`, and its doctor cannot validate a config file:
 
 ```sh
 brew install grayslawson/osprey/osprey
 ```
 
-**Chocolatey** copies `compose.release.yaml` to `%ProgramData%\osprey` and
-starts nothing. Set `OSPREY_HOST` and `OSPREY_IMAGE`, then run
-`docker compose -f %ProgramData%\osprey\compose.release.yaml up -d`. Docker
+### Chocolatey
+
+The package is not on the Chocolatey community repository. It is a `.nupkg`
+in the [`grayslawson/chocolatey-packages`](https://github.com/grayslawson/chocolatey-packages)
+repository. Download it and install from that folder in an elevated
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force C:\osprey-pkg | Out-Null
+Invoke-WebRequest https://github.com/grayslawson/chocolatey-packages/raw/main/osprey.0.9.0-beta2.nupkg -OutFile C:\osprey-pkg\osprey.0.9.0-beta2.nupkg
+choco install osprey --source C:\osprey-pkg --pre
+```
+
+It copies `compose.release.yaml` to `%ProgramData%\osprey`, adds an `osprey`
+command that runs `docker compose` against that file, and starts nothing.
+Create `%ProgramData%\osprey\.env` with `OSPREY_HOST` and `OSPREY_IMAGE`
+(and `OSPREY_SETUP=1` for the wizard), then run `osprey up -d`. Docker
 Desktop cannot serve a LAN camera in either networking mode, so the engine has
 to run Linux containers with real host networking.
 
-**npm** installs `@osprey-ptz/cli`, which runs `doctor`, `probe`,
-`protect-guard` and `version` from the release image with Docker or Podman.
-Pre-releases are on the `next` dist-tag:
+### npm
+
+`@osprey-ptz/cli` runs `doctor`, `probe`, `protect-guard` and `version` from
+the release image with Docker or Podman. npm publishing starts with a later
+release, with pre-releases on the `next` dist-tag
+(`npm install --global @osprey-ptz/cli@next`). For 0.9.0b2, install the
+tarball attached to the GitHub release:
 
 ```sh
-npm install --global @osprey-ptz/cli@next
+npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b2/osprey-ptz-cli-0.9.0b2.tgz
 OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2 osprey doctor --host 192.0.2.10
 ```
 
+Each command runs in a fresh container that sees no host files, so
+`probe --dump` and `protect-guard --api-key-file` cannot read files on the
+host. Run `protect-guard` as
+[Protect guard](protect-guard.md#with-osprey-protect-guard) shows instead.
+
 ## Verify a deployment
 
-`osprey doctor` is read-only. Give it the addresses that apply:
+`osprey doctor` is read-only. It comes with the wheel, Homebrew and npm, and
+as `./scripts/osprey doctor` in a source checkout. Give it the addresses that
+apply:
 
 ```sh
 osprey doctor \
@@ -226,7 +302,21 @@ osprey doctor \
 
 It prints one `OK`, `WARNING` or `ERROR` line per check and exits `1` if any
 required check fails. It never changes the camera, firewall, Compose files,
-Frigate or Osprey's configuration.
+Frigate or Osprey's configuration. A missing Compose binary is only a
+warning. While Osprey runs, each of its own ports is reported as already
+listening; run it before the first start to check that they are free.
+
+To validate the configuration inside a running container:
+
+```sh
+docker compose -f compose.release.yaml exec osprey \
+  /usr/local/bin/osprey-entrypoint doctor --host 192.0.2.10
+```
+
+The image has no `ip`, `ss` or `curl`, so there `--camera` and `--callback`
+report errors and the port and `--frigate` checks are skipped. npm runs
+`doctor` in a fresh copy of the same image, without your config file. For
+those checks, run the wheel, Homebrew or a checkout on the host.
 
 ## Updates and rollback
 
@@ -245,7 +335,8 @@ scripts/osprey-update.sh \
 
 Add `--apply` to pull and recreate the `osprey` service. Other services in the
 project are left alone. `--latest` resolves the newest stable release and is
-also check-only without `--apply`.
+also check-only without `--apply`. It skips pre-releases, so during the beta
+use `--image`.
 
 To roll back, run the same command with the previous tag or digest and
 `--apply`. Keep the previous image until the new release has run with your
@@ -254,7 +345,11 @@ camera and Frigate. The helper never rolls back on its own.
 ### Scheduled checks
 
 [`contrib/systemd`](../contrib/systemd) has a check timer that logs the
-candidate release to the journal and changes nothing:
+candidate release to the journal and changes nothing. The units run as an
+`osprey` user in the `docker` group, read
+`/var/lib/osprey/compose.release.yaml` and `/etc/osprey/release.env`, and use
+`--latest`, so edit them to match your layout. Until a stable release exists
+the check logs an error.
 
 ```sh
 sudo install -Dm755 scripts/osprey-update.sh /usr/local/libexec/osprey-update.sh
