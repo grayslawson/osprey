@@ -3,7 +3,10 @@
 MQTT is off by default. When enabled, Osprey connects to your broker as a
 client; it does not run a broker. The bridge needs the `paho-mqtt` package,
 which the container image includes and the wheel installs with
-`osprey-ptz[mqtt]`.
+`osprey-ptz[mqtt]`. Configure it in the `mqtt` block of `osprey.json`; with
+the container, edit
+[your own copy of that file](installation.md#your-own-configuration-file).
+The Home Assistant app and the NixOS module have no MQTT options yet.
 
 ```json
 {
@@ -20,8 +23,9 @@ which the container image includes and the wheel installs with
 }
 ```
 
-`port` defaults to 8883 with `tls` and 1883 without. With `tls` on, the
-broker certificate is verified. `base_topic` and `device` default to
+`tls` defaults to `false`, and `port` to 8883 with `tls` and 1883 without.
+With `tls` on, the broker certificate is verified against the system CA store;
+there is no option for a private CA yet. `base_topic` and `device` default to
 `osprey`.
 
 `mqtt.password` in `osprey.json` is the only way to give Osprey the broker

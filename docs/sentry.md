@@ -8,7 +8,8 @@ from where it was.
 ## How a patrol runs
 
 A patrol is an ordered list of points. Each point is a named preset, from the
-same table Frigate's `return_preset` uses.
+same table Frigate's `return_preset` uses. Save the presets first, on the
+console's **Live** tab, then build the patrol on the **Patrol** tab.
 
 Every `interval_sec` the patrol moves to the next point. After the last point
 it starts again at the first. A point can set its own `dwell_sec` to stay
@@ -45,8 +46,10 @@ several cameras patrol independently.
 
 ## Configuration
 
-Sentry is off by default. Configure it in the `sentry` block of
-`osprey.json`:
+Sentry is off by default. The console is the simplest way to set it up. To
+keep it in your own config file instead (see
+[installation](installation.md#your-own-configuration-file)), use the
+`sentry` block of `osprey.json`:
 
 ```json
 {
@@ -158,7 +161,12 @@ POST   /api/v1/cameras/{cam}/sentry      configure, enable or disable
 DELETE /api/v1/cameras/{cam}/sentry      disable and forget the patrol
 ```
 
+Sign in first. The response's `csrf` value is the `$TOKEN` below:
+
 ```sh
+curl -s --cookie-jar cookies.txt -H 'Content-Type: application/json' \
+     -d '{"password":"ADMIN_PASSWORD"}' http://192.0.2.10:8000/api/v1/session
+
 curl -s --cookie cookies.txt http://192.0.2.10:8000/api/v1/sentry
 
 curl -s --cookie cookies.txt -H "X-CSRF-Token: $TOKEN" \
@@ -166,6 +174,9 @@ curl -s --cookie cookies.txt -H "X-CSRF-Token: $TOKEN" \
      -d '{"enabled":true,"interval_sec":45,"points":[{"name":"driveway"},{"name":"gate"}]}' \
      http://192.0.2.10:8000/api/v1/cameras/default/sentry
 ```
+
+`default` is the primary camera. With several cameras, use the IDs from
+`GET /api/v1/cameras`.
 
 ## MQTT
 
