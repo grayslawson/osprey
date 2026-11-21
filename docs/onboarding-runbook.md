@@ -1,52 +1,45 @@
-# Osprey onboarding and diagnostics
+# Onboarding checks
 
-Run these checks before connecting a camera. They are local and read-only: no
-camera is adopted, no Protect or Frigate service is changed, and no deployment
-secret is read.
+Run these before connecting a camera. They are local and read-only: they
+adopt no camera, change no Protect or Frigate setting and read no secret.
 
-## Start with the checkout you intend to run
+## Preflight a checkout
 
-From the repository root, verify the revision before building. A stale checkout
-is a common source of confusing option and Compose errors:
+From the repository root, confirm you are on the revision you mean to run,
+then check the config file:
 
 ```sh
-git rev-parse --show-toplevel
 git status --short
 git log -1 --oneline
-./docker/onboarding_preflight.sh [osprey.json]
+./docker/onboarding_preflight.sh osprey.json
 ```
 
-The preflight rejects malformed JSON and credentials accidentally placed in a
-runtime config. It labels the result **LOCAL/TEST**; it is not a production
-readiness or camera-network check.
+The preflight rejects malformed JSON and top-level credential keys in the
+config. Its result is labelled **LOCAL/TEST**; it does not check the camera
+network. For a deployment, run [`osprey doctor`](installation.md#verify-a-deployment).
 
-## Configuration and secrets
+## Keep secrets out of the config
 
-`osprey.json` contains non-secret runtime settings only: host, ports, camera
-MAC allow-list, and codec tracks. Generate JSON with a JSON encoder rather than
-shell interpolation so names containing quotes, backslashes, or newlines remain
-valid. Keep camera, Protect, MQTT, and admin credentials in your deployment's
-secret manager or in a root-owned file outside this repository.
+`osprey.json` holds non-secret settings: host, ports, the camera allow-list
+and tracks. Generate it with a JSON encoder rather than shell string
+interpolation, so names with quotes or backslashes stay valid. Keep camera,
+Protect and admin credentials in your secret manager or a root-only file
+outside the repository. The MQTT password is the one exception; see
+[MQTT](mqtt.md).
 
-If your deployment reports a secret-manager or key error, stop and check the
-host's key path, identity, and file permissions. Do not copy keys into this
-checkout or work around the failure by committing plaintext secrets.
+If your deployment reports a secret-manager or key error, check the key path,
+identity and file permissions. Do not copy keys into the checkout.
 
 ## Deployment boundary
 
-Service ordering, maintenance-window restarts, secret-manager wiring, firewall
-rules, and external Frigate configuration belong in your deployment system, not
-in this repository. Treat a release as ready only after its image or checkout
-has been deliberately promoted and validated. Never use `handoff.sh` against a
-production camera as part of routine validation. ONVIF authentication is
-opt-in; leave it disabled only when the Frigate client is known to require
-anonymous ONVIF, and test interoperability before changing it.
+Service ordering, restarts, secret-manager wiring, firewall rules and Frigate
+configuration belong to your deployment, not to this repository. Never run
+`osprey/handoff.sh` against a production camera as part of routine testing.
 
-## First-run recovery
+## Setup wizard recovery
 
-The wizard validates and stages the runtime JSON, Frigate metadata, and generated secret
-files together. If the process exits during a save, restart Osprey and check setup status
-before submitting again. A failed save leaves setup pending; do not copy temporary files.
-If the one-time setup token is lost, restart Osprey and read the new token from the service
-log. After setup completes, use the documented configuration-edit and restart procedure
-instead of reopening the wizard.
+The wizard writes the configuration, the Frigate URL and the secret files
+together. If Osprey exits during a save, restart it and check setup status
+before you submit again. A failed save leaves setup pending; do not copy
+temporary files. A lost setup token is replaced on restart. Once setup is
+complete, edit the configuration and restart instead of reopening the wizard.
