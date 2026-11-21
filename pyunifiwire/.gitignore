@@ -1,9 +1,0 @@
-dist/
-build/
-*.egg-info/
-*.pem
-*.key
-*.crt
-__pycache__/
-.mypy_cache/
-.pytest_cache/
