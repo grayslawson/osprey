@@ -21,12 +21,11 @@ COPY pyunifiwire /opt/osprey/pyunifiwire
 COPY homeassistant/addon/osprey/run.sh /run.sh
 
 RUN chmod 0755 /run.sh \
-    && mkdir -p /data/osprey \
     && addgroup --system osprey \
     && adduser --system --ingroup osprey osprey \
-    && chown -R osprey:osprey /opt/osprey /data/osprey
+    && chmod -R a+rX /opt/osprey
 
 WORKDIR /opt/osprey/osprey
-USER osprey
+# run.sh starts as root to prepare /data, then drops to osprey.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/run.sh"]

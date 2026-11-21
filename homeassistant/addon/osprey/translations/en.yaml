@@ -43,5 +43,11 @@ configuration:
     name: "RTSP port"
     description: >-
       The port the RTSP service listens on. Frigate connects to this port.
+  admin_password:
+    name: "Console password"
+    description: >-
+      Password for the operator console on the direct port (the Web UI
+      button). The sidebar panel does not need it: Home Assistant signs you in.
+      Leave empty to keep the direct port locked.
 network:
   8000/tcp: "Operator console (HTTP)"
