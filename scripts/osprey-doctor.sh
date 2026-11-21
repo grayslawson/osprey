@@ -4,7 +4,9 @@
 set -u
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-controller_dir=$(CDPATH='' cd -- "$script_dir/../osprey" && pwd)
+# Empty when only the launcher is installed (Homebrew, Chocolatey); the checks
+# that need the controller's code then say so instead of failing.
+controller_dir=$(CDPATH='' cd -- "$script_dir/../osprey" 2>/dev/null && pwd) || controller_dir=
 
 usage() {
     cat <<'EOF'
@@ -67,7 +69,9 @@ else
     fail "invalid advertised host: $host"
 fi
 
-if [ -f "$config_file" ]; then
+if [ -f "$config_file" ] && [ -z "$controller_dir" ]; then
+    warn "configuration not validated: the Osprey controller is not installed next to this launcher"
+elif [ -f "$config_file" ]; then
     if command -v python3 >/dev/null 2>&1 && PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$controller_dir" python3 - "$config_file" <<'PY'
 import sys
 import config
@@ -85,7 +89,7 @@ fi
 
 # Protect dual adoption: the physical camera must not be adoptable by Protect.
 if [ -f "$config_file" ] && grep -q '"onvif_read_only"[[:space:]]*:[[:space:]]*[0-9]' "$config_file" 2>/dev/null; then
-    if [ -n "${OSPREY_UNIFI_API_KEY_FILE:-}" ] && [ -n "${OSPREY_UNIFI_CONSOLE:-}" ] && [ -n "$camera" ]; then
+    if [ -n "$controller_dir" ] && [ -n "${OSPREY_UNIFI_API_KEY_FILE:-}" ] && [ -n "${OSPREY_UNIFI_CONSOLE:-}" ] && [ -n "$camera" ]; then
         if PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$controller_dir" python3 "$controller_dir/protect_guard.py" \
             --console "$OSPREY_UNIFI_CONSOLE" --camera-ip "$camera" >/dev/null 2>&1; then
             ok 'UniFi firewall guard keeps Protect off the physical camera'

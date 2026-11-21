@@ -144,3 +144,22 @@ def test_missing_container_runtime_is_only_a_warning(tmp_path: Path) -> None:
     # Native installs (wheel, NixOS, Proxmox) and the container itself have no compose.
     assert result.returncode == 0, result.stdout
     assert "WARNING neither Docker Compose nor Podman Compose is available" in result.stdout
+
+
+def test_launcher_without_the_controller_warns_instead_of_failing(tmp_path: Path) -> None:
+    # Homebrew and Chocolatey install the launcher scripts without the controller.
+    launcher = tmp_path / "bin" / "osprey-doctor.sh"
+    launcher.parent.mkdir()
+    launcher.write_text(DOCTOR.read_text(encoding="utf-8"), encoding="utf-8")
+    launcher.chmod(0o755)
+    config = tmp_path / "osprey.json"
+    _config(config)
+    environment = os.environ.copy()
+    environment.update(doctor_fixture_environment(tmp_path))
+    result = subprocess.run(
+        [str(launcher), "--host", "192.0.2.10", "--config", str(config)],
+        cwd=tmp_path, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WARNING configuration not validated" in result.stdout
+    assert "ERROR" not in result.stdout
