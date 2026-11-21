@@ -55,10 +55,10 @@ The release image runs on `linux/amd64` and `linux/arm64` with host
 networking. Pin a release tag or digest, never `latest`:
 
 ```sh
-curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b2/compose.release.yaml
+curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/compose.release.yaml
 
 export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b3
 export OSPREY_SETUP=1           # open the setup wizard
 
 docker compose -f compose.release.yaml up -d
