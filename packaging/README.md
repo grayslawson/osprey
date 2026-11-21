@@ -1,24 +1,21 @@
-# Package integrations
+# Packaging
 
-Osprey ships as an OCI image, a Python distribution (`osprey-ptz`), a NixOS
-flake, Proxmox LXC scripts, and a Home Assistant app. The directories here
-hold the integrations that are not built by the main release workflow.
+Distribution sources that the main image build does not cover. User-facing
+install steps are in [`docs/installation.md`](../docs/installation.md).
 
-| Path | What it is | Status |
+| Path | What it builds | Published to |
 |---|---|---|
-| `homebrew/osprey.rb` | Formula that installs the local `scripts/osprey` doctor launcher. It does not start a controller. | Copy into a tap; add the release archive checksum when publishing. |
-| `npm/` | `@osprey-ptz/cli`, a container launcher that runs the read-only `doctor`, `probe`, and `protect-guard` commands. | Published to npm with the release. |
-| `chocolatey/` | Windows package that installs the `osprey` compose launcher. | Publish to your internal Chocolatey source. |
-| `proxmox/` | Community-scripts style LXC pair (`ct/` and `install/`). | Pending a real Proxmox run. |
-| `homeassistant-repo/` | Scaffold for a separate Home Assistant app repository. | See its README. |
-| `pypi/` | Launcher package that the root `pyproject.toml` wheel uses as its `osprey` entry point. | Transitional until Phase 0 (`specs/002-python-package-cli`). |
+| `pypi/` | The `osprey` entry point of the `osprey-ptz` wheel built from the root `pyproject.toml`. A transitional launcher until `specs/002-python-package-cli` lands. | PyPI |
+| `npm/` | `@osprey-ptz/cli`, a launcher that runs `doctor`, `probe`, `protect-guard` and `version` from the release image. | npm, by the release workflow |
+| `homebrew/osprey.rb` | A formula that installs the `osprey doctor` launcher. | The `grayslawson/homebrew-osprey` tap, via `scripts/sync-homebrew-tap.sh` |
+| `chocolatey/` | A package that copies `compose.release.yaml` to `%ProgramData%\osprey` and starts nothing. | A Chocolatey feed, via `scripts/sync-chocolatey-feed.sh` |
+| `homeassistant-repo/` | The root files of the Home Assistant app repository. | `grayslawson/osprey-ha-apps`; see its [README](homeassistant-repo/README.md) |
+| `proxmox/` | A community-scripts style LXC pair. | Not yet; see its [README](proxmox/README.md) |
 
-The npm and Chocolatey wrappers were removed once because they only started
-the container image for `osprey doctor` and added version upkeep without adding
-capability. They are back because operators asked for a single install path on
-every platform, and both now expose the full set of read-only commands
-(`doctor`, `probe`, `protect-guard`, `version`) rather than only `doctor`.
+None of the launchers start the controller. Deploy it from the image with
+`compose.release.yaml`.
 
-The release version lives in the root `VERSION` file. `scripts/validate-repo.sh`
-fails when the Home Assistant manifest, the Homebrew formula, the npm manifest,
-the Chocolatey manifest, or pyunifiwire disagree with it.
+The release version lives in `VERSION`. `scripts/validate-repo.sh` fails if
+the Home Assistant manifest, the Homebrew formula, the npm manifest, the
+Chocolatey manifest or pyunifiwire disagree with it. Chocolatey needs a
+SemVer pre-release, so the feed script turns `0.9.0b1` into `0.9.0-beta1`.

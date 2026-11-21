@@ -201,7 +201,7 @@ class SetupManager:
     def save(self, value: object, supplied_token: str) -> dict[str, object]:
         if self.completed:
             raise SetupError("setup is already complete; edit the configuration and restart")
-        if not hmac.compare_digest(supplied_token, self.token):
+        if not hmac.compare_digest(supplied_token.encode(), self.token.encode()):
             raise SetupError("invalid setup token; copy the token printed at startup")
         if not isinstance(value, dict):
             raise SetupError("setup payload must be an object")

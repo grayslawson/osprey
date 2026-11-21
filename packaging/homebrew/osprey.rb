@@ -1,5 +1,5 @@
 class Osprey < Formula
-  desc "Ubiquiti PTZ controller for an existing Frigate installation"
+  desc "Diagnostics launcher for the Osprey UniFi PTZ controller"
   homepage "https://github.com/grayslawson/osprey"
   version "0.9.0b1"
   url "https://github.com/grayslawson/osprey/archive/refs/tags/v0.9.0b1.tar.gz"

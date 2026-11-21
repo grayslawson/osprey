@@ -76,6 +76,7 @@ CONTROL_RECOVER_PATH: Final = "/control/ptz/recover"
 # Unauthenticated, read-only liveness for monitoring. It carries PTZ state and
 # counters only: no MAC, address, preset name, or credential.
 HEALTH_PATH: Final = "/healthz"
+_SNAPSHOT_KEY: Final = secrets.token_bytes(32)
 METRICS_PATH: Final = "/metrics"
 # An adopted camera with no video frame on any track for this long is degraded.
 HEALTH_VIDEO_STALE_SEC: Final = 30.0
@@ -192,7 +193,7 @@ class AdminAuth:
             actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), rounds).hex()
         except (ValueError, TypeError):
             return False
-        return hmac.compare_digest(actual, expected)
+        return hmac.compare_digest(actual.encode(), expected.encode())
 
     def login(self, password: str) -> tuple[str, str] | None:
         if not self.verify(password):
@@ -1060,8 +1061,9 @@ class Services:
         self.autotrack_users = autotrack_users
         self.log_calls = log_calls
         # Capability tokens in snapshot URIs are HMACs under a per-process key,
-        # so they become invalid on restart (InvalidAfterReboot=true).
-        self._snapshot_key = secrets.token_bytes(32)
+        # so they become invalid on restart (InvalidAfterReboot=true). The key
+        # is shared: the media persona's URIs point at the primary listener.
+        self._snapshot_key = _SNAPSHOT_KEY
         self._snapshot_digest = DigestVerifier(SNAPSHOT_REALM, self.onvif_auth_principal)
 
     # ---------------------------------------------------------------- identity
@@ -1118,8 +1120,8 @@ class Services:
         }
 
     def set_frigate_url(self, value: object) -> tuple[HTTPStatus, dict[str, object]]:
-        if not isinstance(value, str):
-            return HTTPStatus.BAD_REQUEST, {"error": "base_url must be a string"}
+        if value is not None and not isinstance(value, str):
+            return HTTPStatus.BAD_REQUEST, {"error": "base_url must be a string or null"}
         try:
             self.frigate_url = self.frigate_store.save(value)
         except ValueError as exc:
@@ -2302,7 +2304,7 @@ class Services:
         principal = self.onvif_auth.principal(username)
         if principal is None:
             return None
-        return principal if hmac.compare_digest(value, self.snapshot_token(username, profile)) else None
+        return principal if hmac.compare_digest(value.encode(), self.snapshot_token(username, profile).encode()) else None
 
     def _get_snapshot_uri(self, call: Call) -> str:
         token, problem = self._profile_token(call)
@@ -3341,7 +3343,7 @@ class _Handler(BaseHTTPRequestHandler):
             # The token must arrive in a header a cross-site form cannot set;
             # a cookie copy would only prove that the browser has a cookie.
             supplied = self.headers.get("X-CSRF-Token", "")
-            if not supplied or not hmac.compare_digest(supplied, session[1]):
+            if not supplied or not hmac.compare_digest(supplied.encode(), session[1].encode()):
                 self._drain()
                 self._send(HTTPStatus.FORBIDDEN, b'{"error":"invalid csrf token"}', "application/json")
                 return False
@@ -3362,7 +3364,7 @@ class _Handler(BaseHTTPRequestHandler):
                 ".credentials{white-space:pre-wrap;background:#0b1118;padding:1rem;border-radius:6px;display:none}</style>"
                 "<h1>Set up Osprey</h1><p class='hint'>This one-time wizard creates the controller configuration and deployment secrets."
                 " Copy the setup token from the Osprey startup log before submitting.</p>"
-                f"{message}<form id='setup-form'><fieldset><legend>Network</legend>"
+                f"{message}<form id='setup-form' method='post' action='/api/setup'><fieldset><legend>Network</legend>"
                 "<label>Advertised host <input name='host' required placeholder='osprey.example.lan'></label>"
                 "<label>Bind address <input name='bind' value='0.0.0.0' required></label></fieldset>"
                 "<fieldset><legend>Camera</legend>"
@@ -3381,7 +3383,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "const j=await r.json();if(!r.ok)throw Error(j.error||'setup failed');result.textContent='Saved. Restart Osprey to apply the configuration.';"
                 "out.textContent='Save these generated credentials now; they are shown only once.\\n\\n'+Object.entries(j.generated_credentials||{}).map(([k,v])=>k+'='+v).join('\\n');out.style.display='block';form.querySelector('button').disabled=true;"
                 "}catch(err){result.textContent=err.message}};</script>")
-        self._send(HTTPStatus.OK, body.encode(), "text/html; charset=utf-8")
+        # Inline script and style, like /login; method=post keeps the password
+        # out of the URL even if the script never runs.
+        self._send(HTTPStatus.OK, body.encode(), "text/html; charset=utf-8", legacy=True)
 
     def _setup_submit(self) -> None:
         setup = self.services.setup
@@ -3494,7 +3498,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif root == CONTROL_RECOVER_PATH:
             status, result = self.services.control_recover()
         elif root == FRIGATE_API_PATH:
-            status, result = self.services.set_frigate_url(value.get("base_url") if isinstance(value, dict) else None)
+            status, result = self.services.set_frigate_url(value.get("base_url", "") if isinstance(value, dict) else "")
         else:
             status, result = self.services.control_codec(value)
         self._send(status, json.dumps(result).encode(), "application/json")

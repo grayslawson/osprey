@@ -104,6 +104,7 @@ class PahoMqttAdapter:
             raise ValueError("enabled MQTT config with host required")
         self.config = config
         self._client: Any = None
+        self._topics: list[str] = []
 
     def start(self) -> None:
         try:
@@ -113,7 +114,9 @@ class PahoMqttAdapter:
         host = self.config.host
         if host is None:  # validated at construction; keeps this path type-safe.
             raise RuntimeError("MQTT is enabled but broker host is missing")
-        client = mqtt.Client()
+        # The pinned types-paho-mqtt stubs predate paho 2 and its callback API enum.
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)  # type: ignore[attr-defined]
+        client.on_connect = self._on_connect
         if self.config.username is not None:
             client.username_pw_set(self.config.username, self.config.password)
         if self.config.tls:
@@ -131,7 +134,20 @@ class PahoMqttAdapter:
                 return
             callback(bytes(getattr(message, "payload", b"")))
         client.message_callback_add(topic, receive)
+        self._topics.append(topic)
+        # Before the first CONNACK this fails harmlessly; _on_connect covers it.
         client.subscribe(topic, qos=1)
+
+    def _on_connect(self, client: Any, _userdata: object, _flags: object,
+                    reason_code: Any, _properties: object = None) -> None:
+        if getattr(reason_code, "is_failure", False):
+            log.warning("MQTT broker refused the connection: %s", reason_code)
+            return
+        # A fresh session has no subscriptions: (re)subscribe on every connect.
+        for topic in list(self._topics):
+            client.subscribe(topic, qos=1)
+        log.info("MQTT connected to %s:%s; %d command topics subscribed",
+                 self.config.host, self.config.port, len(self._topics))
 
     def publish(self, topic: str, payload: bytes) -> None:
         self._require_client().publish(topic, payload, qos=1, retain=False)

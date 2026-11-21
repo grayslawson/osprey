@@ -1,8 +1,7 @@
 # Multiple cameras
 
-One Osprey process can manage several explicitly registered cameras. Configure
-each camera's stable MAC address, display name, and optional IP hint in
-`osprey.json`:
+One Osprey process can serve several cameras. List each one's MAC, display
+name and optional IP hint in `osprey.json`:
 
 ```json
 {
@@ -14,16 +13,16 @@ each camera's stable MAC address, display name, and optional IP hint in
 }
 ```
 
-MAC addresses are normalized and must be unique. When a registry is present,
-unregistered camera connections are rejected. An omitted or empty `cameras`
-list retains the single-camera, accept-any-camera compatibility behavior.
+MACs are normalised and must be unique; separators are optional. With a list
+present, Osprey rejects any camera not on it. Without one, it accepts any
+camera. `name` is shown to ONVIF clients, and `ip` is only a hint, never the
+camera's identity.
 
-The authenticated console provides a camera switcher. Preview, status, PTZ
-controls, presets, and the Frigate URL are scoped to the selected camera. Each
-camera receives a stable ID derived from its MAC, such as
-`g5-ptz-aabbccddeeff`.
+The console has a camera switcher. Preview, status, PTZ, presets, patrol and
+the Frigate URL follow the selected camera. Each camera gets a stable ID from
+its MAC, such as `g5-ptz-aabbccddeeff`.
 
-Camera-scoped API routes are:
+Camera-scoped routes:
 
 ```text
 /cameras/{camera-id}/                 (opens the app for that camera)
@@ -38,7 +37,7 @@ Camera-scoped API routes are:
 /api/v1/cameras/{camera-id}/state    (see docs/operator-ui.md)
 ```
 
-Unknown or unadopted camera IDs return `404`; Osprey never falls back to a
-different camera. Preview locks, movement state, presets, and controller
-sessions are isolated per camera. Legacy unscoped routes remain only for a
-single-camera deployment.
+An unknown or unadopted camera ID returns `404`; Osprey never falls back to
+another camera. Preview locks, movement leases, presets and controller
+sessions are separate per camera. The unscoped routes are for a single-camera
+deployment. [Sentry](sentry.md) keys patrols by camera MAC.
