@@ -36,6 +36,23 @@ ok() { printf 'OK      %s\n' "$*"; }
 warn() { printf 'WARNING %s\n' "$*"; warnings=$((warnings + 1)); }
 fail() { printf 'ERROR   %s\n' "$*"; errors=$((errors + 1)); }
 
+# The release image has python3 but no ip or curl; fall back to the standard
+# library so doctor gives the same answers inside the container.
+has_route() {
+    if command -v ip >/dev/null 2>&1; then
+        ip route get "$1" >/dev/null 2>&1
+    else
+        python3 -c 'import socket,sys; s=socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET, socket.SOCK_DGRAM); s.connect((sys.argv[1], 9))' "$1" 2>/dev/null
+    fi
+}
+http_ok() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --connect-timeout 3 --max-time 5 "$1" >/dev/null 2>&1
+    else
+        python3 -c 'import sys,urllib.request; urllib.request.urlopen(sys.argv[1], timeout=5).read(1)' "$1" >/dev/null 2>&1
+    fi
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --host|--camera|--callback|--frigate|--config|--ports)
@@ -125,7 +142,7 @@ else
 fi
 
 if [ -n "$camera" ]; then
-    if command -v ip >/dev/null 2>&1 && ip route get "$camera" >/dev/null 2>&1; then
+    if has_route "$camera"; then
         ok "camera has a kernel route: $camera"
     else
         fail "camera has no kernel route: $camera"
@@ -137,27 +154,19 @@ if [ -n "$callback" ]; then
         http://*|https://*) ;;
         *) fail 'callback URL must start with http:// or https://' ;;
     esac
-    if command -v curl >/dev/null 2>&1; then
-        if curl -fsS --connect-timeout 3 --max-time 5 "$callback" >/dev/null 2>&1; then
-            ok "callback URL responded: $callback"
-        else
-            fail "callback URL did not respond: $callback"
-        fi
+    if http_ok "$callback"; then
+        ok "callback URL responded: $callback"
     else
-        fail 'curl is unavailable; cannot check callback reachability'
+        fail "callback URL did not respond: $callback"
     fi
 fi
 
 if [ -n "$frigate" ]; then
     case "$frigate" in http://*|https://*) ;; *) fail 'Frigate URL must start with http:// or https://' ;; esac
-    if command -v curl >/dev/null 2>&1; then
-        if curl -fsS --connect-timeout 3 --max-time 5 "$frigate/api/version" >/dev/null 2>&1; then
-            ok "Frigate API responded: $frigate"
-        else
-            warn "Frigate API did not respond (it may require auth or be firewalled): $frigate"
-        fi
+    if http_ok "$frigate/api/version"; then
+        ok "Frigate API responded: $frigate"
     else
-        warn 'curl is unavailable; skipped Frigate reachability check'
+        warn "Frigate API did not respond (it may require auth or be firewalled): $frigate"
     fi
 fi
 

@@ -22,10 +22,10 @@ osprey doctor --host 192.0.2.10
 | `version` | Prints the Osprey version in the image. |
 
 Each command runs `docker run --rm --network host` with `OSPREY_IMAGE` and no
-host files mounted. Pin the image to a release tag or digest. The image has no
-`ip`, `ss` or `curl` and sees no config file, so the camera route, callback,
-Frigate, port and config checks need the Python wheel or a source checkout on
-the Osprey host. For the same reason `probe --dump` and
+host files mounted. Pin the image to a release tag or digest. `doctor` checks
+the camera route, callback and Frigate from there, but it sees no config file
+and the image has no `ss`, so the config and local port checks need the Python
+wheel or a source checkout on the Osprey host. For the same reason `probe --dump` and
 `protect-guard --api-key-file` cannot read files on the host. To deploy the
 controller itself, use `compose.release.yaml`; see the
 [installation guide](https://github.com/grayslawson/osprey/blob/main/docs/installation.md).
