@@ -447,7 +447,7 @@ class WebApp:
             status, result = HTTPStatus.OK, services.frigate_settings()
         elif rest == "/frigate" and method == "PUT":
             data = body()
-            status, legacy = services.set_frigate_url(data.get("base_url") if isinstance(data, dict) else None)
+            status, legacy = services.set_frigate_url(data.get("base_url", "") if isinstance(data, dict) else "")
             result = self._from_legacy(status, legacy)
         elif rest == "/sentry" and method == "GET":
             status, result = self.sentry_get(services)
@@ -1035,7 +1035,7 @@ class WebApp:
             raise ApiError(HTTPStatus.UNAUTHORIZED, "login_required", "sign in to continue")
         if csrf:
             supplied = h.headers.get("X-CSRF-Token", "")
-            if not supplied or not hmac.compare_digest(supplied, principal[1]):
+            if not supplied or not hmac.compare_digest(supplied.encode(), principal[1].encode()):
                 self._drain(h)
                 raise ApiError(HTTPStatus.FORBIDDEN, "csrf", "missing or invalid X-CSRF-Token header")
         return principal

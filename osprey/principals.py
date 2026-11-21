@@ -317,6 +317,6 @@ class DigestVerifier:
             ).hexdigest()
         else:
             expected = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
-        if not secrets.compare_digest(expected, values.get("response", "")):
+        if not secrets.compare_digest(expected.encode(), values.get("response", "").encode()):
             return None
         return principal
