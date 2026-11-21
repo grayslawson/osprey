@@ -55,6 +55,7 @@ exclude = ["**/__pycache__", "osprey/tests", "osprey/harness"]
 "osprey" = "osprey_ptz/_app/osprey"
 "pyunifiwire/src/unifiwire" = "osprey_ptz/_app/unifiwire"
 "pyunifiwire/LICENSE" = "osprey_ptz/_app/LICENSE-pyunifiwire"
+"scripts/osprey-doctor.sh" = "osprey_ptz/_app/scripts/osprey-doctor.sh"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -67,5 +68,6 @@ include = [
   "/pyunifiwire/src",
   "/pyunifiwire/LICENSE",
   "/packaging/pypi",
+  "/scripts/osprey-doctor.sh",
 ]
 exclude = ["osprey/tests", "osprey/harness", "**/__pycache__"]

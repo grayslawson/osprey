@@ -5,7 +5,7 @@ published container; it does not install Docker/Podman or silently start a
 camera controller.
 
 ```sh
-npm install --global @osprey-ptz/cli
+npm install --global @osprey-ptz/cli@next   # pre-releases; drop @next for stable
 export OSPREY_RUNTIME=docker       # or podman
 export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b1
 osprey doctor --host 192.0.2.10 --camera 192.0.2.20 \

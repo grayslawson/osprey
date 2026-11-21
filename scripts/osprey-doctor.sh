@@ -102,7 +102,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
 elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
     ok 'Podman Compose is available'
 else
-    fail 'neither Docker Compose nor Podman Compose is available'
+    warn 'neither Docker Compose nor Podman Compose is available (needed only for a compose deployment)'
 fi
 
 if command -v ss >/dev/null 2>&1; then

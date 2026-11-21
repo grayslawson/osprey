@@ -70,7 +70,9 @@ COPY LICENSE NOTICE /opt/osprey/
 COPY docker/entrypoint.sh /usr/local/bin/osprey-entrypoint
 COPY docker/osprey_health.py /usr/local/bin/osprey-healthcheck
 COPY scripts/osprey scripts/osprey-doctor.sh /opt/osprey/scripts/
-RUN chmod 0755 /usr/local/bin/osprey-entrypoint /usr/local/bin/osprey-healthcheck \
+# a+rX: a checkout made under a strict umask must not yield an unreadable image.
+RUN chmod -R a+rX /opt/osprey \
+    && chmod 0755 /usr/local/bin/osprey-entrypoint /usr/local/bin/osprey-healthcheck \
         /opt/osprey/scripts/osprey /opt/osprey/scripts/osprey-doctor.sh \
     && rm -rf /opt/osprey/osprey/tests /opt/osprey/osprey/harness \
     && python -m compileall -q /opt/osprey/osprey /opt/osprey/pyunifiwire/src
