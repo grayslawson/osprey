@@ -3,7 +3,7 @@
 All notable changes to Osprey are listed here. Entries are generated from
 Conventional Commit subjects by git-cliff (see cliff.toml).
 
-## Unreleased
+## [0.9.0b2] - 2026-11-21
 
 ### Features
 - **onvif:** Media persona for NVRs. `ports.onvif_read_only` serves the camera

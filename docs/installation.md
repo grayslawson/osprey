@@ -33,7 +33,7 @@ networking. `OSPREY_HOST` and `OSPREY_IMAGE` are required:
 
 ```sh
 export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b1
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2
 export OSPREY_SETUP=1           # open the setup wizard
 docker compose -f compose.release.yaml up -d
 docker compose -f compose.release.yaml logs osprey | grep 'setup token'
@@ -154,7 +154,7 @@ and read its plan first:
 
 ```sh
 sh proxmox-install.sh --host 192.0.2.10 \
-  --image ghcr.io/grayslawson/osprey:0.9.0b1 --runtime podman
+  --image ghcr.io/grayslawson/osprey:0.9.0b2 --runtime podman
 ```
 
 It is a dry run until you add `--apply`. Other options: `--bind-address`
@@ -176,7 +176,7 @@ the console's MJPEG preview.
 
 ```sh
 python3.13 -m venv ~/.local/osprey && . ~/.local/osprey/bin/activate
-pip install --pre "osprey-ptz==0.9.0b1"    # "osprey-ptz[mqtt]" for MQTT
+pip install --pre "osprey-ptz==0.9.0b2"    # "osprey-ptz[mqtt]" for MQTT
 osprey --host 192.0.2.10 --config ~/.config/osprey/osprey.json \
   --cert ~/.config/osprey/osprey.pem
 ```
@@ -209,7 +209,7 @@ Pre-releases are on the `next` dist-tag:
 
 ```sh
 npm install --global @osprey-ptz/cli@next
-OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b1 osprey doctor --host 192.0.2.10
+OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2 osprey doctor --host 192.0.2.10
 ```
 
 ## Verify a deployment
@@ -240,7 +240,7 @@ and prints the image it would use, without pulling or restarting anything:
 scripts/osprey-update.sh \
   --file /var/lib/osprey/compose.release.yaml \
   --env-file /etc/osprey/release.env \
-  --image ghcr.io/grayslawson/osprey:0.9.0b1
+  --image ghcr.io/grayslawson/osprey:0.9.0b2
 ```
 
 Add `--apply` to pull and recreate the `osprey` service. Other services in the

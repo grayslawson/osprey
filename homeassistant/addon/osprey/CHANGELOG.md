@@ -4,6 +4,16 @@ The changes to the Osprey Home Assistant app, newest version on top. The app
 ships the Osprey controller, so the controller's own changelog is at
 <https://github.com/grayslawson/osprey/blob/main/CHANGELOG.md>.
 
+## 0.9.0b2
+
+- The app starts under the Supervisor. It prepares its state directory on
+  `/data` as root, then runs the controller as an unprivileged user.
+- The sidebar console signs you in through Home Assistant.
+- New `admin_password` option for the console on the direct port.
+- The app no longer writes every camera message to an unredacted file.
+- Bundles controller 0.9.0b2: a working setup wizard and MQTT commands, and a
+  media-only ONVIF device for UniFi Protect.
+
 ## 0.9.0b1
 
 First beta.
