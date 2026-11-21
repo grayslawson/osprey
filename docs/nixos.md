@@ -15,7 +15,7 @@ Add the flake to a NixOS host configuration:
 
 ```nix
 {
-  inputs.osprey.url = "github:grayslawson/osprey";
+  inputs.osprey.url = "github:grayslawson/osprey/v0.9.0b2";
 
   outputs = { self, nixpkgs, osprey, ... }: {
     nixosConfigurations.example = nixpkgs.lib.nixosSystem {
@@ -32,6 +32,8 @@ Add the flake to a NixOS host configuration:
             ports.onvif = 8000;
             ports.rtsp = 8554;
           };
+          # A password file needs its user name, or Osprey refuses to start.
+          systemd.services.osprey.environment.OSPREY_RTSP_USERNAME = "osprey";
         })
       ];
     };
@@ -48,7 +50,7 @@ Add the flake to a NixOS host configuration:
 | `announce` | Send and answer WS-Discovery on UDP 3702 (default `true`). |
 | `stateDirectory` | Name of the state directory under `/var/lib`. Read-only, `osprey`. |
 | `ports.*` | Listener ports; defaults are control 7442, ingest 7550, snapshot 7444, RTSP 8554, ONVIF 8000, discovery 3702. |
-| `adminPasswordFile`, `onvifPasswordFile`, `rtspPasswordFile` | Paths to secret files, usually from sops-nix or agenix. Each is loaded through `LoadCredential`. |
+| `adminPasswordFile`, `onvifPasswordFile`, `rtspPasswordFile` | Paths to secret files, usually from sops-nix or agenix. Each is loaded through `LoadCredential`. The module has no user name options: set `OSPREY_RTSP_USERNAME` and `OSPREY_ONVIF_USERNAME` (use `frigate`, see [Frigate](frigate-integration.md#manual-control-and-autotracking)) in `systemd.services.osprey.environment`. |
 | `openFirewall` | Open the TCP ports for control, ingest, snapshot, RTSP, and ONVIF, and UDP for discovery. Default `false`. |
 | `package` | Override the Osprey package. |
 
