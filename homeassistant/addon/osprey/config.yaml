@@ -7,7 +7,8 @@ description: Serve a UniFi PTZ camera to Frigate over ONVIF and RTSP
 url: https://github.com/grayslawson/osprey
 startup: services
 boot: auto
-init: true
+# The image runs its own tini; a second init from Docker only adds a warning.
+init: false
 arch:
   - amd64
   - aarch64
@@ -23,8 +24,6 @@ ports:
   8000/tcp: 8000
 ports_description:
   8000/tcp: Osprey operator console (HTTP)
-map:
-  - config:rw
 options:
   advertised_host: ""
   camera_ip: ""
