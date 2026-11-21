@@ -33,7 +33,7 @@ networking. `OSPREY_HOST` and `OSPREY_IMAGE` are required:
 
 ```sh
 export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:v0.9.0b1
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b1
 export OSPREY_SETUP=1           # open the setup wizard
 docker compose -f compose.release.yaml up -d
 docker compose -f compose.release.yaml logs osprey | grep 'setup token'
@@ -154,15 +154,15 @@ and read its plan first:
 
 ```sh
 sh proxmox-install.sh --host 192.0.2.10 \
-  --image ghcr.io/grayslawson/osprey:v0.9.0b1 --runtime podman
+  --image ghcr.io/grayslawson/osprey:0.9.0b1 --runtime podman
 ```
 
 It is a dry run until you add `--apply`. Other options: `--bind-address`
 (defaults to `--host`), `--state-dir` (default `/var/lib/osprey`),
 `--onvif-port`, `--rtsp-port`, and `--force` to overwrite an existing Compose
-file. The image must be a `vX.Y.Z` tag or a digest. The script can install the
-runtime with `apt-get`, writes the Compose file under the state directory and
-starts only Osprey. It never creates or changes a Proxmox VM or LXC.
+file. The image must be a version tag (`X.Y.Z` or `vX.Y.Z`) or a digest.
+The script can install the runtime with `apt-get`, writes the Compose file
+under the state directory and starts only Osprey. It never creates or changes a Proxmox VM or LXC.
 
 A native LXC in the community-scripts style is in
 [`packaging/proxmox`](../packaging/proxmox/README.md). It has not yet been run
@@ -209,7 +209,7 @@ Pre-releases are on the `next` dist-tag:
 
 ```sh
 npm install --global @osprey-ptz/cli@next
-OSPREY_IMAGE=ghcr.io/grayslawson/osprey:v0.9.0b1 osprey doctor --host 192.0.2.10
+OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b1 osprey doctor --host 192.0.2.10
 ```
 
 ## Verify a deployment
@@ -240,7 +240,7 @@ and prints the image it would use, without pulling or restarting anything:
 scripts/osprey-update.sh \
   --file /var/lib/osprey/compose.release.yaml \
   --env-file /etc/osprey/release.env \
-  --image ghcr.io/grayslawson/osprey:v0.9.0b1
+  --image ghcr.io/grayslawson/osprey:0.9.0b1
 ```
 
 Add `--apply` to pull and recreate the `osprey` service. Other services in the

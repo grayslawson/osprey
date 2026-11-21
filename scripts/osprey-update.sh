@@ -135,8 +135,8 @@ validate_image() {
         *:*)
             tag=${candidate##*:}
             case "$tag" in
-                v[0-9]*.[0-9]*.[0-9]*) ;;
-                *) die "image tag must be a version such as v1.2.3 or a digest: $candidate" ;;
+                v[0-9]*.[0-9]*.[0-9]*|[0-9]*.[0-9]*.[0-9]*) ;;
+                *) die "image tag must be a version such as 1.2.3, v1.2.3 or a digest: $candidate" ;;
             esac
             ;;
         *) die "image must include a version tag or sha256 digest: $candidate" ;;

@@ -15,6 +15,36 @@ Conventional Commit subjects by git-cliff (see cliff.toml).
   docs/protect-dual-adoption.md.
 
 ### Bug fixes
+- **setup:** The wizard works in a browser. Its inline script was blocked by
+  the console's content security policy, so the form fell back to a GET that
+  put the admin password and setup token in the URL. The form now always
+  POSTs.
+- **mqtt:** Command topics are subscribed once the broker connects, and again
+  after every reconnect. Before, commands sent over MQTT were never received.
+- **onvif:** With ONVIF authentication on, snapshot URIs handed out by the
+  media persona were refused with 401.
+- **onvif:** Non-ASCII tokens, digest responses and CSRF headers are refused
+  instead of dropping the connection with a traceback.
+- **config:** A malformed `osprey.json`, or a bad `mqtt` or `discovery`
+  value, exits with a clear error. Command-line ports no longer leak into the
+  `osprey.json` that the setup wizard writes.
+- **console:** Clearing the Frigate address works. The Patrol page says when
+  no camera is connected instead of loading forever.
+- **homeassistant:** The app starts under the Supervisor. It could not create
+  its state directory on the root-owned `/data`, and it now runs as an
+  unprivileged user after preparing it. The sidebar console is signed in
+  through Home Assistant ingress, and a new `admin_password` option protects
+  the direct port. The app no longer writes every camera message to an
+  unbounded, unredacted file.
+- **packaging:** `osprey doctor` works from the PyPI wheel, and a missing
+  Compose binary is a warning, not an error, so doctor passes on native
+  installs and inside the container. Chocolatey ships one install script,
+  adds an `osprey` command for the compose file, and removes it on uninstall.
+- **release:** The npm job can run (its `setup-node` pin named a
+  `setup-python` commit) and publishes pre-releases on the `next` dist-tag.
+  Pre-release images get the `v`-prefixed tag as well. Pushes to `main` no
+  longer move `latest`. The Homebrew asset carries the checksum of the tagged
+  archive, and `SHA256SUMS` covers every asset.
 - **discovery:** A reply that names both personas now fits in one datagram
   (1472 bytes on a 1500-byte MTU), so it is not split into IP fragments that
   some networks drop. When needed, the reply drops, in order, the metadata
