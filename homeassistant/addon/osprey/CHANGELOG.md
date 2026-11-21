@@ -4,6 +4,13 @@ The changes to the Osprey Home Assistant app, newest version on top. The app
 ships the Osprey controller, so the controller's own changelog is at
 <https://github.com/grayslawson/osprey/blob/main/CHANGELOG.md>.
 
+## 0.9.0b3
+
+- The app can be installed: the store no longer rejects its manifest
+  ("Docker image must not contain a tag").
+- One init process instead of two, and no access to the Home Assistant
+  configuration folder, which the app never used.
+
 ## 0.9.0b2
 
 - The app starts under the Supervisor. It prepares its state directory on

@@ -22,8 +22,8 @@ Every path uses the same ports. The camera connects to Osprey on TCP 7442
 
 `ghcr.io/grayslawson/osprey` is published for `linux/amd64` and
 `linux/arm64`. A final release is tagged `X.Y.Z`, `vX.Y.Z`, `X.Y` and
-`latest`. A pre-release such as `0.9.0b2` gets only `0.9.0b2` and
-`v0.9.0b2`. Each image is signed by digest with keyless cosign;
+`latest`. A pre-release such as `0.9.0b3` gets only `0.9.0b3` and
+`v0.9.0b3`. Each image is signed by digest with keyless cosign;
 [`CONTRIBUTING.md`](../CONTRIBUTING.md#releasing) has the verify command.
 
 ### First run
@@ -32,9 +32,9 @@ Every path uses the same ports. The camera connects to Osprey on TCP 7442
 networking. `OSPREY_HOST` and `OSPREY_IMAGE` are required:
 
 ```sh
-curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b2/compose.release.yaml
+curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/compose.release.yaml
 export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b3
 export OSPREY_SETUP=1           # open the setup wizard
 docker compose -f compose.release.yaml up -d
 docker compose -f compose.release.yaml logs osprey | grep 'setup token'
@@ -187,16 +187,16 @@ and Frigate. Download
 and read its plan first:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/grayslawson/osprey/v0.9.0b2/scripts/proxmox-install.sh
+curl -fsSLO https://raw.githubusercontent.com/grayslawson/osprey/v0.9.0b3/scripts/proxmox-install.sh
 sh proxmox-install.sh --host 192.0.2.10 \
-  --image ghcr.io/grayslawson/osprey:v0.9.0b2 --runtime podman
+  --image ghcr.io/grayslawson/osprey:v0.9.0b3 --runtime podman
 ```
 
 It is a dry run until you add `--apply`, which must run as root. Other options: `--bind-address`
 (defaults to `--host`), `--state-dir` (default `/var/lib/osprey`),
 `--onvif-port`, `--rtsp-port`, and `--force` to overwrite an existing Compose
-file. The image must use the `v` tag form (`v0.9.0b2`) or a digest; the
-script rejects `0.9.0b2`. It can install the runtime with `apt-get`, writes
+file. The image must use the `v` tag form (`v0.9.0b3`) or a digest; the
+script rejects `0.9.0b3`. It can install the runtime with `apt-get`, writes
 `compose.yaml` under the state directory and starts only Osprey. It never
 creates or changes a Proxmox VM or LXC. The setup wizard is off in that file:
 add `OSPREY_SETUP: "1"` to its `environment`, run
@@ -214,12 +214,12 @@ The `osprey-ptz` wheel bundles the controller and pyunifiwire behind one
 certificate. FFmpeg is optional and only used for the console's MJPEG
 preview.
 
-PyPI publishing starts with a later release. For 0.9.0b2, install the wheel
+PyPI publishing starts with a later release. For 0.9.0b3, install the wheel
 attached to the GitHub release:
 
 ```sh
 python3.13 -m venv ~/.local/osprey && . ~/.local/osprey/bin/activate
-pip install "osprey-ptz[mqtt] @ https://github.com/grayslawson/osprey/releases/download/v0.9.0b2/osprey_ptz-0.9.0b2-py3-none-any.whl"
+pip install "osprey-ptz[mqtt] @ https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/osprey_ptz-0.9.0b3-py3-none-any.whl"
 osprey --setup --host 192.0.2.10 --config ~/.config/osprey/osprey.json \
   --cert ~/.config/osprey/osprey.pem
 ```
@@ -257,7 +257,7 @@ PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force C:\osprey-pkg | Out-Null
-Invoke-WebRequest https://github.com/grayslawson/chocolatey-packages/raw/main/osprey.0.9.0-beta2.nupkg -OutFile C:\osprey-pkg\osprey.0.9.0-beta2.nupkg
+Invoke-WebRequest https://github.com/grayslawson/chocolatey-packages/raw/main/osprey.0.9.0-beta3.nupkg -OutFile C:\osprey-pkg\osprey.0.9.0-beta3.nupkg
 choco install osprey --source C:\osprey-pkg --pre
 ```
 
@@ -273,12 +273,12 @@ to run Linux containers with real host networking.
 `@osprey-ptz/cli` runs `doctor`, `probe`, `protect-guard` and `version` from
 the release image with Docker or Podman. npm publishing starts with a later
 release, with pre-releases on the `next` dist-tag
-(`npm install --global @osprey-ptz/cli@next`). For 0.9.0b2, install the
+(`npm install --global @osprey-ptz/cli@next`). For 0.9.0b3, install the
 tarball attached to the GitHub release:
 
 ```sh
-npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b2/osprey-ptz-cli-0.9.0b2.tgz
-OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b2 osprey doctor --host 192.0.2.10
+npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/osprey-ptz-cli-0.9.0b3.tgz
+OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b3 osprey doctor --host 192.0.2.10
 ```
 
 Each command runs in a fresh container that sees no host files, so
@@ -330,7 +330,7 @@ and prints the image it would use, without pulling or restarting anything:
 scripts/osprey-update.sh \
   --file /var/lib/osprey/compose.release.yaml \
   --env-file /etc/osprey/release.env \
-  --image ghcr.io/grayslawson/osprey:0.9.0b2
+  --image ghcr.io/grayslawson/osprey:0.9.0b3
 ```
 
 Add `--apply` to pull and recreate the `osprey` service. Other services in the
