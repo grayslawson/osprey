@@ -17,7 +17,9 @@ def test_release_of(value: str, expected: str | None) -> None:
 
 def test_status_tested_untested_unknown() -> None:
     assert firmware.firmware_status("UVC.SAV530q.v5.3.95.67.148b9a3.260612.0645")[0] == "tested"
+    assert firmware.firmware_status("UVC.SAV530q.v5.5.13.67.c2f8b94.260907.1843")[0] == "tested"
+    assert firmware.firmware_status("5.5.14")[0] == "untested"
     status, message = firmware.firmware_status("5.4.1")
-    assert status == "untested" and "5.4.1" in message and "5.3.95" in message
+    assert status == "untested" and "5.4.1" in message and "5.3.95" in message and "5.5.13" in message
     status, message = firmware.firmware_status("")
     assert status == "unknown" and "not reported" in message

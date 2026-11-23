@@ -12,7 +12,10 @@ from typing import Final
 
 # Release triple (major.minor.patch) as reported in the hello "fwVersion", which
 # is either "5.3.95" or the long form "UVC.SAV530q.v5.3.95.67.148b9a3.260612.0645".
-TESTED_FIRMWARE: Final[tuple[str, ...]] = ("5.3.95",)
+TESTED_FIRMWARE: Final[tuple[str, ...]] = (
+    "5.5.13",  # UVC.SAV530q.v5.5.13.67.c2f8b94.260907.1843: production, current; ISP and focus work done on it
+    "5.3.95",  # the baseline pyunifiwire/SPEC.md was measured against
+)
 
 _RELEASE = re.compile(r"(?:^|[^0-9A-Za-z])v?(\d+\.\d+\.\d+)(?![0-9])")
 
