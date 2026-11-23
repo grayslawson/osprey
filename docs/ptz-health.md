@@ -65,6 +65,7 @@ The `ptz` block in `osprey.json`, with its defaults:
     "idle_probe_sec": 60.0,
     "presets_file": null,
     "manual_hold_sec": 30.0,
+    "isp_baseline": {"hdr": 1},
     "autotrack_users": ["frigate"]
   }
 }
@@ -73,6 +74,12 @@ The `ptz` block in `osprey.json`, with its defaults:
 `max_speed` is described in [configuration](configuration.md#ptz-speed), and
 `manual_hold_sec` and `autotrack_users` in
 [Frigate integration](frigate-integration.md#manual-control-and-autotracking).
+
+`isp_baseline` is a `ChangeIspSettings` payload re-sent each time a PTZ camera
+(re)connects; `{}` sends nothing. On a G5 PTZ whose `hdr` was 2 (set by Protect),
+the image stayed defocused at the preset zoom until `hdr` was set to 1; the camera
+refuses to return to 2. The camera ignores several keys (for example `irLedMode`,
+`wdr`), so check the reply of `POST /api/v1/cameras/<id>/isp` with `{}`.
 
 The operator console's **Recover PTZ** button sends `POST /control/ptz/recover`.
 Like the other `/control/*` routes, it requires the admin session and the CSRF

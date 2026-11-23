@@ -12,7 +12,6 @@ ask for it.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import queue
 import re
@@ -299,6 +298,7 @@ class Controller:
         configured_cameras: dict[str, dict[str, object]] | None = None,
         bind_host: str = "0.0.0.0",
         preset_store: PresetStore | None = None,
+        isp_baseline: dict[str, Any] | None = None,
         auto_home: bool = True,
         watchdog: PtzWatchdog | None = None,
         preset_ack_timeout: float = PRESET_ACK_TIMEOUT_SEC,
@@ -335,6 +335,7 @@ class Controller:
         self.auto_home = auto_home
         self.watchdog = watchdog or PtzWatchdog()
         self.preset_ack_timeout = preset_ack_timeout
+        self.isp_baseline = dict(isp_baseline or {})
         self._presets_lock = threading.Lock()
         self._auto_home_checked: set[str] = set()
         self._presets_synced: set[str] = set()
@@ -739,6 +740,7 @@ class Controller:
             if session.camera.is_ptz:
                 self._enable_ptz(session)
                 self._wait_for_ptz_callback(session.camera.mac, time.monotonic())
+                self._apply_isp_baseline(session.camera.mac)
             if not session.camera.adopted:
                 session.camera.adopted = True
                 log.info("adopted %s", session.camera.mac)
@@ -1265,24 +1267,29 @@ class Controller:
             self._apply_profile_on_arrival(mac, preset)
         return True
 
-    def update_preset(self, mac: str, index: int, focus: int | None, isp: dict | None) -> bool:
-        """Set a stored preset's focus position and/or image profile (isp={} clears it)."""
+    def update_preset(self, mac: str, index: int, isp: dict) -> bool:
+        """Set a stored preset's image profile (isp={} clears it)."""
         camera = self.cameras.get(mac)
-        session = self._ptz_session(mac)
-        if camera is None or session is None:
+        if camera is None:
             return False
         with self._presets_lock:
             preset = camera.presets.get(index)
             if preset is None:
                 return False
-            if focus is not None:
-                preset.position = dataclasses.replace(preset.position, focus=focus)
-            if isp is not None:
-                preset.isp = dict(isp)
+            preset.isp = dict(isp)
             self._persist_presets(camera)
-        if focus is not None:
-            session.request(ptz.PRESET, ptz.configure(preset))  # keep the camera's copy in step
         return True
+
+    def _apply_isp_baseline(self, mac: str) -> None:
+        """Re-assert the configured ISP baseline on every (re)connect, off the control thread."""
+        if not self.isp_baseline:
+            return
+
+        def run() -> None:
+            acked = self.change_isp(mac, self.isp_baseline)
+            log.info("ISP baseline %s applied: acked=%s mac=%s", sorted(self.isp_baseline), acked, mac)
+
+        threading.Thread(target=run, name="isp-baseline", daemon=True).start()
 
     def _control_session(self, mac: str) -> Session | None:
         with self._sessions_lock:

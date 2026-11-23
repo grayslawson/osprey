@@ -733,13 +733,12 @@ def test_preset_image_profile_persists_and_survives_a_resave(tmp_path: Path) -> 
     mac = control.camera.mac
     slot = ctl.set_preset(mac, "porch")
     assert slot is not None
-    assert ctl.update_preset(mac, slot, 200, {"irLedLevel": 100})
-    assert control.camera.presets[slot].position.focus == 200
+    assert ctl.update_preset(mac, slot, {"irLedLevel": 100})
     # Saving the view again must not drop the profile.
     assert ctl.set_preset(mac, "porch", slot) == slot
     assert control.camera.presets[slot].isp == {"irLedLevel": 100}
     assert store.load(mac)[slot].isp == {"irLedLevel": 100}
-    assert ctl.update_preset(mac, slot, None, {})  # {} clears it
+    assert ctl.update_preset(mac, slot, {})  # {} clears it
     assert store.load(mac)[slot].isp == {}
 
 
@@ -761,3 +760,27 @@ def test_goto_applies_the_profile_once_settled_and_a_newer_goto_cancels_it(
         thread.join(2)
     assert sent == [{"irLedLevel": 100}]
     assert plain.isp == {}  # no profile: goto_preset never calls the applier
+
+
+def test_isp_baseline_is_sent_on_connect_and_skipped_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctl, control, _, _, _ = _ptz_pair()
+    mac = control.camera.mac
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(ctl, "change_isp", lambda m, s: sent.append(s) or True)
+    ctl._apply_isp_baseline(mac)  # nothing configured: nothing sent
+    ctl.isp_baseline = {"hdr": 1}
+    ctl._apply_isp_baseline(mac)
+    for thread in [t for t in threading.enumerate() if t.name == "isp-baseline"]:
+        thread.join(2)
+    assert sent == [{"hdr": 1}]
+
+
+def test_config_defaults_to_hdr_baseline_and_rejects_junk() -> None:
+    import config
+
+    assert config.validate_ptz(None)["isp_baseline"] == {"hdr": 1}
+    assert config.validate_ptz({"isp_baseline": {}})["isp_baseline"] == {}
+    with pytest.raises(ValueError):
+        config.validate_ptz({"isp_baseline": {"bad key": 1}})

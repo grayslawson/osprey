@@ -28,7 +28,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -276,7 +276,6 @@ def preset_list(camera: Camera | None, thumbs: Callable[[int], bool]) -> list[di
             "name": preset.name,
             "home": preset.name.strip().casefold() == "home",
             "position": _normalised(camera, preset.position),
-            "focus": preset.position.focus,
             "isp": preset.isp,
             "thumbnail": thumbs(index),
         }
@@ -424,8 +423,6 @@ class WebApp:
             return
         elif rest == "/ptz/move" and method == "POST":
             status, result = self.ptz_move(services, body())
-        elif rest == "/ptz/focus" and method == "POST":
-            status, result = self.ptz_focus(services, body())
         elif rest == "/isp" and method == "POST":
             status, result = self.isp_apply(services, body())
         elif rest == "/ptz/center" and method == "POST":
@@ -808,19 +805,6 @@ class WebApp:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "mode must be relative, absolute or continuous")
         return self._dispatch(services, target, speed)
 
-    def ptz_focus(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
-        """Hold the lens at a raw focus step (0..255) for the current view."""
-        fields = self._fields(data, {"value"}, {"value"})
-        value = self._focus_value(fields["value"])
-        current = self._ptz_camera(services).motion.position
-        return self._dispatch(services, replace(current, focus=value))
-
-    @staticmethod
-    def _focus_value(value: object) -> int:
-        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
-            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "focus must be an integer 0..255")
-        return value
-
     def isp_apply(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
         """Send ChangeIspSettings fields to the camera (focus mode, IR, exposure...)."""
         settings = self._isp_settings(data)
@@ -837,14 +821,11 @@ class WebApp:
         return data
 
     def preset_profile(self, services: "Services", token: int, data: object) -> tuple[HTTPStatus, dict[str, object]]:
-        """Store a preset's focus step and/or image profile; {"capture_focus": true} uses the live lens."""
-        fields = self._fields(data, {"focus", "isp", "capture_focus"})
-        camera = self._ptz_camera(services)
+        """Store a preset's image profile ({} clears it)."""
+        fields = self._fields(data, {"isp"}, {"isp"})
+        self._ptz_camera(services)
         self._named(services, token)
-        focus = camera.motion.position.focus if fields.get("capture_focus") else (
-            self._focus_value(fields["focus"]) if "focus" in fields else None)
-        isp = self._isp_settings(fields["isp"]) if "isp" in fields else None
-        if not services.backend.update_preset(token, focus, isp):
+        if not services.backend.update_preset(token, self._isp_settings(fields["isp"])):
             raise ApiError(HTTPStatus.CONFLICT, "ptz_unavailable", "preset could not be updated")
         return HTTPStatus.OK, {"ok": True, "preset": self._preset_by_token(services, token)}
 
