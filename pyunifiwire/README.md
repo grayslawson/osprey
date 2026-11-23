@@ -26,15 +26,24 @@ an FLV variant with **20 bytes between tags instead of 4** and **HEVC under code
 id 8**, which no standard demuxer maps. Every project that has needed to talk to
 one has re-derived that from scratch.
 
-Two implementations use this package as their only shared code — a controller that
-isn't there and a camera that isn't there — and their test suites read each
-other's output through it. Anything wrong here fails on both sides at once.
+Osprey's controller and its test cameras both use this package, so anything
+wrong here fails on both sides at once.
 
 ## Install
 
+This copy of pyunifiwire is not published to PyPI under its own name. The
+`pyunifiwire` project on PyPI is the upstream project's own release, so
+`pip install pyunifiwire` does not give you this code. Install it from this
+repository:
+
 ```sh
-pip install pyunifiwire
+pip install ./pyunifiwire
+# or, without a checkout:
+pip install "git+https://github.com/grayslawson/osprey.git#subdirectory=pyunifiwire"
 ```
+
+The `osprey-ptz` wheel bundles it, so you do not need it separately to run
+Osprey.
 
 Python 3.13+. **No dependencies** — standard library only, and typed throughout
 (`py.typed`, `mypy --strict` clean).

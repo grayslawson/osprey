@@ -8,6 +8,8 @@ shape the real camera enforces.
 from __future__ import annotations
 
 import json
+
+import pytest
 import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -136,3 +138,20 @@ def test_an_unreachable_camera_is_reported(tmp_path: Path) -> None:
         raise AssertionError("a closed port should not log in")
     except manage.ManageError as exc:
         assert "could not reach" in str(exc)
+
+
+def test_password_comes_from_file_or_env_not_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def fake(cam: str, user: str, pw: str, *a: object) -> dict[str, str]:
+        seen.append(pw)
+        return {}
+
+    monkeypatch.setattr(manage, "take_custody", fake)
+    secret = tmp_path / "pw"
+    secret.write_text("from-file\n")
+    base = ["--camera", "c", "--user", "u", "--host", "h"]
+    assert manage.main([*base, "--password-file", str(secret)]) == 0
+    monkeypatch.setenv("OSPREY_CAMERA_PASSWORD", "from-env")
+    assert manage.main(base) == 0
+    assert seen == ["from-file", "from-env"]

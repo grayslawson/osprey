@@ -11,6 +11,12 @@ that Osprey emitted the `GetCapabilities` elements out of the schema's required
 order — which zeep silently drops, so Home Assistant would never have created
 motion sensors. The unit tests were all green; the real client was not.
 
+## `stubcam.py` — a camera's media feed without a camera
+
+Pushes an Annex B HEVC/H.264 file at the ingest port the way a camera would, so the
+media path can be played back over RTSP without hardware (usage in its docstring).
+It is a development tool: not shipped in the wheel or image, and not covered by the suite.
+
 ## `ha_walk.py` — Home Assistant's onboarding walk
 
 Every call HA's onvif integration makes, in order: clock, capabilities, services,

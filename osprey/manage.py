@@ -26,14 +26,17 @@ Two things worth knowing:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import logging
+import os
 import ssl
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from http.cookiejar import CookieJar
+from pathlib import Path
 from typing import Any, Final
 
 from controller import CONTROL_PORT
@@ -151,7 +154,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--camera", required=True, help="the camera's address")
     parser.add_argument("--user", required=True, help="the camera's management username")
-    parser.add_argument("--password", required=True, help="the camera's management password")
+    pw = parser.add_mutually_exclusive_group()
+    pw.add_argument("--password-file", help="file holding the camera's management password")
+    pw.add_argument("--password", help=argparse.SUPPRESS)  # legacy: visible in `ps`; prefer the above
+    # Otherwise the password comes from OSPREY_CAMERA_PASSWORD, or a prompt.
     parser.add_argument("--host", required=True, help="the address the camera should dial us on")
     parser.add_argument("--control-port", type=int, default=CONTROL_PORT)
     parser.add_argument("--camera-port", type=int, default=CAMERA_HTTPS_PORT)
@@ -159,9 +165,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=sys.stderr)
+    if args.password:
+        log.warning("--password is visible in `ps` and shell history; use --password-file or OSPREY_CAMERA_PASSWORD")
+        password = args.password
+    elif args.password_file:
+        password = Path(args.password_file).read_text(encoding="utf-8").strip()
+    else:
+        password = os.environ.get("OSPREY_CAMERA_PASSWORD") or getpass.getpass("Camera management password: ")
     try:
         take_custody(
-            args.camera, args.user, args.password, args.host, args.token,
+            args.camera, args.user, password, args.host, args.token,
             args.control_port, args.camera_port,
         )
     except ManageError as exc:
