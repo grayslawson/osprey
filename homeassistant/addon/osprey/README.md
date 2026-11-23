@@ -16,4 +16,5 @@ This is a beta. See the **Documentation** tab for setup, and the
 guides.
 
 Osprey builds on [Cuckoo](https://github.com/rjmotion/cuckoo) by rjmotion and
-contributors.
+contributors. It is an independent project, not affiliated with or endorsed by
+Ubiquiti Inc. UniFi and UniFi Protect are trademarks of Ubiquiti Inc.

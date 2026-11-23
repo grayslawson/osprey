@@ -156,7 +156,7 @@ def validate_runtime(value: dict[str, Any]) -> None:
         import ipaddress
         ipaddress.ip_address(bind.strip("[]"))
     except (ValueError, TypeError):
-        raise ValueError('"bind" must be an IP address')
+        raise ValueError('"bind" must be an IP address') from None
     if not isinstance(value.get("name"), str) or not value["name"].strip():
         raise ValueError('"name" must be a non-empty string')
     if not isinstance(value.get("announce"), bool):

@@ -3,7 +3,7 @@ name: Forgejo tests
 on:
   push:
     branches: [main]
-  pull_request:
+  # No pull_request trigger: this runs on a homelab runner and must never execute fork code.
 
 jobs:
   test:
