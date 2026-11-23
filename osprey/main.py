@@ -42,6 +42,7 @@ import logbuffer
 import logfile
 import rtsp
 import snapshots
+import secure_defaults
 import setup_wizard
 from version import get_version
 from controller import CONTROL_PORT, Controller, PtzWatchdog, normalise_mac
@@ -98,6 +99,8 @@ class Options:
     discovery_address: str | None = None
     hello_interval: float = 300.0
     discovery_scopes: tuple[str, ...] = ()
+    # "legacy" keeps the old open defaults; resolve_options sets "secure" for a new install.
+    security: str = "legacy"
 
 
 @dataclass
@@ -277,7 +280,9 @@ def resolve_options(args: argparse.Namespace) -> Options:
         hello_interval = float(discovery_settings.get("hello_interval", 300))
     except (TypeError, ValueError) as exc:
         raise SystemExit(f"invalid runtime configuration: {exc}") from exc
+    cert_path = Path(effective["cert"])
     return Options(
+        security=secure_defaults.resolve(cert_path.parent, (cert_path, Path(path))),
         host=effective["host"],
         bind_host=str(effective.get("bind") or os.environ.get("OSPREY_BIND") or "0.0.0.0"),
         cert=Path(effective["cert"]),
@@ -356,6 +361,7 @@ def build(options: Options) -> Stack:
     # the TLS control channel. An empty set preserves discovery for deployments
     # where the camera receives a dynamic address; those deployments must use a
     # firewall or VLAN boundary (see docs/security.md).
+    secure = options.security == "secure"
     allowed_camera_peers: set[str] = set()
     for item in options.cameras:
         camera_ip = item.get("ip")
@@ -364,20 +370,29 @@ def build(options: Options) -> Stack:
     if options.expected_camera_ip:
         allowed_camera_peers.add(options.expected_camera_ip)
 
+    # Secure installs enforce the list even while empty: the first camera that
+    # completes the control handshake adds its IP (controller.learned_peers).
+    # Legacy installs without a configured IP stay open, as before.
+    state_dir = options.cert.parent
+    learn = secure and not allowed_camera_peers
+    camera_peers: set[str] | None = allowed_camera_peers if (allowed_camera_peers or secure) else None
+    if camera_peers is None:
+        log.warning("media and snapshot ports accept any LAN host; set cameras[].ip or --expected-camera-ip")
+
     # Listeners first: every URL we hand out has to name the port actually bound,
     # not the one asked for. They differ whenever a port is left to the system.
     ingest = media.IngestServer(
         hub,
         port=options.ingest_port,
         fallback_name=options.tracks[0] if options.tracks else "video1",
-        allowed_peers=allowed_camera_peers,
+        allowed_peers=camera_peers,
         bind_host=options.bind_host,
     )
     ingest_port = int(ingest.server_address[1])
     images = snapshots.Store("https://placeholder")  # rewritten below, once bound
     uploads = snapshots.SnapshotServer(
         images, cert=options.cert, port=options.snapshot_port,
-        allowed_peers=allowed_camera_peers,
+        allowed_peers=camera_peers,
         bind_host=options.bind_host,
     )
     snapshot_port = int(uploads.server_address[1])
@@ -394,6 +409,19 @@ def build(options: Options) -> Stack:
         raise ValueError("OSPREY_RTSP_USERNAME and RTSP password must be configured together")
     # One credential store for ONVIF, snapshots and (opt-in) RTSP.
     onvif_auth = onvif.OnvifAuth.from_environment()
+    if secure and not onvif_auth.configured and os.environ.get("OSPREY_ONVIF_AUTH") != "disabled":
+        onvif_auth = onvif.OnvifAuth(
+            secure_defaults.USERNAME, secure_defaults.credential(state_dir, "onvif"),
+            users=onvif_auth.directory,
+        )
+    if secure and not rtsp_user and not onvif_auth.directory.rtsp_require_auth \
+            and os.environ.get("OSPREY_RTSP_AUTH") != "disabled":
+        rtsp_user = secure_defaults.USERNAME
+        rtsp_password = secure_defaults.credential(state_dir, "rtsp")
+    if not secure and not onvif_auth.configured:
+        log.warning("ONVIF is anonymous: anyone on the network can move the camera; enable auth (docs/security.md)")
+    if not secure and not rtsp_user and not onvif_auth.directory.rtsp_require_auth:
+        log.warning("RTSP is anonymous: anyone on the network can watch the camera")
     directory = onvif_auth.directory
     rtsp_auth: rtsp.RtspAuth | None = None
     if rtsp_user or directory.rtsp_require_auth:
@@ -420,6 +448,7 @@ def build(options: Options) -> Stack:
         expected_camera_mac=options.expected_camera_mac,
         configured_cameras={str(item["mac"]): item for item in options.cameras},
         bind_host=options.bind_host,
+        learned_peers=camera_peers if learn else None,
         preset_store=PresetStore(preset_path(options)),
         auto_home=bool(options.ptz.get("auto_home", True)),
         watchdog=PtzWatchdog(
