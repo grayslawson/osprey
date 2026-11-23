@@ -303,7 +303,8 @@ class SetupManager:
         # Generate credentials for RTSP and ONVIF; both require them from the start.
         rtsp_user = "osprey"
         rtsp_password = secrets.token_urlsafe(24)
-        onvif_user = "osprey"
+        # The name Frigate's autotracking is recognised by (ptz.autotrack_users).
+        onvif_user = "frigate"
         onvif_password = secrets.token_urlsafe(24)
         admin_hash = _password_hash(password)
         generated = {
@@ -331,7 +332,8 @@ class SetupManager:
             f"OSPREY_ADMIN_PASSWORD_HASH={admin_hash}",
             f"OSPREY_RTSP_USERNAME={rtsp_user}",
             f"OSPREY_RTSP_PASSWORD_FILE={self.secrets_path.parent / 'rtsp-password'}",
-            *([f"OSPREY_FRIGATE_CONFIG_FILE={self.frigate_path}"] if frigate else []),
+            # Always set, so a Frigate URL entered later in the wizard or console persists.
+            f"OSPREY_FRIGATE_CONFIG_FILE={self.frigate_path}",
             f"OSPREY_ONVIF_USERNAME={onvif_user}",
             f"OSPREY_ONVIF_PASSWORD_FILE={self.secrets_path.parent / 'onvif-password'}",
         ]

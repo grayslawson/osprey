@@ -207,7 +207,7 @@ def test_frigate_is_optional_and_writes_no_frigate_file(tmp_path: Path) -> None:
     manager.save(dict(SAVE), "t")
     assert "frigate" not in json.loads((tmp_path / "osprey.json").read_text())
     assert not (tmp_path / "frigate.json").exists()
-    assert "OSPREY_FRIGATE_CONFIG_FILE" not in (tmp_path / "osprey-secrets.env").read_text()
+    assert f"OSPREY_FRIGATE_CONFIG_FILE={tmp_path / 'frigate.json'}" in (tmp_path / "osprey-secrets.env").read_text()
 
 
 def test_the_token_expires_and_a_new_link_is_logged(

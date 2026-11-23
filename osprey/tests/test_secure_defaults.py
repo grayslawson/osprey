@@ -136,3 +136,17 @@ def test_configured_camera_ip_is_the_only_allowed_peer(fresh: None, tmp_path: Pa
         assert stack.controller.learned_peers is None  # a configured IP is never widened
     finally:
         stack.stop()
+
+
+def test_a_new_onvif_credential_is_for_frigate_and_an_old_one_keeps_osprey(
+    fresh: None, tmp_path: Path,
+) -> None:
+    new, old = tmp_path / "new", tmp_path / "old"
+    secure_defaults.credential(new, "onvif")
+    secure_defaults.credential(new, "rtsp")
+    assert secure_defaults.username(new, "onvif") == "frigate"
+    assert secure_defaults.username(new, "rtsp") == "osprey"
+    old.mkdir()
+    (old / "onvif-password").write_text("generated-before-the-name-was-stored\n")
+    secure_defaults.credential(old, "onvif")
+    assert secure_defaults.username(old, "onvif") == "osprey"
