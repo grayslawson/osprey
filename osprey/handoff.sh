@@ -194,8 +194,8 @@ case "${1:-status}" in
         sleep 3
       done
       echo "  pointing the camera at us via /api/1.2/manage"
-      if ./manage.sh --camera "$CAMERA_HOST" --user "$CAMERA_USER" \
-           --password "$CAMERA_PASSWORD" --host "$host" \
+      if OSPREY_CAMERA_PASSWORD="$CAMERA_PASSWORD" ./manage.sh --camera "$CAMERA_HOST" --user "$CAMERA_USER" \
+           --host "$host" \
            --control-port 7442 --token "$CAMERA_TOKEN"; then
         echo "  done — the camera should dial us and say hello within a few seconds"
       else
