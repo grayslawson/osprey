@@ -43,3 +43,4 @@ node_modules/
 *.swp
 .claude/
 graphify-out/
+.coverage
