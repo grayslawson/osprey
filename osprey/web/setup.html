@@ -39,11 +39,27 @@
 </section>
 
 <section data-step="camera" data-title="Camera" hidden>
+  <p>Osprey looks for UniFi cameras on this network.</p>
+  <p id="scan-status" class="muted" role="status"></p>
+  <ul id="cameras" class="list" aria-label="Cameras found"></ul>
+  <div id="managed-help" class="note warn" hidden>
+    <p><strong>This camera is still managed by a controller, probably UniFi Protect.</strong>
+      Osprey can only adopt it with the password that controller set. To start fresh:</p>
+    <ol>
+      <li>In UniFi Protect, open the camera's settings and choose <strong>Remove</strong>.</li>
+      <li>Wait for the camera to restart. If it still shows as managed here, factory-reset it:
+        hold its reset button for about 10 seconds, until the LED flashes.</li>
+      <li>Wait two minutes for it to boot, then select <strong>Scan again</strong>.</li>
+    </ol>
+  </div>
+  <div class="actions"><button type="button" id="scan" class="secondary">Scan again</button></div>
   <form id="camera-form">
+    <label>Camera IP address <input name="ip" required autocomplete="off" spellcheck="false" placeholder="192.0.2.20"></label>
+    <p class="hint">Not in the list? Type its address and select <strong>Look up</strong>. Reserve the address in your
+      router: Osprey accepts video only from it.</p>
+    <div class="actions"><button type="button" id="lookup" class="secondary">Look up</button></div>
+    <label>Camera MAC address <input name="mac" required autocomplete="off" spellcheck="false" placeholder="AA:BB:CC:DD:EE:FF"></label>
     <label>Camera name <input name="name" required maxlength="64" value="G5 PTZ"></label>
-    <label>Camera MAC address <input name="mac" required autocomplete="off" placeholder="AA:BB:CC:DD:EE:FF"></label>
-    <label>Camera IP address <input name="ip" autocomplete="off" placeholder="192.0.2.20"></label>
-    <p class="hint">Reserve this address in your router. Osprey then accepts video only from it.</p>
     <div class="actions"><button type="button" data-back class="secondary">Back</button><button type="submit">Next</button></div>
   </form>
 </section>
@@ -56,12 +72,39 @@
   </form>
 </section>
 
-<section data-step="saved" data-title="Done" hidden>
+<section data-step="saved" data-title="Restart" hidden>
   <p id="saved-status" role="status">Saving&hellip;</p>
   <div id="credentials" hidden>
     <p>Osprey made these passwords for Frigate. They are shown once, so save them now.</p>
     <pre id="credentials-text" class="code"></pre>
   </div>
+  <div class="actions"><button type="button" id="saved-next" disabled>Next</button></div>
+</section>
+
+<section data-step="signin" data-title="" hidden>
+  <form id="signin-form">
+    <p>Sign in with the Osprey admin password to continue.</p>
+    <label>Admin password <input name="password" type="password" required autocomplete="current-password"></label>
+    <div class="actions"><button type="submit">Sign in</button></div>
+  </form>
+</section>
+
+<section data-step="adopt" data-title="Adopt" hidden>
+  <p>Osprey logs in to the camera at <strong id="adopt-ip"></strong> and points it at itself.</p>
+  <form id="adopt-form">
+    <label>Camera user <input name="username" value="ubnt" autocomplete="off"></label>
+    <label>Camera password <input name="password" type="password" value="ubnt" autocomplete="off"></label>
+    <p class="hint">A camera that was reset logs in with ubnt / ubnt.</p>
+    <div class="actions"><button type="submit">Adopt the camera</button></div>
+  </form>
+  <ul id="adopt-progress" class="list" aria-live="polite"></ul>
+  <div class="actions"><button type="button" id="adopt-next" disabled>Next</button></div>
+</section>
+
+<section data-step="done" data-title="Done" hidden>
+  <p>Osprey is set up.</p>
+  <p class="hint">Keep Protect from adopting the camera again with
+    <a href="https://github.com/grayslawson/osprey/blob/main/docs/protect-guard.md" target="_blank" rel="noopener">Protect guard</a>.</p>
   <div class="actions"><a class="button" href="./">Open the console</a></div>
 </section>
 </main>

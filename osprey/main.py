@@ -37,6 +37,7 @@ import events
 import identity
 import media
 import mqtt_bridge
+import onboarding
 import onvif
 import logbuffer
 import logfile
@@ -755,6 +756,9 @@ def build(options: Options) -> Stack:
         log_calls=bool(options.onvif_log_calls),
     )
     north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry, bind_host=options.bind_host)
+    north.web.onboarding = onboarding.Onboarding(
+        host=options.host, control_port=options.control_port, cameras=options.cameras,
+    )
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
     if setup is not None:

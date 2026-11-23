@@ -4,7 +4,8 @@
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const sections = [...document.querySelectorAll("section[data-step]")];
-  const state = { token: "", trusted: false, values: {}, boot: "" };
+  const state = { token: "", csrf: "", values: {}, boot: "", cameras: [], camera: null };
+  const DOCS = "https://github.com/grayslawson/osprey/blob/main/docs/";
 
   // The token arrives in the link; keep it for this tab and drop it from the address bar.
   const params = new URLSearchParams(location.search);
@@ -18,6 +19,7 @@
 
   const progress = $("#progress");
   for (const section of sections) {
+    if (!section.dataset.title) continue;
     const item = document.createElement("li");
     item.textContent = section.dataset.title;
     item.dataset.for = section.dataset.step;
@@ -26,12 +28,11 @@
 
   function show(step) {
     error("");
-    let reached = false;
     for (const section of sections) section.hidden = section.dataset.step !== step;
+    const order = sections.map((s) => s.dataset.step);
     for (const item of progress.children) {
       const current = item.dataset.for === step;
-      if (current) reached = true;
-      item.classList.toggle("done", !reached);
+      item.classList.toggle("done", order.indexOf(item.dataset.for) < order.indexOf(step));
       if (current) item.setAttribute("aria-current", "step"); else item.removeAttribute("aria-current");
     }
     const focus = $(`section[data-step="${step}"] input, section[data-step="${step}"] button:not([disabled])`);
@@ -40,7 +41,9 @@
 
   function next(from) {
     const index = sections.findIndex((s) => s.dataset.step === from);
-    show(sections[index + 1].dataset.step);
+    let target = index + 1;
+    while (sections[target] && !sections[target].dataset.title) target += 1;
+    show(sections[target].dataset.step);
   }
 
   function back(from) {
@@ -54,9 +57,17 @@
     box.hidden = !message;
   }
 
-  async function call(method, path, body, headers = {}) {
-    const init = { method, headers: { ...headers }, cache: "no-store", credentials: "same-origin" };
+  function element(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
+  async function call(method, path, body) {
+    const init = { method, headers: {}, cache: "no-store", credentials: "same-origin" };
     if (state.token) init.headers["X-Setup-Token"] = state.token;
+    if (state.csrf) init.headers["X-CSRF-Token"] = state.csrf;
     if (body !== undefined) {
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
@@ -91,6 +102,22 @@
     return false;
   }
 
+  // After the restart the steps use the normal admin session, as the console does.
+  async function ensureSession() {
+    const session = await call("GET", "api/v1/session");
+    if (session.authenticated) {
+      state.csrf = session.csrf;
+      return true;
+    }
+    if (state.values.admin_password) {
+      try {
+        state.csrf = (await call("POST", "api/v1/session", { password: state.values.admin_password })).csrf;
+        return true;
+      } catch { /* fall through to the sign-in form */ }
+    }
+    return false;
+  }
+
   for (const button of document.querySelectorAll("[data-next]")) {
     button.addEventListener("click", () => next(button.closest("section").dataset.step));
   }
@@ -106,13 +133,101 @@
     event.preventDefault();
     collect(event.target);
     next("network");
+    if (!state.cameras.length) scan();
   });
 
-  $("#camera-form").addEventListener("submit", (event) => {
+  // ---------------------------------------------------------------- camera
+
+  const cameraForm = $("#camera-form");
+
+  function badge(text, kind) {
+    return element("span", text, `badge ${kind}`);
+  }
+
+  function pick(camera) {
+    state.camera = camera;
+    cameraForm.elements.ip.value = camera.ip;
+    cameraForm.elements.mac.value = camera.mac;
+    if (camera.hostname) cameraForm.elements.name.value = camera.hostname.slice(0, 64);
+    $("#managed-help").hidden = camera.managed !== true;
+  }
+
+  function renderCameras() {
+    const list = $("#cameras");
+    list.replaceChildren();
+    state.cameras.forEach((camera, index) => {
+      const item = document.createElement("li");
+      const label = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "pick";
+      radio.value = String(index);
+      radio.addEventListener("change", () => pick(camera));
+      label.append(radio, element("strong", camera.model || "UniFi camera"), ` ${camera.ip}  ${camera.mac}`);
+      const details = element("div", "", "hint");
+      details.append(`Firmware ${camera.firmware || "unknown"} `);
+      const fw = { tested: ["tested", "ok"], untested: ["untested", "warn"] }[camera.firmware_status] || ["unknown", "warn"];
+      details.append(badge(fw[0], fw[1]), " ");
+      if (camera.managed === true) details.append(badge("managed by a controller", "bad"));
+      else if (camera.managed === false) details.append(badge("ready to adopt", "ok"));
+      if (!camera.ptz) details.append(" ", badge("not a PTZ model", "warn"));
+      item.append(label, details);
+      if (camera.firmware_status !== "tested") item.append(element("p", camera.firmware_message, "hint"));
+      list.append(item);
+    });
+    if (state.cameras.length === 1) {
+      list.querySelector("input").checked = true;
+      pick(state.cameras[0]);
+    }
+  }
+
+  async function scan() {
+    const status = $("#scan-status");
+    const button = $("#scan");
+    button.disabled = true;
+    status.textContent = "Scanning…";
+    try {
+      state.cameras = (await call("POST", "api/setup/discover", {})).cameras || [];
+      renderCameras();
+      status.textContent = state.cameras.length
+        ? `Found ${state.cameras.length} camera${state.cameras.length > 1 ? "s" : ""}. Choose one.`
+        : "No camera answered. With bridge networking the scan cannot reach the LAN: type the camera's address below.";
+    } catch (failure) {
+      status.textContent = `The scan failed: ${failure.message}. Type the camera's address below.`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  $("#scan").addEventListener("click", scan);
+
+  $("#lookup").addEventListener("click", async () => {
+    const ip = cameraForm.elements.ip.value.trim();
+    const status = $("#scan-status");
+    if (!ip) { cameraForm.elements.ip.focus(); return; }
+    status.textContent = `Asking ${ip}…`;
+    try {
+      const found = (await call("POST", "api/setup/discover", { ip })).cameras || [];
+      if (found.length) {
+        state.cameras = found;
+        renderCameras();
+        status.textContent = `Found ${found[0].model} at ${found[0].ip}.`;
+      } else {
+        status.textContent = `Nothing answered at ${ip}. Check the address, or type the MAC address from the camera's label.`;
+      }
+    } catch (failure) {
+      status.textContent = failure.message;
+    }
+  });
+
+  cameraForm.addEventListener("submit", (event) => {
     event.preventDefault();
     collect(event.target);
+    delete state.values.pick;
     next("camera");
   });
+
+  // ------------------------------------------------------------ save + restart
 
   $("#frigate-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -138,30 +253,144 @@
     $("#credentials").hidden = !Object.keys(credentials).length;
     const status = $("#saved-status");
     if (!result.restarting) {
-      status.textContent = "Saved. Restart Osprey to apply the configuration.";
+      status.textContent = "Saved. Restart Osprey, then reload this page to continue.";
       return;
     }
     status.textContent = "Saved. Osprey is restarting with the new configuration…";
-    status.textContent = (await waitForRestart(state.boot))
-      ? "Osprey restarted with the new configuration."
-      : "Osprey has not come back yet. Check its log, then reload this page.";
+    if (await waitForRestart(state.boot)) {
+      status.textContent = "Osprey restarted with the new configuration.";
+      $("#saved-next").disabled = false;
+    } else {
+      status.textContent = "Osprey has not come back yet. Check its log, then reload this page.";
+    }
   }
+
+  async function continueAfterSave() {
+    if (await ensureSession()) {
+      await enterAdopt();
+    } else {
+      show("signin");
+    }
+  }
+
+  $("#saved-next").addEventListener("click", () => continueAfterSave().catch((f) => error(f.message)));
+
+  $("#signin-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      state.csrf = (await call("POST", "api/v1/session", { password: event.target.elements.password.value })).csrf;
+      await enterAdopt();
+    } catch (failure) {
+      error(failure.message);
+    }
+  });
+
+  // ------------------------------------------------------------------ adopt
+
+  async function enterAdopt() {
+    if (!state.values.ip) {
+      const status = await call("GET", "api/v1/setup/status");
+      const camera = (status.cameras || [])[0] || {};
+      state.values.ip = camera.ip || "";
+      state.values.frigate_url = state.values.frigate_url || status.frigate_url || "";
+    }
+    $("#adopt-ip").textContent = state.values.ip || "(no address saved)";
+    show("adopt");
+  }
+
+  function step(list, text, kind) {
+    const item = element("li", "", `check ${kind}`);
+    item.append(element("span", { ok: "Done", bad: "Failed", warn: "Waiting" }[kind] || "", "mark"), element("span", text));
+    list.append(item);
+    return item;
+  }
+
+  function troubleshooting(list, anchor, text) {
+    const item = element("li", "", "check bad");
+    const link = element("a", text);
+    link.href = DOCS + "troubleshooting.md#" + anchor;
+    link.target = "_blank";
+    link.rel = "noopener";
+    item.append(element("span", "Help", "mark"), link);
+    list.append(item);
+  }
+
+  $("#adopt-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const list = $("#adopt-progress");
+    const button = form.querySelector("button[type=submit]");
+    list.replaceChildren();
+    button.disabled = true;
+    try {
+      const login = Object.fromEntries(new FormData(form));
+      const result = await call("POST", "api/v1/setup/adopt", { ip: state.values.ip, ...login });
+      step(list, result.message, "ok");
+      await watchAdoption(list);
+    } catch (failure) {
+      step(list, failure.message, "bad");
+      troubleshooting(list, "the-camera-never-connects", "The camera never connects");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  async function watchAdoption(list, seconds = 120) {
+    const waiting = step(list, "Waiting for the camera to connect and adopt…", "warn");
+    const deadline = Date.now() + seconds * 1000;
+    let adopted = false;
+    while (Date.now() < deadline) {
+      await sleep(2000);
+      let checks = [];
+      try { checks = (await call("GET", "api/v1/cameras/default/health")).checks || []; } catch { continue; }
+      const adoption = checks.find((c) => c.id === "adoption");
+      if (!adopted && adoption && adoption.status === "ok") {
+        adopted = true;
+        waiting.remove();
+        step(list, adoption.detail, "ok");
+        step(list, "Waiting for video…", "warn");
+      }
+      if (adopted && checks.some((c) => String(c.id).startsWith("track:") && c.status === "ok")) {
+        list.lastChild.remove();
+        step(list, "Video is flowing.", "ok");
+        $("#adopt-next").disabled = false;
+        return;
+      }
+    }
+    if (adopted) {
+      step(list, "The camera adopted, but no video arrived yet.", "bad");
+      troubleshooting(list, "no-video", "No video");
+      $("#adopt-next").disabled = false;
+    } else {
+      step(list, "The camera has not connected.", "bad");
+      troubleshooting(list, "the-camera-never-connects", "The camera never connects");
+    }
+  }
+
+  $("#adopt-next").addEventListener("click", () => next("adopt"));
+
+  // ------------------------------------------------------------------ start
 
   async function start() {
     const status = $("#welcome-status");
     show("welcome");
     try {
       const info = await call("GET", "api/setup");
-      state.trusted = Boolean(info.ingress);
-      const host = $("#network-form [name=host]");
-      host.value = info.host || "";
+      $("#network-form [name=host]").value = info.host || "";
       $("#bridge-hint").hidden = !info.bridge_hint;
       status.textContent = "Ready.";
       $("section[data-step=welcome] [data-next]").disabled = false;
     } catch (failure) {
-      status.textContent = failure.status === 404
-        ? "Setup is already complete."
-        : `${failure.message}. Open the setup link from the Osprey log.`;
+      if (failure.status === 404) {
+        // Already saved: an admin can carry on with the steps after the restart.
+        try {
+          await continueAfterSave();
+          return;
+        } catch { /* show the message below */ }
+        status.textContent = "Setup is already complete.";
+      } else {
+        status.textContent = `${failure.message}. Open the setup link from the Osprey log.`;
+      }
     }
   }
 

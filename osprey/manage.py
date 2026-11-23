@@ -148,21 +148,40 @@ def take_custody(
     return result
 
 
+def _configured() -> dict[str, Any]:
+    """Osprey's own config file, for defaults when run next to it (``osprey adopt``)."""
+    path = os.environ.get("OSPREY_CONFIG_FILE")
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Take custody of a camera by pointing it at this controller."
     )
     parser.add_argument("--camera", required=True, help="the camera's address")
-    parser.add_argument("--user", required=True, help="the camera's management username")
+    parser.add_argument("--user", default="ubnt",
+                        help="the camera's management username (default ubnt, a reset camera's)")
     pw = parser.add_mutually_exclusive_group()
     pw.add_argument("--password-file", help="file holding the camera's management password")
     pw.add_argument("--password", help=argparse.SUPPRESS)  # legacy: visible in `ps`; prefer the above
     # Otherwise the password comes from OSPREY_CAMERA_PASSWORD, or a prompt.
-    parser.add_argument("--host", required=True, help="the address the camera should dial us on")
-    parser.add_argument("--control-port", type=int, default=CONTROL_PORT)
+    configured = _configured()
+    parser.add_argument("--host", default=os.environ.get("OSPREY_HOST") or configured.get("host"),
+                        help="the address the camera should dial us on (default: OSPREY_HOST, "
+                             "or host in the config file)")
+    parser.add_argument("--control-port", type=int,
+                        default=configured.get("ports", {}).get("control", CONTROL_PORT))
     parser.add_argument("--camera-port", type=int, default=CAMERA_HTTPS_PORT)
     parser.add_argument("--token", default="osprey", help="the adoption code, ours to choose")
     args = parser.parse_args(argv)
+    if not args.host:
+        parser.error("--host is required: Osprey's address as the camera reaches it")
 
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=sys.stderr)
     if args.password:
