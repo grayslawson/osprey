@@ -57,7 +57,6 @@ def test_malformed_multipart_upload_is_rejected() -> None:
 
 
 def test_multipart_upload_with_trailing_data_is_rejected() -> None:
-    boundary = b"camera"
     body = (b"--camera\r\nContent-Disposition: form-data; name=upload\r\n\r\n"
             + JPEG + b"\r\n--camera--\r\nextra")
     assert snapshots._extract_upload(body, "multipart/form-data; boundary=camera") is None

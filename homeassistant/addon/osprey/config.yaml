@@ -3,7 +3,7 @@ version: "0.9.0b3"
 slug: osprey
 # A beta: it works, but expect rough edges and changes.
 stage: experimental
-description: Serve a UniFi PTZ camera to Frigate over ONVIF and RTSP
+description: Serve a UniFi PTZ camera to Frigate over ONVIF and RTSP. Not affiliated with Ubiquiti.
 url: https://github.com/grayslawson/osprey
 startup: services
 boot: auto

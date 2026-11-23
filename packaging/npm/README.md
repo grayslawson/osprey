@@ -29,3 +29,6 @@ wheel or a source checkout on the Osprey host. For the same reason `probe --dump
 `protect-guard --api-key-file` cannot read files on the host. To deploy the
 controller itself, use `compose.release.yaml`; see the
 [installation guide](https://github.com/grayslawson/osprey/blob/main/docs/installation.md).
+
+Osprey is an independent project, not affiliated with or endorsed by Ubiquiti
+Inc. UniFi and UniFi Protect are trademarks of Ubiquiti Inc.

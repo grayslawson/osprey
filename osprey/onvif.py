@@ -2854,7 +2854,7 @@ class Services:
             "http://www.onvif.org/onvif/ver10/topics/topicns.xml"
             "</tev:TopicNamespaceLocation>"
             "<wsnt:FixedTopicSet>true</wsnt:FixedTopicSet>"
-            f"<wstop:TopicSet xmlns:wstop=\"http://docs.oasis-open.org/wsn/t-1\">"
+            "<wstop:TopicSet xmlns:wstop=\"http://docs.oasis-open.org/wsn/t-1\">"
             "<tns1:RuleEngine><CellMotionDetector><Motion wstop:topic=\"true\"/>"
             "</CellMotionDetector><MyRuleDetector>"
             "<PeopleDetect wstop:topic=\"true\"/><VehicleDetect wstop:topic=\"true\"/>"

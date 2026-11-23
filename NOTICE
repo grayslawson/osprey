@@ -3,10 +3,26 @@ Copyright (c) 2026 Osprey contributors
 
 This product is licensed under the MIT License (see LICENSE).
 
-It includes code derived from the Cuckoo and pyunifiwire projects
-(https://github.com/rjmotion/cuckoo, https://github.com/rjmotion/pyunifiwire),
-Copyright (c) 2026 flock contributors, also under the MIT License. Those
-notices are preserved in LICENSE, osprey/LICENSE and pyunifiwire/LICENSE.
+Upstream projects
+-----------------
+
+Osprey is derived from projects by the flock contributors, all under the MIT
+License and Copyright (c) 2026 flock contributors:
+
+  Cuckoo       https://github.com/rjmotion/cuckoo
+               A UniFi controller stand-in. The osprey/ controller is that
+               code, renamed and extended.
+  pyunifiwire  https://github.com/rjmotion/pyunifiwire
+               The UniFi wire protocol library, in pyunifiwire/.
+  Finch        https://github.com/rjmotion/finch
+               A synthetic UniFi camera for testing. It was part of this
+               repository's early history, and no Finch source directory
+               remains. Any code Osprey carries over from it is covered by the
+               same notice.
+
+The copyright notice for all three is kept in LICENSE and in
+pyunifiwire/LICENSE. The bundled web libraries have their own notices,
+described below.
 
 Interoperability and non-affiliation
 ------------------------------------
@@ -14,7 +30,9 @@ Interoperability and non-affiliation
 Osprey and pyunifiwire are independent projects. They are not affiliated
 with, endorsed by, sponsored by, or supported by Ubiquiti Inc. "Ubiquiti",
 "UniFi", "UniFi Protect" and "G5" are trademarks of Ubiquiti Inc. and are used
-here only to identify the hardware that Osprey interoperates with.
+here only to identify the hardware that Osprey interoperates with. "Frigate"
+and "Home Assistant" are the names of other projects, used to say what Osprey
+works with.
 
 The UniFi camera wire protocol implemented in pyunifiwire/ was documented by
 observing traffic between devices that the authors own, for the sole purpose
