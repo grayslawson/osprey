@@ -145,7 +145,7 @@ class SentryConfig:
         for index, item in enumerate(raw_points):
             if not isinstance(item, Mapping):
                 raise ValueError(f"sentry.points[{index}] must be an object")
-            unknown = set(item) - {"name", "dwell_sec"}
+            unknown = set(item) - {"name", "dwell_sec", "night_preset"}
             if unknown:
                 raise ValueError(
                     f"sentry.points[{index}] has unexpected field(s): {', '.join(sorted(unknown))}"
@@ -173,7 +173,10 @@ class SentryConfig:
                 raise ValueError(
                     f"sentry point dwell_sec must be at least {MIN_INTERVAL_SEC:g} seconds"
                 )
-            points.append(PatrolPoint(name.strip(), dwell))
+            night = item.get("night_preset")
+            if night is not None and (not isinstance(night, str) or not night.strip()):
+                raise ValueError("sentry point night_preset must be a non-empty string")
+            points.append(PatrolPoint(name.strip(), dwell, night.strip() if night else None))
         return cls(enabled, interval_f, speed_i, hold_f, tuple(points))
 
     def as_dict(self) -> dict[str, object]:
@@ -183,7 +186,11 @@ class SentryConfig:
             "speed": self.speed,
             "tracking_hold_sec": self.tracking_hold_sec,
             "points": [
-                {"name": point.name, **({"dwell_sec": point.dwell_sec} if point.dwell_sec is not None else {})}
+                {
+                    "name": point.name,
+                    **({"dwell_sec": point.dwell_sec} if point.dwell_sec is not None else {}),
+                    **({"night_preset": point.night_preset} if point.night_preset else {}),
+                }
                 for point in self.points
             ],
         }
@@ -200,6 +207,7 @@ class SentryRuntime:
         camera_idle: Callable[[], bool],
         gate: MovementGate | None = None,
         camera_key: str = "",
+        is_night: Callable[[], bool] | None = None,
     ) -> None:
         self.config = config
         self.gate = gate or MovementGate()
@@ -210,6 +218,7 @@ class SentryRuntime:
             camera_idle=camera_idle,
             interval_sec=config.interval_sec,
             movement_lease=lambda: self.gate.lease("sentry", self.camera_key),
+            is_night=is_night,
         )
         self.patrol.configure(list(config.points))
         if config.enabled and config.points:

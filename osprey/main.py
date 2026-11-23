@@ -532,6 +532,7 @@ def build(options: Options) -> Stack:
         gate=movement_gate,
         preset_names=sentry_presets,
         store=SentryStore(options.cert.parent / "sentry.json"),
+        is_night=lambda mac: getattr(control.cameras.get(mac), "scene", None) == "NIGHT",
     )
     # The config file is the baseline; the state file holds whatever an
     # operator changed at runtime, so a restart does not drop a running patrol.

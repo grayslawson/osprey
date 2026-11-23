@@ -570,6 +570,8 @@ class Camera:
     motion: Motion = field(default_factory=Motion)
     smart_detect: list[str] = field(default_factory=list)
     audio_codecs: list[Codec] = field(default_factory=list)
+    # "DAY" / "NIGHT" from the camera's EventIspSceneStatus; None until it reports.
+    scene: str | None = None
 
     @property
     def is_ptz(self) -> bool:

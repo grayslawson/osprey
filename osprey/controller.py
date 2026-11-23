@@ -277,6 +277,10 @@ class Session:
 
 
 
+# Pushed by the camera when its day/night (IR-cut) state changes: {"scene": "DAY"|"NIGHT"}.
+SCENE_STATUS: Final = "EventIspSceneStatus"
+
+
 class Controller:
     """Accepts camera connections and runs the protocol over them."""
 
@@ -634,8 +638,12 @@ class Controller:
         name = message.function_name
         if message.is_reply:
             self._resolve_ack(message)
-        if name in (adoption.CHANGE_ISP, "EventIspSceneStatus"):
-            log.info("%s %s", name, str(message.payload)[:400])
+        if name == SCENE_STATUS:
+            scene = message.payload.get("scene")
+            camera = self.cameras.get(session.camera.mac)
+            if camera is not None and isinstance(scene, str):
+                camera.scene = scene.upper()
+                log.info("camera scene: %s mac=%s", camera.scene, camera.mac)
 
         if name == TIME_SYNC:
             # Answer EVERY timeSync, reply or not. The camera and controller
