@@ -64,8 +64,9 @@ the host's real address.
 ## What breaks it?
 
 A camera firmware update can change the protocol. Osprey is beta software
-written from observed behaviour, and [NOTICE](../NOTICE) says so. Run your own
-tracking test after any camera firmware change.
+written from observed behaviour, and [NOTICE](../NOTICE) says so. The G5 PTZ is
+tested on firmware 5.5.13.67 and 5.3.95; Osprey logs a warning on any other
+version. Run your own tracking test after any camera firmware change.
 
 ## What do Cuckoo and Finch mean?
 
