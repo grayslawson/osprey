@@ -15,8 +15,10 @@ name and optional IP hint in `osprey.json`:
 
 MACs are normalised and must be unique; separators are optional. With a list
 present, Osprey rejects any camera not on it. Without one, it accepts any
-camera. `name` is shown to ONVIF clients, and `ip` is only a hint, never the
-camera's identity.
+camera. `name` is shown to ONVIF clients, and `ip` is never the
+camera's identity, but when it is set Osprey accepts media and snapshot
+uploads only from that address. Setting it is recommended; see
+[security](security.md#the-cameras-address).
 
 The console has a camera switcher. Preview, status, PTZ, presets, patrol and
 the Frigate URL follow the selected camera. Each camera gets a stable ID from

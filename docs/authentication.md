@@ -81,7 +81,8 @@ Set `OSPREY_ONVIF_USERS_FILE` to a JSON file to give each client its own
 credential and roles. Without it, the single-credential settings
 (`OSPREY_ONVIF_USERNAME` with `OSPREY_ONVIF_PASSWORD` or
 `OSPREY_ONVIF_PASSWORD_FILE`) keep working, and that user holds every role.
-With neither set, ONVIF is anonymous.
+With neither set, ONVIF is anonymous in legacy mode, and Osprey generates a
+credential in secure mode (see [security](security.md#secure-mode-and-legacy-mode)).
 
 ```json
 {
