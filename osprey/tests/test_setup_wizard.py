@@ -162,3 +162,24 @@ def test_non_ascii_setup_token_is_refused_not_a_crash(tmp_path: Path) -> None:
     manager = SetupManager(tmp_path / "osprey.json", token="setup-token")
     with pytest.raises(SetupError):
         manager.save({}, "é")
+
+
+@pytest.mark.parametrize("blank", ["", "  ", None])
+def test_camera_ip_is_optional(tmp_path: Path, blank: object) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="t")
+    manager.save(
+        {"host": "osprey.example.test", "name": "Cam", "mac": "AABBCCDDEEFF", "ip": blank,
+         "frigate_url": "http://frigate.example.test:5000", "admin_password": "correct horse"},
+        "t",
+    )
+    assert "ip" not in json.loads((tmp_path / "osprey.json").read_text())["cameras"][0]
+
+
+def test_a_malformed_camera_ip_is_still_rejected(tmp_path: Path) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="t")
+    with pytest.raises(SetupError, match="valid IPv4 or IPv6"):
+        manager.save(
+            {"host": "osprey.example.test", "name": "Cam", "mac": "AABBCCDDEEFF", "ip": "not-an-ip",
+             "frigate_url": "http://frigate.example.test:5000", "admin_password": "correct horse"},
+            "t",
+        )

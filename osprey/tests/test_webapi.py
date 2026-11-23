@@ -904,3 +904,18 @@ def test_sse_client_cap(served: Any) -> None:
 def test_request_sockets_have_an_idle_timeout(served: Any) -> None:
     server, _, _ = served
     assert onvif._Handler.timeout is not None and onvif._Handler.timeout <= 60
+
+
+def test_untested_firmware_is_warned_in_state(served: Any) -> None:
+    server, service, recorder = served
+    camera = recorder.camera
+    assert camera is not None
+    client = Client(server)
+    camera.firmware = "9.9.9"
+    state = client.json("GET", "/api/v1/cameras/default/state")[1]
+    check = next(c for c in state["health"]["checks"] if c["id"] == "firmware")
+    assert state["camera"]["firmware_status"] == "untested"
+    assert check["status"] == "warn" and "9.9.9" in check["detail"]
+    camera.firmware = "5.3.95"
+    state = client.json("GET", "/api/v1/cameras/default/state")[1]
+    assert state["camera"]["firmware_status"] == "tested"

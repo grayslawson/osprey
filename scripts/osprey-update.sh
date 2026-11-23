@@ -143,15 +143,12 @@ validate_image() {
     esac
 }
 
-latest_release_tag() {
-    repo=${OSPREY_GITHUB_REPOSITORY:-grayslawson/osprey}
-    api=${OSPREY_RELEASE_API_URL:-https://api.github.com/repos/$repo/releases/latest}
-    response=
+fetch_release_json() {
     if command -v curl >/dev/null 2>&1; then
-        response=$(curl -fsSL --connect-timeout 5 --max-time 20 \
-            -H 'Accept: application/vnd.github+json' "$api") || die "could not query $api"
+        curl -fsSL --connect-timeout 5 --max-time 20 \
+            -H 'Accept: application/vnd.github+json' "$1"
     elif command -v python3 >/dev/null 2>&1; then
-        response=$(python3 - "$api" <<'PY'
+        python3 - "$1" <<'PY'
 import sys
 import urllib.request
 
@@ -161,14 +158,26 @@ request = urllib.request.Request(
 with urllib.request.urlopen(request, timeout=20) as response:
     sys.stdout.write(response.read().decode("utf-8"))
 PY
-        ) || die "could not query $api"
     else
         die 'latest release lookup requires curl or python3'
     fi
+}
+
+latest_release_tag() {
+    repo=${OSPREY_GITHUB_REPOSITORY:-grayslawson/osprey}
+    api=${OSPREY_RELEASE_API_URL:-https://api.github.com/repos/$repo/releases/latest}
+    response=$(fetch_release_json "$api") || response=
+    if [ -z "$response" ]; then
+        # /releases/latest is 404 while every release is a pre-release (as in
+        # 0.9.x); the newest release of any kind is the next best answer.
+        api="${api%/latest}?per_page=1"
+        response=$(fetch_release_json "$api") || response=
+    fi
+    [ -n "$response" ] || die "could not query $api"
     tag=$(printf '%s' "$response" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')
     case "$tag" in
         v[0-9]*.[0-9]*.[0-9]*) printf '%s\n' "$tag" ;;
-        *) die 'GitHub did not return a stable release tag' ;;
+        *) die 'GitHub did not return a release tag' ;;
     esac
 }
 
