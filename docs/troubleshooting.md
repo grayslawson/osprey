@@ -143,7 +143,8 @@ device by address instead: host from `OSPREY_HOST`, port 8000 (or 8001 for the
 
 ## Still stuck
 
-Collect `osprey doctor` output and the last 200 log lines. Logs are redacted,
+Collect the version (`osprey --version`, or `osprey-entrypoint version` inside
+the container), the `osprey doctor` output and the last 200 log lines. Logs are redacted,
 but read them before you post. Then open an issue. If your camera is not a G5
 PTZ, run [`osprey probe`](camera-models.md#help-add-a-model-osprey-probe) and
 attach its bundle to a **Camera model support** issue.
