@@ -3,10 +3,10 @@
 | Surface | Role | Changes come from |
 | --- | --- | --- |
 | GitHub `grayslawson/osprey` | Canonical repository, review and public issues | Maintainers and contributors |
-| Forgejo `grays/osprey` | Private, read-only pull mirror | The GitHub repository, hourly |
+| Forgejo `<owner>/osprey` | Private, read-only pull mirror | The GitHub repository, hourly |
 | GHCR `ghcr.io/grayslawson/osprey` | Container images | The GitHub release workflow |
 | PyPI `osprey-ptz`, npm `@osprey-ptz/cli` | Packages | The GitHub release workflow, through trusted publishing |
-| `grayslawson/osprey-ha-apps` | Home Assistant app repository | A scheduled sync; see [`packaging/homeassistant-repo`](../packaging/homeassistant-repo/README.md) |
+| `grayslawson/osprey-ha-apps` | Home Assistant app repository | A scheduled sync; see [`packaging/homeassistant-repo`](../../packaging/homeassistant-repo/README.md) |
 
 A Git mirror copies code and tags only. Issues, pull requests, releases,
 secrets, branch rules and Actions history stay on GitHub.
@@ -25,13 +25,13 @@ curl -X POST https://forgejo.example.com/api/v1/repos/migrate \
   -H "Content-Type: application/json" \
   -d '{"clone_addr":"https://github.com/grayslawson/osprey.git",
        "service":"git","mirror":true,"mirror_interval":"1h",
-       "private":true,"repo_owner":"grays","repo_name":"osprey"}'
+       "private":true,"repo_owner":"<owner>","repo_name":"osprey"}'
 ```
 
 To sync on demand:
 
 ```sh
-curl -X POST https://forgejo.example.com/api/v1/repos/grays/osprey/mirror-sync \
+curl -X POST https://forgejo.example.com/api/v1/repos/<owner>/osprey/mirror-sync \
   -H "Authorization: token $FORGEJO_TOKEN" -d '{}'
 ```
 
@@ -41,7 +41,7 @@ repository, entered in the mirror's authentication fields and never in a URL
 or a checked-in file. A mirror failure blocks a release.
 
 The Forgejo tree from before the `cuckoo/` to `osprey/` rename is kept, frozen
-and private, as `grays/osprey-legacy`. The `archive/pre-osprey-main-2026-09-15`
+and private, as `<owner>/osprey-legacy`. The `archive/pre-osprey-main-2026-09-15`
 branch is a frozen snapshot too. Neither is a base for new work.
 
 ## CI and releases
