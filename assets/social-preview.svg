@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f2a33"/>
+      <stop offset="1" stop-color="#14424a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <!-- PTZ motif: dome, pan ring, tilt arc -->
+  <g transform="translate(1010 320) scale(0.92)" fill="none" stroke="#e8f1ee" stroke-linecap="round">
+    <circle r="205" stroke-width="3" stroke-dasharray="2 14" opacity="0.5"/>
+    <path d="M -175 -105 A 205 205 0 0 1 175 -105" stroke-width="6" opacity="0.9"/>
+    <path d="M 175 -105 l -4 -24 m 4 24 l -24 -4" stroke-width="6" opacity="0.9"/>
+    <path d="M -175 105 A 205 205 0 0 0 175 105" stroke-width="6" opacity="0.9"/>
+    <path d="M -175 105 l 4 24 m -4 -24 l 24 4" stroke-width="6" opacity="0.9"/>
+    <circle r="112" fill="#1d5a5f" stroke-width="6"/>
+    <circle r="72" fill="#0a1d23" stroke-width="6"/>
+    <circle r="34" fill="#2e8f8a" stroke="none"/>
+    <circle cx="-12" cy="-12" r="9" fill="#e8f1ee" stroke="none" opacity="0.85"/>
+    <path d="M -60 140 h 120" stroke-width="6" opacity="0.6"/>
+  </g>
+  <text x="80" y="285" font-family="Liberation Sans, Helvetica, Arial, sans-serif" font-size="148" font-weight="700" fill="#f4faf8">Osprey</text>
+  <text x="84" y="355" font-family="Liberation Sans, Helvetica, Arial, sans-serif" font-size="38" fill="#cfe3de">Self-hosted PTZ control for UniFi cameras.</text>
+  <text x="84" y="408" font-family="Liberation Sans, Helvetica, Arial, sans-serif" font-size="38" fill="#cfe3de">ONVIF and RTSP for Frigate.</text>
+  <text x="84" y="570" font-family="Liberation Sans, Helvetica, Arial, sans-serif" font-size="26" fill="#8fb5ad">github.com/grayslawson/osprey  ·  Beta  ·  Not affiliated with Ubiquiti</text>
+</svg>
