@@ -67,8 +67,9 @@ flowchart LR
 | UniFi G5 PTZ | Supported |
 | Other UniFi PTZ cameras | Experimental. They adopt and stream, and PTZ uses the ranges the camera reports. See [camera models](docs/camera-models.md). |
 
-Tested G5 PTZ firmware: 5.3.95 and 5.5.13. Other versions are untested, and a
-firmware update can change the protocol. Test tracking again after one.
+Tested G5 PTZ firmware: 5.3.95. Osprey logs a warning and flags the Health tab
+on any other version, because a firmware update can change the protocol. Test
+tracking again after one.
 
 Osprey runs as a container for `linux/amd64` and `linux/arm64`, as a Home
 Assistant app on `amd64` and `aarch64`, as a NixOS service, or as a Python 3.13
