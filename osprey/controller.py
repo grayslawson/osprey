@@ -1267,7 +1267,7 @@ class Controller:
             self._apply_profile_on_arrival(mac, preset)
         return True
 
-    def update_preset(self, mac: str, index: int, isp: dict) -> bool:
+    def update_preset(self, mac: str, index: int, isp: dict[str, Any]) -> bool:
         """Set a stored preset's image profile (isp={} clears it)."""
         camera = self.cameras.get(mac)
         if camera is None:
@@ -1290,14 +1290,6 @@ class Controller:
             log.info("ISP baseline %s applied: acked=%s mac=%s", sorted(self.isp_baseline), acked, mac)
 
         threading.Thread(target=run, name="isp-baseline", daemon=True).start()
-
-    def _control_session(self, mac: str) -> Session | None:
-        with self._sessions_lock:
-            sessions = list(self._sessions.values())
-        for session in sessions:
-            if session.camera.mac == mac and not session.is_ptz_channel:
-                return session
-        return None
 
     def change_isp(self, mac: str, settings: dict[str, Any]) -> bool | None:
         """Send ChangeIspSettings on the control channel (True ack, False refused, None silent)."""

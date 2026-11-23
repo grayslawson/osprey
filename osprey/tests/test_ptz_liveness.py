@@ -748,9 +748,14 @@ def test_goto_applies_the_profile_once_settled_and_a_newer_goto_cancels_it(
     ctl, control, _, _, _ = _ptz_pair(preset_ack_timeout=0.01)
     mac = control.camera.mac
     sent: list[dict[str, Any]] = []
-    monkeypatch.setattr(ctl, "change_isp", lambda m, s: sent.append(s) or True)
+
+    def record(_mac: str, settings: dict[str, Any]) -> bool:
+        sent.append(settings)
+        return True
+
+    monkeypatch.setattr(ctl, "change_isp", record)
     gate = threading.Event()
-    monkeypatch.setattr(controller.time, "sleep", lambda _s: gate.wait(2))
+    monkeypatch.setattr(time, "sleep", lambda _s: gate.wait(2))
     plain = Preset(1, "plain", Position(1, 2, 3, 4))
     tuned = Preset(2, "tuned", Position(5, 6, 7, 8), isp={"irLedLevel": 100})
     ctl._apply_profile_on_arrival(mac, tuned)
@@ -768,7 +773,12 @@ def test_isp_baseline_is_sent_on_connect_and_skipped_when_empty(
     ctl, control, _, _, _ = _ptz_pair()
     mac = control.camera.mac
     sent: list[dict[str, Any]] = []
-    monkeypatch.setattr(ctl, "change_isp", lambda m, s: sent.append(s) or True)
+
+    def record(_mac: str, settings: dict[str, Any]) -> bool:
+        sent.append(settings)
+        return True
+
+    monkeypatch.setattr(ctl, "change_isp", record)
     ctl._apply_isp_baseline(mac)  # nothing configured: nothing sent
     ctl.isp_baseline = {"hdr": 1}
     ctl._apply_isp_baseline(mac)

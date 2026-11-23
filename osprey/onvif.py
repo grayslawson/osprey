@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections.abc import Mapping
-from typing import Callable, ClassVar, Final, TYPE_CHECKING
+from typing import Any, Callable, ClassVar, Final, TYPE_CHECKING
 from xml.etree import ElementTree
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -559,9 +559,9 @@ class Backend:
     set_preset: Callable[[str, int | None], int | None] = lambda _n, _i: None
     remove_preset: Callable[[int], bool] = lambda _i: False
     # Per-preset ChangeIspSettings profile: (index, isp).
-    update_preset: Callable[[int, dict], bool] = lambda _i, _p: False
+    update_preset: Callable[[int, dict[str, Any]], bool] = lambda _i, _p: False
     # One ChangeIspSettings request on the control channel: True ack, False refused, None silent.
-    change_isp: Callable[[dict], bool | None] = lambda _s: False
+    change_isp: Callable[[dict[str, Any]], bool | None] = lambda _s: False
     refresh_position: Callable[[], bool] = lambda: False
     # Halt the head: (pan_tilt, zoom) -> whether a stop was issued or not needed.
     stop: Callable[[bool, bool], bool] = lambda _pt, _z: False
