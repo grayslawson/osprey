@@ -41,7 +41,7 @@ then watch a Frigate autotracking test.
 
 To roll back, run the same command with the previous tag. Older releases
 ignore state files they do not know, such as `osprey-presets.json`, but
-re-save presets and patrols if you changed them on the newer one.
+save presets and patrols again if you changed them on the newer one.
 
 ## Home Assistant app
 

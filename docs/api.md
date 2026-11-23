@@ -80,7 +80,7 @@ curl -s --cookie cookies.txt -H "X-CSRF-Token: $TOKEN" \
 | GET | `/api/v1/cameras/{cam}/presets/{token}/thumbnail.jpg` | The thumbnail taken when the preset was saved. |
 | GET | `/api/v1/cameras/{cam}/frigate` | `{base_url, configured}`. |
 | PUT | `/api/v1/cameras/{cam}/frigate` | `{"base_url"}`, or `{"base_url": null}` to clear it. |
-| PUT | `/api/v1/cameras/{cam}/tracks/{name}` | `{"codec"}`: `h264`, `h265` or `mjpg`. Osprey re-arms the track without a restart. |
+| PUT | `/api/v1/cameras/{cam}/tracks/{name}` | `{"codec"}`: `h264`, `h265` or `mjpg`. Osprey arms the track again without a restart. |
 | GET | `/api/v1/logs?limit=&level=&before=` | Redacted log records, newest first. `limit` is 1 to 500. |
 | GET | `/api/v1/events?camera=&log_level=` | Server sent events. `503 busy` above 16 clients. |
 | GET | `/api/v1/sentry` | Every camera's patrol and the movement gate. |

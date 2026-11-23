@@ -121,7 +121,7 @@ Work through these in order. Each rules out one layer.
 6. A sentry patrol is fighting the tracker. Gate Frigate autotracking on a
    zone that covers the whole frame, as [sentry](sentry.md) explains.
 7. Frigate has a stale preset list. It reads presets once. After you add
-   `home`, restart Frigate or re-save its ONVIF settings.
+   `home`, restart Frigate or save its ONVIF settings again.
 8. Moves are refused. Look for `PTZ move refused:` in Osprey's log. It is
    rate limited to once every 30 seconds per reason.
 

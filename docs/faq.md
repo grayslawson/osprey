@@ -11,7 +11,7 @@ ONVIF PTZ camera. Osprey never installs, configures or runs Frigate.
 
 A UniFi PTZ camera does not speak ONVIF or RTSP to its controller. It talks a
 private protocol to UniFi Protect: a JSON WebSocket for control, and a pushed
-FLV style video stream. Osprey plays the controller's part, then re-serves the
+FLV style video stream. Osprey plays the controller's part, then serves the
 camera's video and motion as ONVIF and RTSP.
 
 ## Do I lose UniFi Protect?
