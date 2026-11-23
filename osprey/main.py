@@ -212,7 +212,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
         try:
             effective.setdefault("ptz", {})["max_speed"] = int(os.environ["OSPREY_PTZ_MAX_SPEED"])
         except ValueError:
-            raise SystemExit("invalid runtime configuration: OSPREY_PTZ_MAX_SPEED must be an integer")
+            raise SystemExit("invalid runtime configuration: OSPREY_PTZ_MAX_SPEED must be an integer") from None
     if args.name is not None:
         effective["name"] = args.name
     if args.cert is not None:

@@ -26,6 +26,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -675,7 +676,7 @@ class WebApp:
         return camera
 
     @staticmethod
-    def _fields(data: object, allowed: set[str], required: set[str] = set()) -> dict[str, object]:
+    def _fields(data: object, allowed: set[str], required: AbstractSet[str] = frozenset()) -> dict[str, object]:
         if not isinstance(data, dict):
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "expected a JSON object")
         unknown = set(data) - allowed
