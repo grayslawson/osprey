@@ -36,9 +36,11 @@ uses the zone-based firewall.
 
    ```sh
    osprey protect-guard --console https://192.0.2.1 --camera-ip 192.0.2.20 \
-     --api-key-file ~/.config/osprey/unifi-api-key
+     --api-key-file ~/.config/osprey/unifi-api-key \
+     --pin-file ~/.config/osprey/unifi-console.pin
    osprey protect-guard --console https://192.0.2.1 --camera-ip 192.0.2.20 \
-     --api-key-file ~/.config/osprey/unifi-api-key --apply
+     --api-key-file ~/.config/osprey/unifi-api-key \
+     --pin-file ~/.config/osprey/unifi-console.pin --apply
    ```
 
 `osprey` here is the command from the Python wheel or `./scripts/osprey` in a
@@ -47,17 +49,28 @@ container:
 
 ```sh
 docker run --rm --network host --user "$(id -u)" \
-  -v ~/.config/osprey/unifi-api-key:/run/unifi-api-key:ro \
+  -v ~/.config/osprey:/run/osprey \
   ghcr.io/grayslawson/osprey:0.9.0b3 protect-guard \
   --console https://192.0.2.1 --camera-ip 192.0.2.20 \
-  --api-key-file /run/unifi-api-key
+  --api-key-file /run/osprey/unifi-api-key \
+  --pin-file /run/osprey/unifi-console.pin
 ```
 
 Without `--apply` the command only reads. With it, the command creates one
 policy named `Osprey guard: camera to Protect` and changes nothing else. Use
-`--site` for a site other than `default`. The console certificate is usually
-self-signed, so TLS verification is off unless you pass `--verify-tls`.
-`OSPREY_UNIFI_API_KEY_FILE` can replace `--api-key-file`.
+`--site` for a site other than `default`. `OSPREY_UNIFI_API_KEY_FILE` can
+replace `--api-key-file`.
+
+The command verifies the console's TLS certificate. UniFi consoles usually use
+a self-signed one, so the first run fails until you choose how to trust it:
+
+| Flag | Effect |
+|---|---|
+| `--pin-file PATH` | Trust on first use. Stores the certificate's SHA-256 in the file and requires the same certificate afterwards. |
+| `--ca-file PATH` | Verify against a PEM CA or the console's certificate. |
+| `--insecure` | Do not verify the certificate. Avoid it. |
+
+Only one of the three can be used per run.
 
 | Exit code | Meaning |
 |---|---|

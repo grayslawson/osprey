@@ -19,11 +19,58 @@ cameras:
       port: 8000
 ```
 
-The tracks are `video1` (2688×1512), `video2` (1280×720) and `video3`
-(640×360), all H.264 by default. Leave the RTSP credentials out if RTSP
-authentication is off. If ONVIF authentication is on, add `onvif.user` and
-`onvif.password` and keep `onvif.tls_insecure: false`; see
+Osprey's three tracks are `video1` (2688×1512), `video2` (1280×720) and
+`video3` (640×360). Leave the RTSP credentials out if RTSP authentication is
+off. If ONVIF authentication is on, add `onvif.user` and `onvif.password` and
+keep `onvif.tls_insecure: false`; see
 [security](security.md#onvif-authentication).
+
+### Detect and record on different tracks
+
+Frigate does not have to detect on the stream it records. A common setup is to
+record the full resolution track and detect on a smaller one, which takes less
+CPU. Give each its own input:
+
+```yaml
+cameras:
+  driveway_ptz:
+    ffmpeg:
+      inputs:
+        - path: rtsp://osprey:RTSP_PASSWORD@192.0.2.10:8554/video1
+          roles: [record]
+        - path: rtsp://osprey:RTSP_PASSWORD@192.0.2.10:8554/video3
+          roles: [detect]
+    detect:
+      width: 640
+      height: 360
+```
+
+Whichever track you use, it has to be one that Osprey arms. See
+[codecs](#codecs) for the defaults, and note that Frigate's `detect`
+dimensions must match the track.
+
+### Codecs
+
+Each track is H.264 or H.265, set in `tracks` (see
+[configuration](configuration.md)) or from the console's **Settings** tab.
+Osprey passes the camera's stream through without transcoding, so the track's
+codec is the codec Frigate receives.
+
+| Where | Default |
+|---|---|
+| Container, NixOS, wheel | `video1`, `video2` and `video3`, all H.264 |
+| Home Assistant app | `video1:h264,video2:h265` |
+
+The Home Assistant app arms only those two tracks, so `video3` does not exist
+there and `video2` is H.265. If you follow the examples above in the app,
+use `video1` for both roles, or change the app's `tracks` option to
+`video1:h264,video2:h264,video3:h264`.
+
+Keep at least one H.264 track. Home Assistant's ONVIF integration refuses a
+device that offers only H.265 ("no H.264 streams available"), and some other
+clients cannot decode H.265. H.265 is a choice you make for smaller
+recordings, and Frigate decodes it for detection. Test your own player before
+you commit to it.
 
 Labels, zones, detectors, recording, retention, autotracking and zoom are
 configured in Frigate. Osprey never changes them.
@@ -81,7 +128,35 @@ cameras:
 ```
 
 Frigate's autotracking documentation covers the other keys, such as
-`zooming` and `timeout`.
+`zooming` and `timeout`. Autotracking relies on relative moves within the
+field of view. Osprey only has the lens calibration for the G5 PTZ, so on
+other models those moves are off and autotracking may not work.
+
+### Calibration
+
+Frigate can measure how fast the PTZ moves, so it predicts where a tracked
+object will be after a move. Turn it on for one start, then off again:
+
+```yaml
+cameras:
+  driveway_ptz:
+    onvif:
+      autotracking:
+        calibrate_on_startup: true
+```
+
+Frigate moves the camera in small steps, measures the time, and writes a
+`movement_weights` entry into its own configuration. After that, set
+`calibrate_on_startup` back to `false`. Frigate's
+[autotracking documentation](https://docs.frigate.video/configuration/autotracking)
+describes the process.
+
+Frigate's calibration moves reach Osprey as ordinary autotracker commands.
+Osprey drops them during a manual hold, so nobody should touch the camera from
+the console, MQTT or another ONVIF client while it runs. Stop any
+[sentry patrol](sentry.md) first, make sure the `home` preset exists, and
+watch the first calibration so you can stop it if the camera does something
+odd. Calibrate again if you change `ptz.max_speed`, because it changes the speed Osprey sends.
 
 ## Manual control and autotracking
 

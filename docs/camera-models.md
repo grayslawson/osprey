@@ -6,6 +6,15 @@
 | Other UniFi PTZ cameras | Experimental | Adoption and streaming use the same protocol. PTZ uses the pan, tilt and zoom ranges the camera reports. FOV-relative moves (`TranslationSpaceFov`) and click-to-center are off. |
 | UniFi cameras without PTZ | Not a goal | They may stream, but Osprey exists for PTZ. |
 
+## Firmware
+
+The G5 PTZ is tested on firmware 5.5.13.67, which is in daily use, and on
+5.3.95, the version that the protocol notes in
+[`pyunifiwire/SPEC.md`](../pyunifiwire/SPEC.md) were measured on. Other
+firmware may work but is untested. Osprey logs a warning for it, because the
+camera's protocol can change with any update. After a firmware change, test
+adoption, PTZ and Frigate tracking again.
+
 An experimental camera logs this at adoption:
 
 ```text
