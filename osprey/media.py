@@ -442,7 +442,7 @@ class _Handler(socketserver.BaseRequestHandler):
         server = self.server
         assert isinstance(server, IngestServer)
         peer = self.client_address[0]
-        if server.allowed_peers and peer not in server.allowed_peers:
+        if server.allowed_peers is not None and peer not in server.allowed_peers:
             log.warning("rejecting media ingest from unregistered peer %s", peer)
             return
         connection = Connection(server.hub, fallback_name=f"{server.fallback_name}")
@@ -477,12 +477,13 @@ class IngestServer(socketserver.ThreadingTCPServer):
         hub: Hub,
         port: int = INGEST_PORT,
         fallback_name: str = "video1",
-        allowed_peers: set[str] | frozenset[str] | None = None,
+        allowed_peers: set[str] | None = None,
         bind_host: str = "0.0.0.0",
     ) -> None:
         self.hub = hub
         self.fallback_name = fallback_name
-        self.allowed_peers = frozenset(allowed_peers or ())
+        # None = open; a set (even empty) is enforced and may grow as cameras are adopted.
+        self.allowed_peers = allowed_peers
         self.closing = threading.Event()
         super().__init__((bind_host, port), _Handler)
         self._thread: threading.Thread | None = None

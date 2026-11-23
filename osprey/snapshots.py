@@ -155,7 +155,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - name fixed by http.server
         server = self.server
         assert isinstance(server, SnapshotServer)
-        if server.allowed_peers and self.client_address[0] not in server.allowed_peers:
+        if server.allowed_peers is not None and self.client_address[0] not in server.allowed_peers:
             self._respond(HTTPStatus.FORBIDDEN)
             return
         if not self.path.startswith(UPLOAD_PREFIX):
@@ -270,11 +270,11 @@ class SnapshotServer(ThreadingHTTPServer):
         store: Store,
         cert: Path | None,
         port: int = SNAPSHOT_PORT,
-        allowed_peers: set[str] | frozenset[str] | None = None,
+        allowed_peers: set[str] | None = None,
         bind_host: str = "0.0.0.0",
     ) -> None:
         self.store = store
-        self.allowed_peers = frozenset(allowed_peers or ())
+        self.allowed_peers = allowed_peers  # None = open; a set is enforced (see media.IngestServer)
         super().__init__((bind_host, port), _Handler, bind_and_activate=False)
         if cert is not None:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
