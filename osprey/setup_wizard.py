@@ -135,8 +135,11 @@ def _camera_mac(value: object) -> str:
 
 
 def _camera_ip(value: object) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise SetupError("camera IP address is required")
+    """The camera's address, or "" when left blank (optional: discovery is not restricted)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return ""
+    if not isinstance(value, str):
+        raise SetupError("camera IP address must be text")
     value = value.strip()
     try:
         ipaddress.ip_address(value)
@@ -234,7 +237,7 @@ class SetupManager:
             "cert": str(cert_path),
             "announce": True,
             "frigate": {"url": frigate},
-            "cameras": [{"mac": mac, "name": name, "ip": camera_ip}],
+            "cameras": [{"mac": mac, "name": name, **({"ip": camera_ip} if camera_ip else {})}],
             "tracks": {"video1": "h264", "video2": "h264", "video3": "h264"},
             "ports": dict(config.DEFAULTS["ports"]),
         }
