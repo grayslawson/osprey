@@ -36,7 +36,8 @@ class Store:
         if self.path is None or not self.path.exists():
             return None
         try:
-            value = json.loads(self.path.read_text(encoding="utf-8")).get("base_url")
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            value = data.get("base_url") if isinstance(data, dict) else None
             return validate_url(value) if isinstance(value, str) else None
         except (OSError, ValueError, json.JSONDecodeError):
             return None
