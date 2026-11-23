@@ -8,8 +8,9 @@ name: Release
 # which is why homeassistant.yml is called from here instead of listening for
 # `release: published`.
 #
-# Publishing requires the GitHub environment `pypi` and a PyPI trusted
-# publisher for project `osprey-ptz` that names this workflow file.
+# Publishing requires the GitHub environment `pypi`, a PyPI trusted
+# publisher for `osprey-ptz` and an npm trusted publisher for
+# `@osprey-ptz/cli`, both naming this workflow file. A failed publish fails the run.
 
 on:
   push:
@@ -19,6 +20,11 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+a[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+b[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+rc[0-9]+'
+  # Re-publish to PyPI and npm for an existing tag:
+  #   gh workflow run release.yml --ref v0.9.0b3
+  # Only the build and publish jobs run; the image, GitHub Release and add-on
+  # are skipped.  The ref must be the tag itself (verify enforces the pattern).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -103,6 +109,7 @@ jobs:
 
   image:
     name: Build and sign container image
+    if: github.event_name == 'push'
     needs: [verify, test]
     runs-on: ubuntu-latest
     permissions:
@@ -171,14 +178,9 @@ jobs:
 
   pypi:
     name: Publish to PyPI
-    needs: [distributions, image]
+    needs: [distributions]
     runs-on: ubuntu-latest
     environment: pypi
-    # PyPI publishes through a trusted publisher bound to this workflow file.
-    # Until that binding exists the job fails with "no trusted publisher",
-    # and every other channel still has to ship.  The failure is recorded on
-    # the run rather than blocking the GitHub Release.
-    continue-on-error: true
     permissions:
       contents: read
       id-token: write
@@ -188,15 +190,13 @@ jobs:
           name: python-dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@fb13cb306901256ace3dab689990e13a5550ffaa # v1.11.0
+        with:
+          skip-existing: true
 
   npm:
     name: Publish to npm
     needs: [verify, test]
     runs-on: ubuntu-latest
-    # npm publishes through a trusted publisher bound to this workflow file.
-    # Until that binding exists the job fails, and the failure is recorded on
-    # the run rather than blocking the other channels.
-    continue-on-error: true
     permissions:
       contents: read
       id-token: write
@@ -232,6 +232,7 @@ jobs:
 
   github-release:
     name: Create GitHub Release
+    if: github.event_name == 'push'
     needs: [verify, pypi, npm, image]
     runs-on: ubuntu-latest
     permissions:
@@ -292,6 +293,7 @@ jobs:
 
   homeassistant:
     name: Home Assistant add-on
+    if: github.event_name == 'push'
     needs: [verify, image]
     uses: ./.github/workflows/homeassistant.yml
     with:
