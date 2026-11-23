@@ -214,8 +214,7 @@ class SetupManager:
         if not isinstance(password, str) or len(password) < 8:
             raise SetupError("admin password must be at least 8 characters")
 
-        # Generate credentials for media consumers, but leave ONVIF disabled by
-        # default because Frigate deployments commonly start in anonymous mode.
+        # Generate credentials for RTSP and ONVIF; both require them from the start.
         rtsp_user = "osprey"
         rtsp_password = secrets.token_urlsafe(24)
         onvif_user = "osprey"
@@ -247,9 +246,8 @@ class SetupManager:
             f"OSPREY_RTSP_USERNAME={rtsp_user}",
             f"OSPREY_RTSP_PASSWORD_FILE={self.secrets_path.parent / 'rtsp-password'}",
             f"OSPREY_FRIGATE_CONFIG_FILE={self.frigate_path}",
-            "# ONVIF stays anonymous for Frigate compatibility. Enable explicitly after testing:",
-            f"# OSPREY_ONVIF_USERNAME={onvif_user}",
-            f"# OSPREY_ONVIF_PASSWORD_FILE={self.secrets_path.parent / 'onvif-password'}",
+            f"OSPREY_ONVIF_USERNAME={onvif_user}",
+            f"OSPREY_ONVIF_PASSWORD_FILE={self.secrets_path.parent / 'onvif-password'}",
         ]
         with self._lock:
             _atomic_write_set(
