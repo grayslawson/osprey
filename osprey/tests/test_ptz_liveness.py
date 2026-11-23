@@ -725,3 +725,39 @@ def test_ptz_health_reports_a_healthy_channel() -> None:
         "active": False, "attempts": 0, "max_attempts": controller.PTZ_RECOVERY_MAX_ATTEMPTS,
         "waiting_for_callback": False, "exhausted": False,
     }
+
+
+def test_preset_image_profile_persists_and_survives_a_resave(tmp_path: Path) -> None:
+    store = PresetStore(tmp_path / "presets.json")
+    ctl, control, _, _, _ = _ptz_pair(preset_store=store, preset_ack_timeout=0.01)
+    mac = control.camera.mac
+    slot = ctl.set_preset(mac, "porch")
+    assert slot is not None
+    assert ctl.update_preset(mac, slot, 200, {"irLedLevel": 100})
+    assert control.camera.presets[slot].position.focus == 200
+    # Saving the view again must not drop the profile.
+    assert ctl.set_preset(mac, "porch", slot) == slot
+    assert control.camera.presets[slot].isp == {"irLedLevel": 100}
+    assert store.load(mac)[slot].isp == {"irLedLevel": 100}
+    assert ctl.update_preset(mac, slot, None, {})  # {} clears it
+    assert store.load(mac)[slot].isp == {}
+
+
+def test_goto_applies_the_profile_once_settled_and_a_newer_goto_cancels_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctl, control, _, _, _ = _ptz_pair(preset_ack_timeout=0.01)
+    mac = control.camera.mac
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(ctl, "change_isp", lambda m, s: sent.append(s) or True)
+    gate = threading.Event()
+    monkeypatch.setattr(controller.time, "sleep", lambda _s: gate.wait(2))
+    plain = Preset(1, "plain", Position(1, 2, 3, 4))
+    tuned = Preset(2, "tuned", Position(5, 6, 7, 8), isp={"irLedLevel": 100})
+    ctl._apply_profile_on_arrival(mac, tuned)
+    ctl._apply_profile_on_arrival(mac, tuned)  # supersedes the first
+    gate.set()
+    for thread in [t for t in threading.enumerate() if t.name == "isp-profile"]:
+        thread.join(2)
+    assert sent == [{"irLedLevel": 100}]
+    assert plain.isp == {}  # no profile: goto_preset never calls the applier

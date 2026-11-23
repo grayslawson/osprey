@@ -12,6 +12,7 @@ ask for it.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import queue
 import re
@@ -276,6 +277,9 @@ class Session:
         return messages
 
 
+PROFILE_SETTLE_TIMEOUT_SEC: Final = 20.0
+
+
 class Controller:
     """Accepts camera connections and runs the protocol over them."""
 
@@ -348,6 +352,7 @@ class Controller:
         self._recover_requests: queue.Queue[str] = queue.Queue()
         self._acks: dict[int, tuple[threading.Event, list[Envelope]]] = {}
         self._acks_lock = threading.Lock()
+        self._profile_generation: dict[str, int] = {}
         self._continuous_moves: dict[str, ContinuousMove] = {}
         # When an autotracker last drove this camera. The sentry patrol reads
         # it to stand down while Frigate is tracking; a patrol's own moves are
@@ -631,6 +636,8 @@ class Controller:
         name = message.function_name
         if message.is_reply:
             self._resolve_ack(message)
+        if name in (adoption.CHANGE_ISP, "EventIspSceneStatus"):
+            log.info("%s %s", name, str(message.payload)[:400])
 
         if name == TIME_SYNC:
             # Answer EVERY timeSync, reply or not. The camera and controller
@@ -1254,7 +1261,60 @@ class Controller:
             except (OSError, ssl.SSLError):
                 session.camera.motion.cancel()
                 return False
-            return True
+        if preset is not None and preset.isp:
+            self._apply_profile_on_arrival(mac, preset)
+        return True
+
+    def update_preset(self, mac: str, index: int, focus: int | None, isp: dict | None) -> bool:
+        """Set a stored preset's focus position and/or image profile (isp={} clears it)."""
+        camera = self.cameras.get(mac)
+        session = self._ptz_session(mac)
+        if camera is None or session is None:
+            return False
+        with self._presets_lock:
+            preset = camera.presets.get(index)
+            if preset is None:
+                return False
+            if focus is not None:
+                preset.position = dataclasses.replace(preset.position, focus=focus)
+            if isp is not None:
+                preset.isp = dict(isp)
+            self._persist_presets(camera)
+        if focus is not None:
+            session.request(ptz.PRESET, ptz.configure(preset))  # keep the camera's copy in step
+        return True
+
+    def _control_session(self, mac: str) -> Session | None:
+        with self._sessions_lock:
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            if session.camera.mac == mac and not session.is_ptz_channel:
+                return session
+        return None
+
+    def change_isp(self, mac: str, settings: dict[str, Any]) -> bool | None:
+        """Send ChangeIspSettings on the control channel (True ack, False refused, None silent)."""
+        session = self._control_session(mac)
+        if session is None:
+            return False
+        return self._request_acked(session, adoption.CHANGE_ISP, settings, timeout=3.0)
+
+    def _apply_profile_on_arrival(self, mac: str, preset: Preset) -> None:
+        """Apply the preset's image profile once the head stops (a newer move cancels it)."""
+        generation = self._profile_generation[mac] = self._profile_generation.get(mac, 0) + 1
+
+        def run() -> None:
+            camera = self.cameras.get(mac)
+            deadline = time.monotonic() + PROFILE_SETTLE_TIMEOUT_SEC
+            time.sleep(0.5)  # activity may still read 0 just after the go
+            while camera is not None and not camera.motion.settled and time.monotonic() < deadline:
+                time.sleep(0.2)
+            if self._profile_generation.get(mac) != generation:
+                return
+            acked = self.change_isp(mac, preset.isp)
+            log.info("preset %r image profile applied: acked=%s mac=%s", preset.name, acked, mac)
+
+        threading.Thread(target=run, name="isp-profile", daemon=True).start()
 
     @staticmethod
     def _free_slot(camera: Camera) -> int | None:
@@ -1286,7 +1346,9 @@ class Controller:
             ):
                 log.warning("preset table full: mac=%s", mac)
                 return None
-            preset = Preset(index=slot, name=name, position=camera.motion.position)
+            old = camera.presets.get(slot)  # re-saving a view keeps its image profile
+            preset = Preset(index=slot, name=name, position=camera.motion.position,
+                            isp=dict(old.isp) if old is not None else {})
         acked = self._request_acked(session, ptz.PRESET, ptz.configure(preset))
         if acked is False:
             log.warning("camera refused preset %r in slot %d: mac=%s", name, slot, mac)

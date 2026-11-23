@@ -76,7 +76,11 @@ class PresetStore:
             if not all(isinstance(a, int) and not isinstance(a, bool) for a in axes):
                 continue
             pan, tilt, zoom, focus = (int(a) for a in axes)  # type: ignore[arg-type]
-            out[index] = Preset(index=index, name=name, position=Position(pan, tilt, zoom, focus))
+            isp = value.get("isp")
+            out[index] = Preset(
+                index=index, name=name, position=Position(pan, tilt, zoom, focus),
+                isp=dict(isp) if isinstance(isp, dict) else {},
+            )
             if len(out) >= MAX_PRESETS_PER_CAMERA:
                 break
         return out
@@ -90,6 +94,7 @@ class PresetStore:
                 "tilt": preset.position.tilt,
                 "zoom": preset.position.zoom,
                 "focus": preset.position.focus,
+                **({"isp": preset.isp} if preset.isp else {}),
             }
             for index, preset in sorted(presets.items())
         }

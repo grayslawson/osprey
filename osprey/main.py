@@ -617,6 +617,14 @@ def build(options: Options) -> Stack:
             mac = selected_mac()
             return control.set_preset(mac, name, index) if mac else None
 
+        def selected_update_preset(index: int, focus: int | None, isp: dict | None) -> bool:
+            mac = selected_mac()
+            return control.update_preset(mac, index, focus, isp) if mac else False
+
+        def selected_change_isp(settings: dict) -> bool | None:
+            mac = selected_mac()
+            return control.change_isp(mac, settings) if mac else False
+
         def selected_remove(index: int) -> bool:
             mac = selected_mac()
             return control.remove_preset(mac, index) if mac else False
@@ -681,6 +689,8 @@ def build(options: Options) -> Stack:
             goto_preset=selected_goto,
             set_preset=selected_set,
             remove_preset=selected_remove,
+            update_preset=selected_update_preset,
+            change_isp=selected_change_isp,
             refresh_position=selected_refresh,
             stop=selected_stop,
             move_refusal=selected_refusal,
