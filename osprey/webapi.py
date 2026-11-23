@@ -147,7 +147,7 @@ def ptz_state(camera: Camera | None, *, enabled: bool = True) -> dict[str, objec
         "error": error,
         "available": camera.motion.available,
         "position": _normalised(camera, position),
-        "raw": {"pan": position.pan, "tilt": position.tilt, "zoom": position.zoom},
+        "raw": {"pan": position.pan, "tilt": position.tilt, "zoom": position.zoom, "focus": position.focus},
         "updated_at": round(camera.motion.updated_at, 3),
         "fov_calibrated": camera.field_of_view is not None,
     }
@@ -426,6 +426,8 @@ class WebApp:
             return
         elif rest == "/ptz/move" and method == "POST":
             status, result = self.ptz_move(services, body())
+        elif rest == "/isp" and method == "POST":
+            status, result = self.isp_apply(services, body())
         elif rest == "/ptz/center" and method == "POST":
             status, result = self.ptz_center(services, body())
         elif rest == "/ptz/stop" and method == "POST":
@@ -804,6 +806,21 @@ class WebApp:
         else:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "mode must be relative, absolute or continuous")
         return self._dispatch(services, target, speed)
+
+    def isp_apply(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        """Send ChangeIspSettings fields to the camera (focus mode, IR, exposure...)."""
+        settings = self._isp_settings(data)
+        self._ptz_camera(services)
+        return HTTPStatus.OK, {"acked": services.backend.change_isp(settings)}
+
+    @staticmethod
+    def _isp_settings(data: object) -> dict[str, object]:
+        if not isinstance(data, dict) or len(data) > 32:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "expected a JSON object of ISP settings")
+        for key, value in data.items():
+            if not isinstance(value, (str, int, float, bool)) or not re.fullmatch(r"[A-Za-z0-9]{1,40}", key):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", f"bad ISP setting {key!r}")
+        return data
 
     def ptz_center(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
         fields = self._fields(data, {"x", "y", "zoom"}, {"x", "y"})
