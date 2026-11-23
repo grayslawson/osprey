@@ -271,7 +271,7 @@ def test_password_login_logout_and_cookie_flags() -> None:
     try:
         client = Client(server)
         assert client.session() == {"mode": "password", "authenticated": False, "principal": None,
-                                     "csrf": None, "ingress": False}
+                                     "csrf": None, "ingress": False, "boot": webapi.BOOT_ID}
         status, body = client.json("GET", "/api/v1/cameras")
         assert status == 401 and body["error"]["code"] == "login_required"
         assert client.login("wrong") == 401

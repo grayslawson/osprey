@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:,">
+<title>Set up Osprey</title>
+<link rel="stylesheet" href="ui/tokens.css">
+<link rel="stylesheet" href="ui/setup.css">
+</head>
+<body>
+<main id="main">
+<h1>Set up Osprey</h1>
+<ol id="progress" class="progress" aria-label="Setup steps"></ol>
+<p id="error" class="note bad" role="alert" hidden></p>
+
+<section data-step="welcome" data-title="Start" hidden>
+  <p>This wizard connects one UniFi PTZ camera to Osprey and gets it ready for Frigate.</p>
+  <p class="note warn"><strong>Adopting a camera takes it away from UniFi Protect.</strong>
+    Protect stops managing it until you <a href="https://github.com/grayslawson/osprey/blob/main/docs/uninstall.md" target="_blank" rel="noopener">give it back</a>.</p>
+  <p id="welcome-status" class="muted" role="status">Checking the setup link&hellip;</p>
+  <div class="actions"><button type="button" data-next disabled>Start</button></div>
+</section>
+
+<section data-step="network" data-title="Osprey" hidden>
+  <form id="network-form">
+    <label>Address the camera and Frigate use to reach Osprey
+      <input name="host" required autocomplete="off" spellcheck="false"></label>
+    <p class="hint">Osprey found this address on the network interface that holds the default route.
+      With host networking (the default Compose file) it is the host's LAN address, and is usually right.</p>
+    <p id="bridge-hint" class="note warn" hidden>This looks like a container bridge address. In bridge networking
+      the camera cannot reach it: enter the host's LAN address instead.</p>
+    <label>Admin password for the Osprey console
+      <input name="admin_password" type="password" minlength="8" required autocomplete="new-password"></label>
+    <p class="hint">At least 8 characters. You sign in to the console with it.</p>
+    <div class="actions"><button type="submit">Next</button></div>
+  </form>
+</section>
+
+<section data-step="camera" data-title="Camera" hidden>
+  <form id="camera-form">
+    <label>Camera name <input name="name" required maxlength="64" value="G5 PTZ"></label>
+    <label>Camera MAC address <input name="mac" required autocomplete="off" placeholder="AA:BB:CC:DD:EE:FF"></label>
+    <label>Camera IP address <input name="ip" autocomplete="off" placeholder="192.0.2.20"></label>
+    <p class="hint">Reserve this address in your router. Osprey then accepts video only from it.</p>
+    <div class="actions"><button type="button" data-back class="secondary">Back</button><button type="submit">Next</button></div>
+  </form>
+</section>
+
+<section data-step="frigate" data-title="Frigate" hidden>
+  <form id="frigate-form">
+    <label>Frigate URL (optional) <input name="frigate_url" type="url" autocomplete="off" placeholder="http://frigate.lan:5000"></label>
+    <p class="hint">Leave it empty if you add the camera to Frigate yourself.</p>
+    <div class="actions"><button type="button" data-back class="secondary">Back</button><button type="submit">Save and restart Osprey</button></div>
+  </form>
+</section>
+
+<section data-step="saved" data-title="Done" hidden>
+  <p id="saved-status" role="status">Saving&hellip;</p>
+  <div id="credentials" hidden>
+    <p>Osprey made these passwords for Frigate. They are shown once, so save them now.</p>
+    <pre id="credentials-text" class="code"></pre>
+  </div>
+  <div class="actions"><a class="button" href="./">Open the console</a></div>
+</section>
+</main>
+<script src="ui/setup.js"></script>
+</body>
+</html>

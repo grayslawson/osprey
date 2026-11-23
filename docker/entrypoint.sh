@@ -12,16 +12,18 @@
 #   anything else      executed verbatim (for debugging)
 #
 # Environment (all optional unless noted):
-#   OSPREY_HOST        REQUIRED unless the config file sets "host": the LAN
-#                      address the camera dials back to. Never a bridge IP.
+#   OSPREY_HOST        the LAN address the camera dials back to. Never a
+#                      bridge IP. Unset on first run: detected and confirmed
+#                      in the setup wizard.
 #   OSPREY_STATE_DIR   writable state directory (default /var/lib/osprey)
 #   OSPREY_CONFIG_FILE JSON config (default $OSPREY_STATE_DIR/osprey.json; a
 #                      missing file means defaults)
 #   OSPREY_CERT_FILE   control-channel PEM (default $OSPREY_STATE_DIR/osprey.pem)
 #   OSPREY_ANNOUNCE    "false" disables WS-Discovery multicast Hello (use with
 #                      bridge networking)
-#   OSPREY_SETUP       "1" opens the browser first-run wizard until the wizard
-#                      has written a host into the config file
+#   OSPREY_SETUP       unset: the setup wizard opens by itself on first run;
+#                      "1" forces it open while no host is configured; "0"
+#                      never opens it
 #   OSPREY_EXTRA_ARGS  extra controller flags, whitespace separated
 set -eu
 

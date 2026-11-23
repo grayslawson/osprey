@@ -10,6 +10,7 @@ from typing import cast
 
 import onvif
 import pytest
+import setup_wizard
 from setup_wizard import SetupError, SetupManager, load_environment
 from tests_support import a_camera, assert_no_secret
 
@@ -65,14 +66,24 @@ def test_setup_http_route_requires_token_and_returns_credentials(tmp_path: Path)
         assert response.getheader("Location") == "/setup"
         response.read()
 
-        # The page's inline script must be allowed to run, and a form that
-        # submits without it must never put the password in the URL.
-        client.request("GET", "/setup")
+        # The page is a static file under the strict app policy: no inline script.
+        client.request("GET", "/setup?token=setup-token")
         response = client.getresponse()
         page = response.read().decode()
         assert response.status == 200
-        assert "'unsafe-inline'" in response.getheader("Content-Security-Policy", "")
-        assert "<form id='setup-form' method='post'" in page
+        assert "'unsafe-inline'" not in response.getheader("Content-Security-Policy", "")
+        assert response.getheader("Referrer-Policy") == "no-referrer"
+        assert '<script src="ui/setup.js"></script>' in page and "setup-token" not in page
+
+        client.request("GET", "/api/setup", headers={"X-Setup-Token": "wrong"})
+        response = client.getresponse()
+        assert response.status == 403
+        response.read()
+        client.request("GET", "/api/setup", headers={"X-Setup-Token": "setup-token"})
+        response = client.getresponse()
+        assert response.status == 200
+        status = json.loads(response.read())
+        assert status["pending"] is True and status["ingress"] is False
 
         payload = json.dumps({"setup_token": "wrong", "host": "x", "bind": "0.0.0.0"})
         client.request("POST", "/api/setup", payload, {"Content-Type": "application/json"})
@@ -183,3 +194,108 @@ def test_a_malformed_camera_ip_is_still_rejected(tmp_path: Path) -> None:
              "frigate_url": "http://frigate.example.test:5000", "admin_password": "correct horse"},
             "t",
         )
+
+
+SAVE = {
+    "host": "192.0.2.10", "name": "Cam", "mac": "AABBCCDDEEFF",
+    "admin_password": "correct horse",
+}
+
+
+def test_frigate_is_optional_and_writes_no_frigate_file(tmp_path: Path) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="t")
+    manager.save(dict(SAVE), "t")
+    assert "frigate" not in json.loads((tmp_path / "osprey.json").read_text())
+    assert not (tmp_path / "frigate.json").exists()
+    assert "OSPREY_FRIGATE_CONFIG_FILE" not in (tmp_path / "osprey-secrets.env").read_text()
+
+
+def test_the_token_expires_and_a_new_link_is_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="old")
+    manager.url = "http://192.0.2.10:8000/setup"
+    later = manager.issued + setup_wizard.TOKEN_TTL_SEC + 1
+    monkeypatch.setattr("setup_wizard.time.monotonic", lambda: later)
+    with pytest.raises(SetupError, match="expired"):
+        manager.save(dict(SAVE), "old")
+    assert manager.token != "old"
+    assert f"http://192.0.2.10:8000/setup?token={manager.token}" in caplog.text
+    manager.save(dict(SAVE), manager.token)  # the new link works once
+    assert manager.pending is False
+
+
+def test_trusted_ingress_needs_no_token_but_setup_is_still_single_use(tmp_path: Path) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="t")
+    manager.save(dict(SAVE), "", trusted=True)
+    with pytest.raises(SetupError, match="already complete"):
+        manager.save(dict(SAVE), "", trusted=True)
+
+
+def test_saving_clears_the_pending_marker_and_asks_for_a_restart(tmp_path: Path) -> None:
+    (tmp_path / setup_wizard.PENDING_MARKER).touch()
+    calls: list[str] = []
+    manager = SetupManager(tmp_path / "osprey.json", token="t")
+    manager.on_complete = lambda: calls.append("restart")
+    result = manager.save(dict(SAVE), "t")
+    assert calls == ["restart"]
+    assert result["restarting"] is True and result["restart_required"] is False
+    assert not (tmp_path / setup_wizard.PENDING_MARKER).exists()
+
+
+def test_the_startup_banner_carries_a_clickable_link(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="abc")
+    manager.url = "http://192.0.2.10:8000/setup"
+    manager.announce()
+    assert "http://192.0.2.10:8000/setup?token=abc" in caplog.text
+
+
+def test_lan_detection_uses_the_default_route_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Probe:
+        def __init__(self, *args: object) -> None:
+            pass
+
+        def __enter__(self) -> "Probe":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def connect(self, address: tuple[str, int]) -> None:
+            assert address[0] == "192.0.2.1"  # a documentation address: nothing is sent
+
+        def getsockname(self) -> tuple[str, int]:
+            return ("198.51.100.7", 40000)
+
+    monkeypatch.setattr("setup_wizard.socket.socket", Probe)
+    assert setup_wizard.detect_lan_ip() == "198.51.100.7"
+
+    def no_route(self: Probe, address: tuple[str, int]) -> None:
+        raise OSError("Network is unreachable")
+
+    monkeypatch.setattr(Probe, "connect", no_route)
+    assert setup_wizard.detect_lan_ip() is None
+
+
+def test_ingress_requests_reach_setup_without_a_token(tmp_path: Path) -> None:
+    manager = SetupManager(tmp_path / "osprey.json", token="setup-token")
+    backend = onvif.Backend(camera=lambda: a_camera(), stream_uri=lambda t: "", snapshot_uri=lambda t: "")
+    services = onvif.Services(
+        backend, "127.0.0.1", port=0, setup=manager,
+        auth=onvif.AdminAuth(None, trusted_ingress_peer="127.0.0.1"),
+    )
+    server = onvif.OnvifServer(services, port=0, bind_host="127.0.0.1")
+    server.start()
+    try:
+        client = http.client.HTTPConnection("127.0.0.1", server.port, timeout=3)
+        client.request("GET", "/api/setup", headers={"X-Ingress-Path": "/api/hassio_ingress/abc"})
+        response = client.getresponse()
+        assert response.status == 200 and json.loads(response.read())["ingress"] is True
+        client.request("GET", "/api/setup")
+        response = client.getresponse()
+        assert response.status == 403
+        response.read()
+    finally:
+        server.stop()
