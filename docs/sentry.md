@@ -151,8 +151,7 @@ free text is accepted for a preset you will add later.
 
 Served on the ONVIF port under `/api/v1`, with the same session cookie and
 `X-CSRF-Token` rules as the rest of the [operator API](operator-ui.md). The
-contract is in
-[`specs/003-sentry-patrol/contracts/http-api.md`](../specs/003-sentry-patrol/contracts/http-api.md).
+full route list is in the [API reference](api.md).
 
 ```text
 GET    /api/v1/sentry                    every camera's patrol

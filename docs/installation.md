@@ -14,6 +14,19 @@ configure or run Frigate. Pick one install path:
 | [Chocolatey](#homebrew-chocolatey-and-npm) | No | Installs the release Compose file. |
 | [npm](#homebrew-chocolatey-and-npm) | No | Runs the read-only tools from the image. |
 
+## Before you start
+
+- **Adopting a camera removes it from UniFi Protect.** The camera has one
+  controller at a time. You remove it from Protect and factory-reset it, then
+  point it at Osprey. [Uninstall and return to Protect](uninstall.md) walks
+  back.
+- **A Linux host with a fixed LAN address** that the camera and Frigate can
+  both reach. The camera dials this address, so DHCP changes break it.
+- **Host networking** for the container. Docker Desktop on macOS and Windows
+  cannot serve a LAN camera.
+- **Camera and host on one network** with the ports below open between them.
+- **A camera that is supported.** See [camera models](camera-models.md).
+
 Every path uses the same ports. The camera connects to Osprey on TCP 7442
 (control, TLS), 7444 (snapshots) and 7550 (media). Clients use TCP 8000
 (ONVIF and the console) and 8554 (RTSP). WS-Discovery uses UDP 3702.
@@ -149,10 +162,14 @@ git clone https://github.com/grayslawson/osprey.git && cd osprey
   --host 192.0.2.10
 ```
 
-`--host` is Osprey's address (`OSPREY_HOST`, or `advertised_host` in Home
-Assistant). The camera dials it on port 7442 and Osprey adopts it; the
+`--user` and `--password` are the camera's own management login. `ubnt`/`ubnt`
+only works on a factory fresh camera. `--host` is Osprey's address
+(`OSPREY_HOST`, or `advertised_host` in Home Assistant), and `--control-port`
+matches `ports.control` if you changed it. The camera dials Osprey on port
+7442 and Osprey adopts it; the
 console's Health tab shows the adoption. To move a camera from a running
-Protect controller without a reset, see `osprey/handoff.sh` and
+Protect controller without a reset, the maintainer script `osprey/handoff.sh`
+can do it; see
 [the controller README](../osprey/README.md#testing-with-the-real-camera).
 Afterwards, keep Protect from re-adopting it with
 [`osprey protect-guard`](protect-guard.md).
@@ -170,8 +187,7 @@ and ingress. Frigate can be another app or a separate host.
 Options and Frigate settings are in the
 [app documentation](../homeassistant/addon/osprey/DOCS.md). Osprey needs no
 custom integration: Home Assistant's built-in ONVIF integration can use the
-ONVIF endpoint directly. The Marketplace (formerly HACS) does not list apps,
-so it plays no part here.
+ONVIF endpoint directly. This is not a HACS integration.
 
 ## NixOS
 
@@ -320,7 +336,8 @@ those checks, run the wheel, Homebrew or a checkout on the host.
 
 ## Updates and rollback
 
-Each `vX.Y.Z` tag publishes a GitHub release and a matching image. Watch the
+[Upgrading](upgrading.md) has the full routine, including a state backup and
+the notes for older installs. Each `vX.Y.Z` tag publishes a GitHub release and a matching image. Watch the
 repository with **Watch → Custom → Releases** to hear about them.
 
 `scripts/osprey-update.sh` checks by default. It validates the Compose file
