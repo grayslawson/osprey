@@ -44,7 +44,7 @@
   [harnesses](../osprey/harness/README.md).
 - [Console design notes](../DESIGN.md).
 - [Quality map](quality.md): evidence per domain.
-- [Repository and mirrors](repository-sync.md): which system owns what.
+- [Repository and mirrors](../.github/maintainers/repository-sync.md): which system owns what.
 - [Contributing](../CONTRIBUTING.md) and [agent guide](../AGENTS.md).
 
 When behavior changes, update the guide that covers it and add new guides to
