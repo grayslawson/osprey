@@ -23,12 +23,12 @@ VERSION = (ROOT / "VERSION").read_text().strip()
 def _step_script(name: str) -> str:
     """The shell body of the workflow step called ``name``."""
     lines = WORKFLOW.read_text().splitlines()
-    for index, line in enumerate(lines):
+    for index, line in enumerate(lines):  # noqa: B007 (index used after the loop)
         if line.strip() == f"- name: {name}":
             break
     else:
         raise AssertionError(f"no step named {name!r} in {WORKFLOW}")
-    for offset, candidate in enumerate(lines[index:], start=index):
+    for offset, candidate in enumerate(lines[index:], start=index):  # noqa: B007
         if candidate.strip() == "run: |":
             break
     else:

@@ -506,9 +506,9 @@ def test_sequence_and_timestamps_stay_continuous_across_a_camera_reconnect() -> 
             assert all(p is not None for p in after)
             fields = [rtp_fields(p) for p in before + after if p is not None]
             seqs = [f[1] for f in fields]
-            assert all((b - a) & 0xFFFF == 1 for a, b in zip(seqs, seqs[1:])), seqs
+            assert all((b - a) & 0xFFFF == 1 for a, b in zip(seqs, seqs[1:], strict=False)), seqs
             stamps = [f[2] for f in fields]
-            steps = [(b - a) & 0xFFFFFFFF for a, b in zip(stamps, stamps[1:])]
+            steps = [(b - a) & 0xFFFFFFFF for a, b in zip(stamps, stamps[1:], strict=False)]
             assert all(step < 90_000 * 3 for step in steps), "no backward or huge jumps"
             jump = (fields[6][2] - fields[5][2]) & 0xFFFFFFFF
             assert 90_000 <= jump <= 90_000 * 2, "the gap advances by the wall-clock time"
@@ -586,7 +586,7 @@ def test_a_slow_client_never_stalls_ingest_or_other_clients(monkeypatch: pytest.
             done.set()
             reader.join(timeout=2)
             seqs = [rtp_fields(p)[1] for p in received]
-            assert all((b - a) & 0xFFFF == 1 for a, b in zip(seqs, seqs[1:]))
+            assert all((b - a) & 0xFFFF == 1 for a, b in zip(seqs, seqs[1:], strict=False))
             # The stuck client was cut off by the send timeout rather than waited on.
             assert wait_for(lambda: len(server.client_stats().get("video1", [])) == 1, timeout=10)
         finally:
