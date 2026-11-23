@@ -37,6 +37,7 @@ from urllib.parse import parse_qs, quote, unquote
 
 import arbitration
 from firmware import firmware_status
+from onboarding import Onboarding, OnboardingError
 import ptz
 import websecurity
 from model import Camera, Position
@@ -320,6 +321,8 @@ class WebApp:
         # else a position poll is requested (a fresh motor reply clears the
         # timeout state).
         self.recover_hook: Callable[["Services"], tuple[bool, str]] | None = None
+        # The wizard's post-save steps (``/api/v1/setup/...``); set by the daemon.
+        self.onboarding: Onboarding | None = None
 
     def close(self) -> None:
         self._stopping.set()
@@ -398,6 +401,9 @@ class WebApp:
             return
         if path == "/sentry" and method == "GET":
             self._send_json(h, HTTPStatus.OK, self.sentry_overview())
+            return
+        if path.startswith("/setup/"):
+            self._setup_route(h, method, path)
             return
         match = re.fullmatch(r"/cameras/([^/]+)(/.*)?", path)
         if not match:
@@ -497,6 +503,23 @@ class WebApp:
             else:
                 raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "no such camera resource")
         self._send_json(h, status, result)
+
+    # ------------------------------------------------------------------ setup
+
+    def _setup_route(self, h: "_Handler", method: str, path: str) -> None:
+        onboarding = self.onboarding
+        if onboarding is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "setup steps are not available here")
+        try:
+            if path == "/setup/status" and method == "GET":
+                result = onboarding.status(self.server.services.frigate_url)
+            elif path == "/setup/adopt" and method == "POST":
+                result = onboarding.adopt(self._read_json(h))
+            else:
+                raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "no such setup step")
+        except OnboardingError as exc:
+            raise ApiError(HTTPStatus(exc.status), "setup", str(exc)) from None
+        self._send_json(h, HTTPStatus.OK, result)
 
     # ----------------------------------------------------------------- sentry
 

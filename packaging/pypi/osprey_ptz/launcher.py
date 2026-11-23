@@ -30,6 +30,10 @@ def main() -> int:
         from probe import main as probe_main  # osprey/probe.py
 
         return probe_main(sys.argv[2:])
+    if sys.argv[1:2] == ["adopt"]:
+        from manage import main as adopt_main  # osprey/manage.py
+
+        return adopt_main(sys.argv[2:])
     if sys.argv[1:2] == ["protect-guard"]:
         from protect_guard import main as guard_main  # osprey/protect_guard.py
 

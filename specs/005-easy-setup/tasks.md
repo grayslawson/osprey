@@ -3,7 +3,7 @@
 - [x] Zero-config start: optional `OSPREY_HOST`/`OSPREY_IMAGE`/`OSPREY_SETUP`,
       LAN address detection, automatic first-run wizard, link banner, token
       expiry, restart after save, Home Assistant without `advertised_host`.
-- [ ] Camera discovery and adoption in the wizard; `osprey adopt` in the image.
+- [x] Camera discovery and adoption in the wizard; `osprey adopt` in the image.
 - [ ] ONVIF user `frigate` for new installs; Frigate block; Add to Frigate.
 - [ ] Health-check step.
 - [ ] README quick start and installation guide.

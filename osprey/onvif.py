@@ -52,6 +52,7 @@ from principals import (
 )
 from snapshots import SnapshotCache
 from logbuffer import BUFFER, LogBuffer
+import camera_finder
 import websecurity
 from setup_wizard import SetupError, SetupManager
 
@@ -89,6 +90,7 @@ FRIGATE_API_PATH: Final = "/api/frigate"
 LOGS_API_PATH: Final = "/api/logs"
 SETUP_PATH: Final = "/setup"
 SETUP_API_PATH: Final = "/api/setup"
+SETUP_DISCOVER_PATH: Final = "/api/setup/discover"
 SESSION_COOKIE: Final = "osprey_session"
 LEGACY_PATH: Final = "/legacy"
 CSRF_FIELD: Final = "csrf"
@@ -3063,11 +3065,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         root = selected_root
         if root == SETUP_PATH:
-            if (
-                self.services.read_only
-                or self.services.setup is None
-                or not self.services.setup.pending
-            ):
+            pending = self.services.setup is not None and self.services.setup.pending
+            # After the save an admin returns here for the remaining steps (adopt, Frigate, checks).
+            if self.services.read_only or not (pending or self._session() is not None):
                 self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
                 return
             self._setup_page()
@@ -3236,15 +3236,19 @@ class _Handler(BaseHTTPRequestHandler):
         if selected_root is None:
             return
         root = selected_root
-        if root == SETUP_API_PATH:
+        if root in (SETUP_API_PATH, SETUP_DISCOVER_PATH):
             if (
                 self.services.read_only
                 or self.services.setup is None
                 or not self.services.setup.pending
             ):
+                self._drain()
                 self._send(HTTPStatus.NOT_FOUND, b"setup is unavailable", "text/plain")
                 return
-            self._setup_submit()
+            if root == SETUP_API_PATH:
+                self._setup_submit()
+            else:
+                self._setup_discover()
             return
         if root == LOGIN_PATH:
             self._login()
@@ -3384,26 +3388,59 @@ class _Handler(BaseHTTPRequestHandler):
         body = {**setup.status(), "port": self.services.port, "ingress": self._setup_trusted()}
         self._send(HTTPStatus.OK, json.dumps(body).encode(), "application/json", headers=(("Cache-Control", "no-store"),))
 
+    def _setup_payload(self) -> dict[str, object]:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length < 1 or length > 16 * 1024:
+            raise SetupError("invalid request size")
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise SetupError("Content-Type must be application/json")
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise SetupError("setup payload must be an object")
+        return payload
+
     def _setup_submit(self) -> None:
         setup = self.services.setup
         if setup is None or not setup.pending:
             self._send(HTTPStatus.NOT_FOUND, b'{"error":"setup is unavailable"}', "application/json")
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > 16 * 1024:
-                raise SetupError("invalid request size")
-            if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
-                raise SetupError("Content-Type must be application/json")
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise SetupError("setup payload must be an object")
+            payload = self._setup_payload()
             token = self.headers.get("X-Setup-Token", "") or str(payload.pop("setup_token", ""))
             result = setup.save(payload, token, trusted=self._setup_trusted())
         except (SetupError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             self._send(HTTPStatus.BAD_REQUEST, json.dumps({"error": str(exc)}).encode(), "application/json")
             return
         self._send(HTTPStatus.OK, json.dumps(result).encode(), "application/json")
+
+    def _setup_discover(self) -> None:
+        """List the UniFi cameras on the LAN, or ask one typed address directly."""
+        setup = self.services.setup
+        assert setup is not None
+        try:
+            payload = self._setup_payload()
+            setup.check_token(self.headers.get("X-Setup-Token", ""), trusted=self._setup_trusted())
+            ip = payload.get("ip")
+            if ip is None or ip == "":
+                cameras = camera_finder.scan()
+            elif isinstance(ip, str):
+                try:
+                    address = str(ipaddress.IPv4Address(ip.strip()))
+                except ValueError:
+                    raise SetupError("camera IP address must be an IPv4 address") from None
+                found = camera_finder.probe(address)
+                cameras = [found] if found else []
+            else:
+                raise SetupError("camera IP address must be text")
+        except (SetupError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._send(HTTPStatus.BAD_REQUEST, json.dumps({"error": str(exc)}).encode(), "application/json")
+            return
+        except OSError as exc:
+            self._send(HTTPStatus.SERVICE_UNAVAILABLE,
+                       json.dumps({"error": f"cannot scan the network: {exc}"}).encode(), "application/json")
+            return
+        self._send(HTTPStatus.OK, json.dumps({"cameras": cameras}).encode(), "application/json",
+                   headers=(("Cache-Control", "no-store"),))
 
     def _login_page(self, error: str = "", status: HTTPStatus = HTTPStatus.OK) -> None:
         if not self.services.auth.enabled:

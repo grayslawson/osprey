@@ -74,6 +74,7 @@ COPY scripts/osprey scripts/osprey-doctor.sh /opt/osprey/scripts/
 RUN chmod -R a+rX /opt/osprey \
     && chmod 0755 /usr/local/bin/osprey-entrypoint /usr/local/bin/osprey-healthcheck \
         /opt/osprey/scripts/osprey /opt/osprey/scripts/osprey-doctor.sh \
+    && ln -s osprey-entrypoint /usr/local/bin/osprey \
     && rm -rf /opt/osprey/osprey/tests /opt/osprey/osprey/harness \
     && python -m compileall -q /opt/osprey/osprey /opt/osprey/pyunifiwire/src
 
