@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 import main
-import media
 import secure_defaults
 from test_media import stream_bytes
 
