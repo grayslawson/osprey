@@ -49,19 +49,21 @@ unset PASSWORD
 
 # ONVIF and RTSP credentials. Left empty, a new install generates and logs them
 # once (stored in /data/osprey); an existing install stays anonymous until set.
-for SERVICE in onvif rtsp; do
-  SECRET=$(get_option "${SERVICE}_password")
-  USER_NAME=$(get_option "${SERVICE}_username")
+for SERVICE in ONVIF RTSP; do
+  LOWER=$(printf '%s' "$SERVICE" | tr '[:upper:]' '[:lower:]')
+  SECRET=$(get_option "${LOWER}_password")
+  USER_NAME=$(get_option "${LOWER}_username")
   if [ -n "$SECRET" ]; then
-    (umask 077; printf '%s' "$SECRET" > "/data/osprey/${SERVICE}-password")
-    chown osprey:osprey "/data/osprey/${SERVICE}-password"
-    export "OSPREY_$(echo "$SERVICE" | tr a-z A-Z)_USERNAME=${USER_NAME:-osprey}"
-    export "OSPREY_$(echo "$SERVICE" | tr a-z A-Z)_PASSWORD_FILE=/data/osprey/${SERVICE}-password"
+    (umask 077; printf '%s' "$SECRET" > "/data/osprey/${LOWER}-password")
+    chown osprey:osprey "/data/osprey/${LOWER}-password"
+    export "OSPREY_${SERVICE}_USERNAME=${USER_NAME:-osprey}"
+    export "OSPREY_${SERVICE}_PASSWORD_FILE=/data/osprey/${LOWER}-password"
   fi
 done
 unset SECRET
 # auto: new installs are secure, existing ones keep their behaviour.
-[ "$(get_option security)" = "auto" ] || export OSPREY_SECURITY="$(get_option security)"
+SECURITY=$(get_option security)
+[ "$SECURITY" = "auto" ] || export OSPREY_SECURITY="$SECURITY"
 
 # Upgrade path: add-on builds before the rename kept the control certificate as
 # cuckoo.pem. The camera trusts that certificate, so keep using it.
