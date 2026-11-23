@@ -18,8 +18,8 @@ move it. This app does not install, bundle or configure Frigate.
 1. Open **Settings → Apps → Install app**.
 2. In the top-right menu, select **Repositories**.
 3. Add `https://github.com/grayslawson/osprey-ha-apps` and select **Add**.
-4. Install **Osprey** and set `advertised_host`.
-5. Start the app and open it from the sidebar.
+4. Install **Osprey** and start it.
+5. Open it from the sidebar and follow the setup wizard.
 
 Home Assistant derives the app's ID from the repository URL, so the URL will
 not change.
@@ -28,7 +28,7 @@ not change.
 
 | Option | What it does |
 | --- | --- |
-| `advertised_host` | Required. This host's address on the camera's network. Osprey gives it to the camera and to ONVIF clients. |
+| `advertised_host` | Optional. This host's address on the camera's network. Osprey gives it to the camera and to ONVIF clients. Left empty, the setup wizard detects it and asks you to confirm it. |
 | `camera_ip` | Optional, and recommended. Accept the camera, including its media and snapshot uploads, only from this address. |
 | `camera_mac` | Optional. Reject a camera with any other MAC. |
 | `camera_name` | Controller name shown to the camera and in discovery. |

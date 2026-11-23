@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import re
+import secrets
 import threading
 import time
 from collections import OrderedDict
@@ -52,6 +53,8 @@ STATIC_PREFIX: Final = "/ui/"
 WEB_ROOT: Final = Path(__file__).resolve().parent / "web"
 DEFAULT_CAMERA: Final = "default"
 MAX_JSON_BYTES: Final = 4096
+# Changes on every start, so the setup wizard can tell when Osprey has restarted.
+BOOT_ID: Final = secrets.token_hex(8)
 MAX_SSE_CLIENTS: Final = 16
 MAX_THUMBNAILS: Final = 64
 MAX_THUMBNAIL_BYTES: Final = 2 * 1024 * 1024
@@ -1011,6 +1014,7 @@ class WebApp:
             "principal": kind,
             "csrf": principal[1] if principal is not None else None,
             "ingress": bool(websecurity.ingress_prefix(h.headers)),
+            "boot": BOOT_ID,
         }
 
     def _login(self, h: "_Handler") -> None:

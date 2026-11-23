@@ -1,0 +1,40 @@
+/* First-run wizard. Colours come from tokens.css; status always has text too. */
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 var(--sans); }
+main { max-width: 44rem; margin: 0 auto; padding: 1.5rem var(--gutter) 3rem; }
+h1 { font-size: 1.6rem; margin: 0 0 1rem; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 1.25rem; }
+label { display: block; margin: 0.9rem 0 0.2rem; font-weight: 600; }
+input, select { display: block; width: 100%; margin-top: 0.3rem; min-height: var(--touch); padding: 0.5rem 0.65rem;
+  font: inherit; font-weight: 400; color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-sm); }
+input[type=checkbox], input[type=radio] { display: inline; width: auto; min-height: 0; margin: 0 0.5rem 0 0; }
+button, .button { display: inline-flex; align-items: center; justify-content: center; min-height: var(--touch); padding: 0 1.1rem;
+  font: inherit; font-weight: 700; color: var(--accent-fg); background: var(--accent); border: 0; border-radius: var(--r-sm);
+  cursor: pointer; text-decoration: none; }
+button.secondary { color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); }
+button[disabled] { opacity: 0.55; cursor: default; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.2rem; }
+.hint, .muted { color: var(--muted); font-size: 0.92rem; margin: 0.3rem 0 0; }
+.note { padding: 0.7rem 0.85rem; border-radius: var(--r-sm); border: 1px solid var(--line); }
+.note.warn { background: var(--warn-bg); }
+.note.bad { background: var(--bad-bg); }
+.note.ok { background: var(--ok-bg); }
+.code { white-space: pre-wrap; word-break: break-all; font: 0.88rem/1.45 var(--mono); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0.8rem; margin: 0.6rem 0; }
+.progress { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; list-style: none; padding: 0; margin: 0 0 1rem; color: var(--muted); font-size: 0.9rem; }
+.progress li[aria-current] { color: var(--fg); font-weight: 700; }
+.progress li.done::before { content: "\2713\00a0"; color: var(--ok); }
+.list { list-style: none; padding: 0; margin: 0.8rem 0; }
+.list li { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0.7rem 0.85rem; margin: 0.45rem 0; }
+.list li label { margin: 0; font-weight: 400; }
+.badge { display: inline-block; font-size: 0.8rem; font-weight: 700; padding: 0 0.45rem; border-radius: 999px; border: 1px solid var(--line); }
+.badge.ok { color: var(--ok); background: var(--ok-bg); }
+.badge.warn { color: var(--warn); background: var(--warn-bg); }
+.badge.bad { color: var(--bad); background: var(--bad-bg); }
+.check { display: flex; gap: 0.6rem; align-items: baseline; }
+.check .mark { font-weight: 700; min-width: 3.2rem; }
+.check.ok .mark { color: var(--ok); }
+.check.bad .mark, .check.warn .mark { color: var(--bad); }
+.diff { max-height: 24rem; overflow: auto; }
+a { color: var(--accent); }

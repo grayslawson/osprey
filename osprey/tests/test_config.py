@@ -15,6 +15,7 @@ import main
 import media
 import onvif
 import rtsp
+import setup_wizard
 import snapshots
 from model import Codec
 
@@ -105,23 +106,80 @@ def test_the_file_supplies_host_and_per_channel_codec(tmp_path: Path) -> None:
     }
 
 
-def test_no_host_anywhere_is_an_error(tmp_path: Path) -> None:
+@pytest.fixture
+def lan(monkeypatch: pytest.MonkeyPatch) -> str:
+    """A detected LAN address, so no test depends on this machine's routes."""
+    for name in ("OSPREY_SETUP", "OSPREY_HOST"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(setup_wizard, "detect_lan_ip", lambda: "192.0.2.10")
+    return "192.0.2.10"
+
+
+def test_no_host_anywhere_is_an_error_when_the_wizard_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lan: str,
+) -> None:
     empty = tmp_path / "osprey.json"
     empty.write_text("{}")
+    monkeypatch.setenv("OSPREY_SETUP", "0")
     with pytest.raises(SystemExit):
         main.resolve_options(_args(config=str(empty)))
 
 
-def test_setup_mode_allows_a_missing_host_and_config(tmp_path: Path) -> None:
+def test_no_host_anywhere_opens_the_wizard_on_the_detected_address(tmp_path: Path, lan: str) -> None:
+    options = main.resolve_options(_args(config=str(tmp_path / "osprey.json"), cert=tmp_path / "osprey.pem"))
+    assert options.setup_mode is True
+    assert options.host == lan
+
+
+def test_a_given_host_on_a_new_state_directory_still_opens_the_wizard(tmp_path: Path, lan: str) -> None:
+    options = main.resolve_options(
+        _args(config=str(tmp_path / "osprey.json"), cert=tmp_path / "osprey.pem", host="192.0.2.99")
+    )
+    assert options.setup_mode is True
+    assert options.host == "192.0.2.99"
+
+
+def test_an_existing_install_never_opens_the_wizard_by_itself(tmp_path: Path, lan: str) -> None:
+    """A host given by flag or env and a state directory in use: today's behaviour."""
+    (tmp_path / "osprey.pem").write_text("cert")
+    (tmp_path / "osprey.json").write_text("{}")
+    options = main.resolve_options(
+        _args(config=str(tmp_path / "osprey.json"), cert=tmp_path / "osprey.pem", host="192.0.2.99")
+    )
+    assert options.setup_mode is False
+    assert options.host == "192.0.2.99"
+
+
+def test_an_unfinished_wizard_reopens_after_a_restart(tmp_path: Path, lan: str) -> None:
+    (tmp_path / "osprey.pem").write_text("cert")
+    (tmp_path / setup_wizard.PENDING_MARKER).touch()
+    options = main.resolve_options(
+        _args(config=str(tmp_path / "osprey.json"), cert=tmp_path / "osprey.pem", host="192.0.2.99")
+    )
+    assert options.setup_mode is True
+
+
+def test_a_configured_host_never_opens_the_wizard(tmp_path: Path, lan: str) -> None:
+    cfg = tmp_path / "osprey.json"
+    cfg.write_text(json.dumps({"host": "192.0.2.5"}))
+    options = main.resolve_options(_args(config=str(cfg), cert=tmp_path / "osprey.pem", setup=True))
+    assert options.setup_mode is False
+    assert options.host == "192.0.2.5"
+
+
+def test_setup_mode_allows_a_missing_host_and_config(tmp_path: Path, lan: str) -> None:
     options = main.resolve_options(
         _args(config=str(tmp_path / "osprey.json"), setup=True, bind="127.0.0.1")
     )
     assert options.setup_mode is True
-    assert options.host == "127.0.0.1"
+    assert options.host == lan
     assert options.bind_host == "127.0.0.1"
 
 
-def test_setup_mode_uses_safe_local_advertised_host_when_unset(tmp_path: Path) -> None:
+def test_setup_mode_falls_back_to_loopback_without_a_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lan: str,
+) -> None:
+    monkeypatch.setattr(setup_wizard, "detect_lan_ip", lambda: None)
     options = main.resolve_options(
         _args(config=str(tmp_path / "osprey.json"), setup=True)
     )
@@ -130,9 +188,11 @@ def test_setup_mode_uses_safe_local_advertised_host_when_unset(tmp_path: Path) -
     assert options.bind_host == "0.0.0.0"
 
 
-def test_a_named_config_that_is_missing_is_an_error() -> None:
+def test_a_named_config_that_is_missing_is_an_error(tmp_path: Path) -> None:
+    cert = tmp_path / "osprey.pem"
+    cert.write_text("cert")  # an install in use, so the wizard does not open
     with pytest.raises(SystemExit):
-        main.resolve_options(_args(config="/no/such/file.json", host="1.2.3.4"))
+        main.resolve_options(_args(config="/no/such/file.json", host="1.2.3.4", cert=cert))
 
 
 def test_a_bare_track_name_defaults_to_h264() -> None:
