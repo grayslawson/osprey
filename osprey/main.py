@@ -45,6 +45,7 @@ import snapshots
 import secure_defaults
 import setup_wizard
 from version import get_version
+from firmware import firmware_status
 from controller import CONTROL_PORT, Controller, PtzWatchdog, normalise_mac
 from presets import PresetStore
 from unifiwire.envelope import Envelope
@@ -886,6 +887,9 @@ def build(options: Options) -> Stack:
                 "FOV-relative moves are off. Run `osprey probe` and open a model-support issue.",
                 camera.mac, camera.model or "?",
             )
+        fw_status, fw_message = firmware_status(camera.firmware)
+        if fw_status != "tested":
+            log.warning("camera %s: %s", camera.mac, fw_message)
         # Re-announce now that we know whether to claim PTZ.
         finder.identities = advertised(camera.name or options.name, camera.is_ptz)
         if options.announce:

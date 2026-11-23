@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qs, quote, unquote
 
 import arbitration
+from firmware import firmware_status
 import ptz
 import websecurity
 from model import Camera, Position
@@ -190,6 +191,9 @@ def health_checks(services: "Services") -> list[dict[str, object]]:
         check("adoption", "Camera adoption", "warn", "Waiting for the camera to connect and adopt.")
     else:
         check("adoption", "Camera adoption", "ok", f"{camera.name or camera.mac} is adopted.")
+    if camera is not None and camera.adopted:
+        fw_status, fw_message = firmware_status(camera.firmware)
+        check("firmware", "Camera firmware", "ok" if fw_status == "tested" else "warn", fw_message)
     if camera is not None and camera.is_ptz:
         state = ptz_state(camera)
         error = state.get("error")
@@ -642,6 +646,7 @@ class WebApp:
                 **self._camera_summary(camera_id, services),
                 "mac": camera.mac,
                 "firmware": camera.firmware,
+                "firmware_status": firmware_status(camera.firmware)[0],
                 "tracks": tracks,
             },
             "ptz": ptz_state(camera, enabled=services.ptz_enabled),

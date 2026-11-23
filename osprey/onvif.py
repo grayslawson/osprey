@@ -168,9 +168,10 @@ class AdminAuth:
                 "use this only for local development", mode,
             )
         elif not encoded:
-            log.error(
-                "operator console is locked: configure OSPREY_ADMIN_PASSWORD_HASH or "
-                "OSPREY_ADMIN_PASSWORD_FILE (or OSPREY_ADMIN_AUTH=disabled for development)"
+            log.warning(
+                "operator console is locked until an admin password is set: finish the "
+                "first-run setup at /setup, or configure OSPREY_ADMIN_PASSWORD_HASH or "
+                "OSPREY_ADMIN_PASSWORD_FILE (OSPREY_ADMIN_AUTH=disabled is for development only)"
             )
         return cls(encoded, allow_anonymous=anonymous, trusted_ingress_peer=trusted_peer)
 
@@ -3370,7 +3371,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "<fieldset><legend>Camera</legend>"
                 "<label>Name <input name='name' required placeholder='Driveway PTZ'></label>"
                 "<label>Protect MAC address <input name='mac' required placeholder='AA:BB:CC:DD:EE:FF'></label>"
-                "<label>Camera IP address <input name='ip' required placeholder='192.0.2.20'></label></fieldset>"
+                "<label>Camera IP address (optional) <input name='ip' placeholder='192.0.2.20'></label></fieldset>"
                 "<fieldset><legend>Frigate and access</legend>"
                 "<label>Frigate URL <input name='frigate_url' type='url' required placeholder='http://frigate:5000'></label>"
                 "<label>Admin password <input name='admin_password' type='password' minlength='8' required autocomplete='new-password'></label>"
