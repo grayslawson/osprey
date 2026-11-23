@@ -4,6 +4,14 @@ The changes to the Osprey Home Assistant app, newest version on top. The app
 ships the Osprey controller, so the controller's own changelog is at
 <https://github.com/grayslawson/osprey/blob/main/CHANGELOG.md>.
 
+## Unreleased
+
+- New options `onvif_username`, `onvif_password`, `rtsp_username`,
+  `rtsp_password` and `security` (`auto`, `secure` or `legacy`). A new install
+  generates the passwords, logs them once and requires them. An existing
+  install keeps its behaviour until you set them.
+- The base image is pinned by digest.
+
 ## 0.9.0b3
 
 - The app can be installed: the store no longer rejects its manifest

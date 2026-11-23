@@ -208,9 +208,10 @@ the manage request directly.
   that uses 2005/08 finds no `MessageID` in the probe and never appears in
   Home Assistant's discovery, and a self-written probe will not catch it. See
   the `discovery.py` docstring and `tests/test_discovery.py`.
-- **ONVIF authentication is opt-in** for Frigate compatibility. Test
-  UsernameToken support before enabling it, and never expose an anonymous
-  ONVIF port to an untrusted network.
+- **ONVIF authentication is on for new installs** and opt-in for existing
+  ones. Test UsernameToken support before enabling it on a running install,
+  and never expose an anonymous ONVIF port to an untrusted network. See
+  [security](../docs/security.md#secure-mode-and-legacy-mode).
 
 The full protocol write-up, with captures, is in the
 [flock guides](https://github.com/rjmotion/unifi-guides).

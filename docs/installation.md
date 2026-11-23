@@ -70,10 +70,14 @@ all mode `0600`:
 | `rtsp-password`, `onvif-password` | Generated passwords. |
 | `frigate.json` | The Frigate URL. |
 
-The generated RTSP and ONVIF passwords are shown once. RTSP Digest
-authentication is on after the restart. ONVIF stays anonymous; the lines that
-enable it are commented out in `osprey-secrets.env` until you have tested
-Frigate with them.
+Enter the camera's IP address in the wizard, and reserve it in your router.
+Osprey then accepts media and snapshot uploads only from that address. Without
+it, a new install learns the address from the first camera that connects,
+which is weaker; see [security](security.md#the-cameras-address).
+
+The generated RTSP and ONVIF passwords are shown once, so save them. Both
+services require them after the restart, with the user name `osprey`. See
+[security](security.md#secure-mode-and-legacy-mode).
 
 Restart to load the new configuration:
 
@@ -89,21 +93,22 @@ temporary files.
 
 ### ONVIF authentication
 
-When you turn ONVIF authentication on, name the user `frigate`. Only users in
-`ptz.autotrack_users` (default `["frigate"]`) count as autotrackers, so with
-the wizard's `osprey` user every Frigate move would count as a person taking
-control. This uncomments both lines and renames the user:
+Name the ONVIF user `frigate`. Only users in `ptz.autotrack_users` (default
+`["frigate"]`) count as autotrackers, so with the wizard's `osprey` user every
+Frigate move would count as a person taking control. This renames the user:
 
 ```sh
 docker compose -f compose.release.yaml exec osprey sed -i \
-  -e 's/^# OSPREY_ONVIF_USERNAME=osprey$/OSPREY_ONVIF_USERNAME=frigate/' \
-  -e 's/^# OSPREY_ONVIF_PASSWORD_FILE=/OSPREY_ONVIF_PASSWORD_FILE=/' \
+  -e 's/^OSPREY_ONVIF_USERNAME=osprey$/OSPREY_ONVIF_USERNAME=frigate/' \
   /var/lib/osprey/osprey-secrets.env
 docker compose -f compose.release.yaml restart osprey
 ```
 
 Then give Frigate `onvif.user: frigate` and the ONVIF password the wizard
-showed.
+showed. If you skipped the wizard, Osprey generated the credentials, with the
+user `osprey`, and logged them once. Either keep that user and list it in
+`ptz.autotrack_users`, or set your own with `OSPREY_ONVIF_USERNAME` and
+`OSPREY_ONVIF_PASSWORD_FILE`.
 
 ### Rootless Podman
 
@@ -144,6 +149,10 @@ services:
 ```
 
 Then run `docker compose -f compose.release.yaml -f compose.override.yaml up -d`.
+
+To restrict the camera's address without the wizard, set it in the same
+override: `OSPREY_EXTRA_ARGS: "--expected-camera-ip 192.0.2.20"` under
+`environment`, or `ip` in a `cameras` entry.
 
 All keys and environment variables are listed in
 [configuration](configuration.md).

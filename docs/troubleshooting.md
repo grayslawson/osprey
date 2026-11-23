@@ -128,6 +128,23 @@ Work through these in order. Each rules out one layer.
 To see every ONVIF call and who made it, set `"onvif": {"log_calls": true}` in
 `osprey.json` and restart. Turn it off afterwards, because it is noisy.
 
+## Frigate gets 401 or cannot connect after an upgrade
+
+A new install requires ONVIF and RTSP logins, and the credentials are generated
+unless you set your own. Use the RTSP user `osprey` with the password from
+`rtsp-password` in the state directory (or the first start's log), and set
+`onvif.user` and `onvif.password` in Frigate. If you want to keep the old
+anonymous behaviour, an existing install stays in legacy mode on its own; see
+[security](security.md#secure-mode-and-legacy-mode).
+
+## The camera connects but video is refused
+
+In secure mode the media port accepts only the camera's address. If the log has
+`rejecting media ingest from unregistered peer`, the camera is connecting from
+an address Osprey does not expect. Check `cameras[].ip`, `--expected-camera-ip`
+or `camera_ip`. If the camera's address changed, update it, or remove the setting and
+restart so Osprey learns the new address.
+
 ## Everything is unhealthy right after the first start
 
 Until a camera is adopted, `/healthz` answers `503` and the container reports
