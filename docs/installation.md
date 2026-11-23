@@ -158,12 +158,13 @@ reach the camera over HTTPS (Python 3 is enough):
 
 ```sh
 git clone https://github.com/grayslawson/osprey.git && cd osprey
-./osprey/manage.sh --camera 192.0.2.20 --user ubnt --password ubnt \
-  --host 192.0.2.10
+./osprey/manage.sh --camera 192.0.2.20 --user ubnt --host 192.0.2.10
 ```
 
-`--user` and `--password` are the camera's own management login. `ubnt`/`ubnt`
-only works on a factory fresh camera. `--host` is Osprey's address
+The script asks for the camera's management password. On a factory fresh
+camera the login is `ubnt`/`ubnt`, so type `ubnt`. To skip the prompt, set
+`OSPREY_CAMERA_PASSWORD` or pass `--password-file`; a `--password` flag still
+works but shows up in `ps` and your shell history. `--host` is Osprey's address
 (`OSPREY_HOST`, or `advertised_host` in Home Assistant), and `--control-port`
 matches `ports.control` if you changed it. The camera dials Osprey on port
 7442 and Osprey adopts it; the

@@ -185,6 +185,7 @@ Prefer the `_FILE` forms. See [authentication](authentication.md) and
 |---|---|---|
 | `OSPREY_CAMERA_IP`, `OSPREY_CALLBACK_URL`, `OSPREY_FRIGATE_URL` | `osprey doctor` | Defaults for `--camera`, `--callback` and `--frigate`. |
 | `OSPREY_UNIFI_API_KEY_FILE` | `protect-guard`, `doctor` | UniFi Network API key file. |
+| `OSPREY_CAMERA_PASSWORD` | `manage.sh` | The camera's management password, instead of a prompt. |
 | `OSPREY_UNIFI_CONSOLE` | `doctor` | UniFi console URL for the guard check. |
 | `OSPREY_HEALTH_HOST`, `OSPREY_HEALTH_PORT` | container health check | Where to probe `/healthz`. Defaults follow `OSPREY_BIND` and `ports.onvif`. |
 | `OSPREY_SECRETS` | `osprey/handoff.sh` | Directory with Protect credentials. Default `~/.osprey/secrets`. |
