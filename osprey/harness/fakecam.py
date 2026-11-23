@@ -60,7 +60,7 @@ class Camera:
         reply.fields = [wire.Field(f.kind, flag) if f.kind == wire.MGMT_IS_DEFAULT else f for f in reply.fields]
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("0.0.0.0", wire.PORT))
+        sock.bind(("", wire.PORT))  # all interfaces: broadcasts arrive on the wildcard
         while True:
             datagram, sender = sock.recvfrom(1500)
             if wire.is_probe(datagram):
@@ -71,6 +71,7 @@ class Camera:
 
     def adopt(self, host: str, port: int) -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         for _ in range(30):
@@ -174,8 +175,9 @@ def management_api(camera: Camera, cert: Path) -> None:
             else:
                 self.reply(401)
 
-    server = ThreadingHTTPServer(("0.0.0.0", 443), Handler)
+    server = ThreadingHTTPServer(("", 443), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(str(certs.ensure(cert)))
     server.socket = context.wrap_socket(server.socket, server_side=True)
     server.serve_forever()

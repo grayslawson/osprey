@@ -137,7 +137,6 @@ def scan(seconds: float = SCAN_SEC, targets: Iterable[tuple[str, int]] | None = 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-        sock.bind(("0.0.0.0", 0))
         found = _collect(sock, seconds, targets)
     return sorted(found.values(), key=lambda c: ipaddress.ip_address(str(c["ip"])))
 
@@ -145,7 +144,6 @@ def scan(seconds: float = SCAN_SEC, targets: Iterable[tuple[str, int]] | None = 
 def probe(ip: str, seconds: float = PROBE_SEC, port: int = wire.PORT) -> dict[str, object] | None:
     """Ask one address directly; the camera at ``ip``, or None if nothing answered."""
     address = str(ipaddress.IPv4Address(ip))
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.bind(("0.0.0.0", 0))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:  # the first send binds a free port
         found = _collect(sock, seconds, [(address, port)], limit=1)
     return next(iter(found.values()), None)
