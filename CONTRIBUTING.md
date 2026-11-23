@@ -31,7 +31,16 @@ addresses, recordings or unredacted logs.
 Before you ask for review, run `make check`, read your diff, and update
 `docs/` for any change users will notice. If you touched Docker, Home
 Assistant, NixOS or package metadata, check that path too. Use Conventional
-Commit subjects; the changelog is generated from them.
+Commit subjects; the changelog and the release notes are generated from them.
+
+Write the subject for a user who will read it in the release notes, not for
+the reviewer. "Fix the setup wizard form posting the password in the URL" is
+a release note. "Fix wizard bug" is not. Squash merges keep the pull request
+title as the subject, so the title is what counts. The types `feat`, `fix`,
+`perf`, `docs`, `build` and `packaging` appear in the notes. `chore`, `ci`,
+`test`, `style`, `refactor` and dependency bumps do not. A fix that closes a
+security problem uses the scope `security` and gets its own heading, and a
+`!` after the type (`feat(onvif)!:`) puts the change under Breaking changes.
 
 Security reports should follow [`SECURITY.md`](SECURITY.md), not a public issue.
 
@@ -48,16 +57,21 @@ pre-release and image tags `0.9.0b1`/`v0.9.0b1`, without moving `latest`.
    `packaging/chocolatey/osprey.nuspec`, `pyunifiwire/pyproject.toml` and
    `pyunifiwire/src/unifiwire/__init__.py`. `make validate` fails if they
    differ.
-2. Prepend the changelog entry: `git-cliff --tag vX.Y.Z --unreleased --prepend CHANGELOG.md`
-   (git-cliff is pinned in `requirements-ci.txt`).
+2. Preview the notes with `git-cliff --tag vX.Y.Z --unreleased`. If a line is
+   unclear, fix the commit subject or its pull request title rather than the
+   output, because the same text is what the release shows. Then write the
+   entry into the changelog:
+   `git-cliff --tag vX.Y.Z --unreleased --prepend CHANGELOG.md` (git-cliff is
+   pinned in `requirements-ci.txt`). Do not edit the generated section by hand.
 3. Run `make check`, merge to `main`, then tag the merge commit `vX.Y.Z` and push the tag.
 
 `.github/workflows/release.yml` then runs the tests, builds the sdist and
 wheel, builds and signs the multi-architecture image (keyless cosign, with SBOM
 and provenance), publishes `osprey-ptz` to PyPI and `@osprey-ptz/cli` to npm
-through trusted publishing, creates the GitHub release with the changelog
-notes and package assets, and builds the Home Assistant app image. The
-Homebrew tap, the Chocolatey feed and the Home Assistant app repository pick up
+through trusted publishing, creates the GitHub release with package assets and
+the notes git-cliff generates for the tag (`CLIFF_NOTES=1 git-cliff --latest`,
+the same text as the changelog section without its heading), and builds the
+Home Assistant app image. The Homebrew tap, the Chocolatey feed and the Home Assistant app repository pick up
 the release from there.
 
 Verify an image signature with:
