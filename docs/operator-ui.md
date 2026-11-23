@@ -13,7 +13,7 @@ loads from a CDN.
 | `/` | The app. Redirects to `/setup` while setup is pending. |
 | `/cameras/{id}/` | The app, opened on one camera. |
 | `/legacy` | The older server-rendered console. |
-| `/api/v1/...` | JSON API. Contract: [`specs/002-operator-web-ui/contracts/http-api.md`](../specs/002-operator-web-ui/contracts/http-api.md). |
+| `/api/v1/...` | JSON API. See the [API reference](api.md). |
 | `/api/v1/events?camera={id}` | Server-sent events: `state`, `ptz`, `streams`, `health`, `preset`, `adoption`, `log`, `session`. |
 
 The app has five tabs: **Live**, **Health**, **Logs**, **Settings** and

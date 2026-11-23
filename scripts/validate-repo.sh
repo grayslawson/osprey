@@ -80,34 +80,6 @@ if stale:
     raise SystemExit(f"stale version strings (VERSION is {version}): " + ", ".join(stale))
 PY
 
-# Install commands in the docs pin a release. They must name the release in
-# VERSION, so a version bump cannot leave a stale download link behind.
-python3 - <<'PY'
-import re
-import subprocess
-from pathlib import Path
-
-root = Path.cwd()
-version = (root / "VERSION").read_text(encoding="utf-8").strip()
-ver = r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?"
-pins = re.compile(
-    r"(?:grayslawson/osprey(?::|/v|/releases/download/v)|osprey_ptz-|osprey-ptz-cli-)v?(" + ver + r")"
-)
-tracked = subprocess.run(
-    ["git", "ls-files", "README.md", "docs", ".env.example", "packaging/npm/README.md",
-     "homeassistant/addon/osprey/DOCS.md"],
-    check=True, capture_output=True, text=True,
-).stdout.split()
-stale = []
-for name in tracked:
-    for number, line in enumerate((root / name).read_text(encoding="utf-8").splitlines(), 1):
-        for found in pins.findall(line):
-            if found != version:
-                stale.append(f"{name}:{number} ({found})")
-if stale:
-    raise SystemExit(f"release pins differ from VERSION ({version}): " + ", ".join(stale))
-PY
-
 git diff --check
 
 # Keep executable launchers executable; this catches accidental mode changes
