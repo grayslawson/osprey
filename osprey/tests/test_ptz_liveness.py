@@ -725,3 +725,32 @@ def test_ptz_health_reports_a_healthy_channel() -> None:
         "active": False, "attempts": 0, "max_attempts": controller.PTZ_RECOVERY_MAX_ATTEMPTS,
         "waiting_for_callback": False, "exhausted": False,
     }
+
+
+def test_isp_baseline_is_sent_on_connect_and_skipped_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctl, control, _, _, _ = _ptz_pair()
+    mac = control.camera.mac
+    sent: list[dict[str, Any]] = []
+
+    def record(_mac: str, settings: dict[str, Any]) -> bool:
+        sent.append(settings)
+        return True
+
+    monkeypatch.setattr(ctl, "change_isp", record)
+    ctl._apply_isp_baseline(mac)  # nothing configured: nothing sent
+    ctl.isp_baseline = {"hdr": 1}
+    ctl._apply_isp_baseline(mac)
+    for thread in [t for t in threading.enumerate() if t.name == "isp-baseline"]:
+        thread.join(2)
+    assert sent == [{"hdr": 1}]
+
+
+def test_config_defaults_to_hdr_baseline_and_rejects_junk() -> None:
+    import config
+
+    assert config.validate_ptz(None)["isp_baseline"] == {"hdr": 1}
+    assert config.validate_ptz({"isp_baseline": {}})["isp_baseline"] == {}
+    with pytest.raises(ValueError):
+        config.validate_ptz({"isp_baseline": {"bad key": 1}})
