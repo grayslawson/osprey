@@ -11,7 +11,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Final
+from typing import Final
 
 log = logging.getLogger("osprey.motion")
 
@@ -150,9 +150,6 @@ class Preset:
     index: int
     name: str
     position: Position
-    # ChangeIspSettings fields applied once the head settles on this preset
-    # (focus mode, exposure, ...). Empty keeps the camera's own behaviour.
-    isp: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -558,8 +558,6 @@ class Backend:
     goto_preset: Callable[[int, int], bool] = lambda _i, _s: False
     set_preset: Callable[[str, int | None], int | None] = lambda _n, _i: None
     remove_preset: Callable[[int], bool] = lambda _i: False
-    # Per-preset ChangeIspSettings profile: (index, isp).
-    update_preset: Callable[[int, dict[str, Any]], bool] = lambda _i, _p: False
     # One ChangeIspSettings request on the control channel: True ack, False refused, None silent.
     change_isp: Callable[[dict[str, Any]], bool | None] = lambda _s: False
     refresh_position: Callable[[], bool] = lambda: False

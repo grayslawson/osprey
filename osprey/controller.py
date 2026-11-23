@@ -276,8 +276,6 @@ class Session:
         return messages
 
 
-PROFILE_SETTLE_TIMEOUT_SEC: Final = 20.0
-
 
 class Controller:
     """Accepts camera connections and runs the protocol over them."""
@@ -353,7 +351,6 @@ class Controller:
         self._recover_requests: queue.Queue[str] = queue.Queue()
         self._acks: dict[int, tuple[threading.Event, list[Envelope]]] = {}
         self._acks_lock = threading.Lock()
-        self._profile_generation: dict[str, int] = {}
         self._continuous_moves: dict[str, ContinuousMove] = {}
         # When an autotracker last drove this camera. The sentry patrol reads
         # it to stand down while Frigate is tracking; a patrol's own moves are
@@ -1263,22 +1260,7 @@ class Controller:
             except (OSError, ssl.SSLError):
                 session.camera.motion.cancel()
                 return False
-        if preset is not None and preset.isp:
-            self._apply_profile_on_arrival(mac, preset)
-        return True
-
-    def update_preset(self, mac: str, index: int, isp: dict[str, Any]) -> bool:
-        """Set a stored preset's image profile (isp={} clears it)."""
-        camera = self.cameras.get(mac)
-        if camera is None:
-            return False
-        with self._presets_lock:
-            preset = camera.presets.get(index)
-            if preset is None:
-                return False
-            preset.isp = dict(isp)
-            self._persist_presets(camera)
-        return True
+            return True
 
     def _apply_isp_baseline(self, mac: str) -> None:
         """Re-assert the configured ISP baseline on every (re)connect, off the control thread."""
@@ -1297,23 +1279,6 @@ class Controller:
         if session is None:
             return False
         return self._request_acked(session, adoption.CHANGE_ISP, settings, timeout=3.0)
-
-    def _apply_profile_on_arrival(self, mac: str, preset: Preset) -> None:
-        """Apply the preset's image profile once the head stops (a newer move cancels it)."""
-        generation = self._profile_generation[mac] = self._profile_generation.get(mac, 0) + 1
-
-        def run() -> None:
-            camera = self.cameras.get(mac)
-            deadline = time.monotonic() + PROFILE_SETTLE_TIMEOUT_SEC
-            time.sleep(0.5)  # activity may still read 0 just after the go
-            while camera is not None and not camera.motion.settled and time.monotonic() < deadline:
-                time.sleep(0.2)
-            if self._profile_generation.get(mac) != generation:
-                return
-            acked = self.change_isp(mac, preset.isp)
-            log.info("preset %r image profile applied: acked=%s mac=%s", preset.name, acked, mac)
-
-        threading.Thread(target=run, name="isp-profile", daemon=True).start()
 
     @staticmethod
     def _free_slot(camera: Camera) -> int | None:
@@ -1345,9 +1310,7 @@ class Controller:
             ):
                 log.warning("preset table full: mac=%s", mac)
                 return None
-            old = camera.presets.get(slot)  # re-saving a view keeps its image profile
-            preset = Preset(index=slot, name=name, position=camera.motion.position,
-                            isp=dict(old.isp) if old is not None else {})
+            preset = Preset(index=slot, name=name, position=camera.motion.position)
         acked = self._request_acked(session, ptz.PRESET, ptz.configure(preset))
         if acked is False:
             log.warning("camera refused preset %r in slot %d: mac=%s", name, slot, mac)

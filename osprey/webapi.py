@@ -276,7 +276,6 @@ def preset_list(camera: Camera | None, thumbs: Callable[[int], bool]) -> list[di
             "name": preset.name,
             "home": preset.name.strip().casefold() == "home",
             "position": _normalised(camera, preset.position),
-            "isp": preset.isp,
             "thumbnail": thumbs(index),
         }
         for index, preset in sorted(camera.presets.items())
@@ -461,7 +460,7 @@ class WebApp:
             self._drain(h)
             status, result = self.sentry_delete(services)
         else:
-            preset = re.fullmatch(r"/presets/(\d{1,6})(/goto|/profile|/thumbnail\.jpg)?", rest)
+            preset = re.fullmatch(r"/presets/(\d{1,6})(/goto|/thumbnail\.jpg)?", rest)
             track = re.fullmatch(r"/tracks/([A-Za-z0-9_-]{1,32})", rest)
             if preset:
                 token = int(preset.group(1))
@@ -475,8 +474,6 @@ class WebApp:
                         raise ApiError(HTTPStatus.NOT_FOUND, "no_thumbnail", "no thumbnail for this preset")
                     h._send(HTTPStatus.OK, image, "image/jpeg", headers=(("Cache-Control", "private, max-age=60"),))
                     return
-                elif action == "/profile" and method == "PUT":
-                    status, result = self.preset_profile(services, token, body())
                 elif action == "" and method == "PUT":
                     self._drain(h)
                     status, result = self.preset_update(services, token)
@@ -819,15 +816,6 @@ class WebApp:
             if not isinstance(value, (str, int, float, bool)) or not re.fullmatch(r"[A-Za-z0-9]{1,40}", key):
                 raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", f"bad ISP setting {key!r}")
         return data
-
-    def preset_profile(self, services: "Services", token: int, data: object) -> tuple[HTTPStatus, dict[str, object]]:
-        """Store a preset's image profile ({} clears it)."""
-        fields = self._fields(data, {"isp"}, {"isp"})
-        self._ptz_camera(services)
-        self._named(services, token)
-        if not services.backend.update_preset(token, self._isp_settings(fields["isp"])):
-            raise ApiError(HTTPStatus.CONFLICT, "ptz_unavailable", "preset could not be updated")
-        return HTTPStatus.OK, {"ok": True, "preset": self._preset_by_token(services, token)}
 
     def ptz_center(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
         fields = self._fields(data, {"x", "y", "zoom"}, {"x", "y"})
