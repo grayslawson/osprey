@@ -113,9 +113,10 @@ so check Frigate's [autotracking requirements](https://docs.frigate.video/config
    ```
 
 2. Open `http://192.0.2.10:8000/setup`, enter the token from the log, and fill
-   in the camera's MAC and name, the Frigate URL and an admin password. The
-   wizard shows the generated RTSP and ONVIF passwords once, so save them. Then
-   restart:
+   in the camera's MAC, name and IP address, the Frigate URL and an admin
+   password. Reserve the camera's IP in your router: Osprey then accepts video
+   only from that address. The wizard shows the generated RTSP and ONVIF
+   passwords once, so save them. Then restart:
 
    ```sh
    docker compose -f compose.release.yaml restart osprey
@@ -146,9 +147,13 @@ so check Frigate's [autotracking requirements](https://docs.frigate.video/config
        onvif:
          host: 192.0.2.10
          port: 8000
+         user: frigate
+         password: ONVIF_PASSWORD
    ```
 
-   The [Frigate guide](docs/frigate-integration.md) covers ONVIF credentials,
+   The generated ONVIF user is `osprey`, but autotracking needs `frigate`.
+   The [installation guide](docs/installation.md#onvif-authentication) shows
+   how to rename it. The [Frigate guide](docs/frigate-integration.md) covers
    autotracking, calibration and presets.
 
 6. Check the setup with `osprey doctor`; see
