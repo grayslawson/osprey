@@ -1,25 +1,29 @@
 # Osprey release deployment with BRIDGE networking. Use compose.release.yaml
 # (host networking) unless your platform forbids it.
 #
-#   docker compose -f compose.release-bridge.yaml up -d
+#   OSPREY_BIND=192.0.2.10 docker compose -f compose.release-bridge.yaml up -d
+#
+# OSPREY_BIND, the host's LAN address, is the one required setting. The setup
+# wizard opens on first start; the link is in `docker compose logs osprey`.
 #
 # Requirements and limits:
 # - Every camera-facing TCP port must be published on the host's LAN address
 #   (OSPREY_BIND) at the SAME port number, because Osprey advertises
-#   OSPREY_HOST:<port> to the camera. OSPREY_HOST must be that LAN address,
-#   never the container's bridge IP.
+#   OSPREY_HOST:<port> to the camera. OSPREY_HOST defaults to OSPREY_BIND and
+#   must be that LAN address, never the container's bridge IP.
 # - WS-Discovery multicast does not cross the bridge, so announcements are
 #   disabled; add the camera to Frigate/your NVR by address. UDP 3702 is still
-#   published for directed (unicast) probes.
+#   published for directed (unicast) probes. The wizard's camera scan cannot
+#   cross it either: type the camera's IP address there instead.
 # - Never publish on 0.0.0.0 on an untrusted host.
 name: osprey
 services:
   osprey:
-    image: ${OSPREY_IMAGE:?Set OSPREY_IMAGE to an immutable release tag or digest}
+    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b3}
     pull_policy: missing
     environment:
-      OSPREY_HOST: ${OSPREY_HOST:?Set OSPREY_HOST to this host's LAN address}
-      OSPREY_SETUP: ${OSPREY_SETUP:-0}
+      OSPREY_HOST: ${OSPREY_HOST:-${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}}
+      OSPREY_SETUP: ${OSPREY_SETUP:-}
       OSPREY_ANNOUNCE: "false"
       OSPREY_ADMIN_PASSWORD_FILE: ${OSPREY_ADMIN_PASSWORD_FILE:-}
     volumes:

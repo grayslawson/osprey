@@ -198,9 +198,8 @@ def resolve_options(args: argparse.Namespace) -> Options:
     setup_wizard.load_environment(
         os.environ.get("OSPREY_SECRETS_FILE") or str(Path(path).parent / "osprey-secrets.env")
     )
-    setup_mode = bool(getattr(args, "setup", False)) or os.environ.get("OSPREY_SETUP") == "1"
-    if args.config and not os.path.exists(path) and not setup_mode:
-        raise SystemExit(f"config file not found: {path}")
+    setup_env = os.environ.get("OSPREY_SETUP", "").strip().lower()
+    setup_mode = bool(getattr(args, "setup", False)) or setup_env == "1"
     try:
         effective = config.merged(config.load(path))
     except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError
@@ -240,8 +239,19 @@ def resolve_options(args: argparse.Namespace) -> Options:
         if flag is not None:
             ports[key] = flag
 
+    explicit_host = args.host or os.environ.get("OSPREY_HOST")
+    if not config_had_host and not setup_mode and setup_env not in ("0", "false", "no", "off"):
+        # First run opens the wizard by itself: nothing names a host, or a host is
+        # given but the state directory is new (or holds an unfinished wizard).
+        setup_mode = (
+            not explicit_host
+            or not Path(effective["cert"]).exists()
+            or (Path(path).parent / setup_wizard.PENDING_MARKER).exists()
+        )
+    if args.config and not os.path.exists(path) and not setup_mode:
+        raise SystemExit(f"config file not found: {path}")
     if not config_had_host and setup_mode:
-        effective["host"] = args.host or os.environ.get("OSPREY_HOST") or "127.0.0.1"
+        effective["host"] = explicit_host or setup_wizard.detect_lan_ip() or "127.0.0.1"
     try:
         config.validate_runtime(effective)
     except ValueError as exc:
@@ -712,6 +722,17 @@ def build(options: Options) -> Stack:
         secrets_path=os.environ.get("OSPREY_SECRETS_FILE"),
         frigate_path=os.environ.get("OSPREY_FRIGATE_CONFIG_FILE"),
     ) if options.setup_mode else None
+    if setup is not None:
+        bracketed = f"[{options.host}]" if ":" in options.host else options.host
+        setup.defaults = {
+            "host": options.host,
+            "bind": options.bind_host,
+            "bridge_hint": setup_wizard.bridge_hint(options.host),
+        }
+        try:
+            (options.config_path.parent / setup_wizard.PENDING_MARKER).touch()
+        except OSError as exc:
+            log.debug("cannot mark setup pending: %s", exc)
     interface_hw = (
         identity.interface_mac(options.discovery_interface) if options.discovery_interface else None
     )
@@ -737,10 +758,8 @@ def build(options: Options) -> Stack:
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
     if setup is not None:
-        log.warning(
-            "first-run setup pending; open http://%s:%d/setup and use setup token: %s",
-            options.host, north.port, setup.token,
-        )
+        setup.url = f"http://{bracketed}:{north.port}/setup"
+        setup.announce()
     read_only_north: onvif.OnvifServer | None = None
     if options.onvif_read_only_port is not None:
         read_only_services = onvif.Services(
@@ -1031,6 +1050,17 @@ def main(argv: list[str] | None = None) -> int:
 
     options = resolve_options(args)
     stack = build(options)
+    restart = threading.Event()
+    if stack.services.setup is not None:
+        def apply_setup() -> None:
+            # Let the browser receive the save response, then restart onto the new config.
+            def stop() -> None:
+                restart.set()
+                stack.controller.stop()
+            timer = threading.Timer(1.0, stop)
+            timer.daemon = True
+            timer.start()
+        stack.services.setup.on_complete = apply_setup
     # Persist a rotating log next to the certificate so a restart keeps a
     # short history.  A read-only or missing state directory only disables the
     # file log; the controller still runs with console logging.
@@ -1057,7 +1087,20 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         log.info("stopping")
         stack.stop()
+    if restart.is_set():
+        reexec()
     return 0
+
+
+def reexec() -> None:
+    """Replace this process with a fresh copy that reads the saved configuration.
+
+    ``sys.orig_argv`` keeps ``-m`` and the original script, whichever launcher
+    started us; listening sockets are not inheritable, so the ports are free.
+    """
+    log.warning("setup saved; restarting with the new configuration")
+    logging.shutdown()
+    os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
 
 
 if __name__ == "__main__":

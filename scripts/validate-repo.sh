@@ -56,6 +56,9 @@ checks = {
     "packaging/npm/package.json": r'"version": "([^"]+)"',
     # The launcher pulls this image; a stale pin would run the previous release.
     "packaging/npm/bin/osprey.js": r'ghcr.io/grayslawson/osprey:([^"]+)"',
+    # The default image of a downloaded Compose file is the release it came from.
+    "compose.release.yaml": r'OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v([^}]+)}',
+    "compose.release-bridge.yaml": r'OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v([^}]+)}',
     "packaging/chocolatey/osprey.nuspec": r"<version>([^<]+)</version>",
     "pyunifiwire/pyproject.toml": r'^version = "([^"]+)"$',
     "pyunifiwire/src/unifiwire/__init__.py": r'^__version__ = "([^"]+)"$',

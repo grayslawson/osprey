@@ -1,36 +1,42 @@
 # Osprey release deployment (host networking). Frigate is external and is
 # never managed here.
 #
-#   cp .env.example .env        # set OSPREY_HOST and OSPREY_IMAGE
 #   docker compose -f compose.release.yaml up -d
-#   docker compose -f compose.release.yaml logs -f osprey
+#   docker compose -f compose.release.yaml logs osprey   # prints the setup link
 #
-# Host networking is the supported default: the camera dials OSPREY_HOST on
+# Nothing has to be set. On first start Osprey finds this host's LAN address,
+# opens the setup wizard and logs a link to it. Every variable below is an
+# optional override; put overrides in a .env file next to this one (see
+# .env.example).
+#
+# Host networking is the supported default: the camera dials Osprey on
 # TCP 7442 (control, TLS), 7444 (snapshots) and 7550 (media ingest), clients use
-# TCP 8000 (ONVIF + operator console) and 8554 (RTSP), and WS-Discovery uses
-# UDP 3702 multicast, which does not cross a container bridge. Restrict these
-# ports to the camera/Frigate network with the host firewall.
+# TCP 8000 (ONVIF + operator console) and 8554 (RTSP), WS-Discovery uses
+# UDP 3702 multicast, and the wizard finds cameras with a UDP 10001 broadcast.
+# Broadcast and multicast do not cross a container bridge. Restrict these ports
+# to the camera/Frigate network with the host firewall.
 #
 # If host networking is not possible, use compose.release-bridge.yaml instead.
 # Docker Desktop (macOS/Windows) cannot serve a LAN camera in either mode.
 name: osprey
 services:
   osprey:
-    # Require an explicit image reference. scripts/osprey-update.sh validates
-    # that it is an immutable release tag or digest.
-    image: ${OSPREY_IMAGE:?Set OSPREY_IMAGE to an immutable release tag or digest}
+    # The release this file was published with (scripts/validate-repo.sh
+    # keeps it equal to VERSION). OSPREY_IMAGE overrides it, as
+    # scripts/osprey-update.sh does.
+    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b3}
     pull_policy: missing
     network_mode: host
     environment:
-      # The LAN address of THIS host as seen by the camera. Osprey writes it
-      # into the camera's controller and stream destinations; never use a
+      # Optional: the LAN address of THIS host as seen by the camera. Left
+      # empty, the wizard detects it and asks you to confirm. Never use a
       # loopback, wildcard or container-bridge address.
-      OSPREY_HOST: ${OSPREY_HOST:?Set OSPREY_HOST to this host's LAN address}
+      OSPREY_HOST: ${OSPREY_HOST:-}
       # Optional: restrict listeners to one local address (default all).
       OSPREY_BIND: ${OSPREY_BIND:-}
-      # "1" opens the browser first-run wizard at http://OSPREY_HOST:8000/setup
-      # until it has saved a configuration; leave unset for normal operation.
-      OSPREY_SETUP: ${OSPREY_SETUP:-0}
+      # Empty: the wizard opens by itself on first run. "1" forces it open
+      # while no host is configured; "0" never opens it.
+      OSPREY_SETUP: ${OSPREY_SETUP:-}
       OSPREY_ANNOUNCE: ${OSPREY_ANNOUNCE:-true}
       # Strongly recommended: protect the operator console. Point this at a
       # mounted secret, for example via the `secrets:` block below.

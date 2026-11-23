@@ -6,8 +6,8 @@ configuration:
   advertised_host:
     name: "Advertised host"
     description: >-
-      This host's address on the camera's network. Osprey gives it to the
-      camera and to ONVIF clients, so it cannot be an internal address.
+      Optional. This host's address on the camera's network. Leave it empty
+      and the setup wizard detects it and asks you to confirm it.
   camera_ip:
     name: "Camera IP address"
     description: >-

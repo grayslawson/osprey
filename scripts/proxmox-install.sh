@@ -141,4 +141,4 @@ EOF
 # shellcheck disable=SC2086  # compose_cmd is "runtime compose" or one binary
 $compose_cmd -f "$compose" up -d
 printf 'Osprey started; inspect with: %s -f %s ps\n' "$compose_cmd" "$compose"
-printf 'Open http://%s:%s/ ; set OSPREY_SETUP=1 in %s for the first-run wizard.\n' "$host" "$onvif" "$compose"
+printf 'The setup link is in the log: %s -f %s logs osprey\n' "$compose_cmd" "$compose"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -43,6 +44,7 @@ class FakeStack:
         self.handlers = handlers
         self.order = order
         self.controller = FakeController(order)
+        self.services = SimpleNamespace(setup=None)
 
     def run(self) -> None:
         # A SIGTERM arrives while the control loop is serving.
@@ -73,3 +75,34 @@ def test_signal_handler_only_sets_the_stop_flag_and_main_tears_down(
     # teardown ran afterwards, once, from main().
     assert order == ["controller.stop", "run returned", "stack.stop"]
     assert set(handlers) == {signal.SIGINT, signal.SIGTERM}
+
+
+def test_a_saved_setup_restarts_the_process_onto_the_new_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The wizard's save stops the loop and re-executes; no manual restart."""
+    order: list[str] = []
+    setup = SimpleNamespace(on_complete=None)
+    options = SimpleNamespace(
+        cert=tmp_path / "cert.pem", control_port=1, ingest_port=2, snapshot_port=3, rtsp_port=4, onvif_port=5
+    )
+
+    class SavingStack(FakeStack):
+        def run(self) -> None:
+            setup.on_complete()  # the browser saved the wizard
+            deadline = time.time() + 5
+            while "controller.stop" not in self.order and time.time() < deadline:
+                time.sleep(0.02)
+            self.order.append("run returned")
+
+    stack = SavingStack({}, order)
+    stack.services = SimpleNamespace(setup=setup)
+    monkeypatch.setattr(signal, "signal", lambda num, handler: None)
+    monkeypatch.setattr(main, "resolve_options", lambda args: options)
+    monkeypatch.setattr(main, "build", lambda opts: stack)
+    monkeypatch.setattr(main, "reexec", lambda: order.append("reexec"))
+    monkeypatch.setattr(logbuffer, "install", lambda: None)
+    monkeypatch.setattr(logfile, "install", lambda *a, **k: None)
+
+    assert main.main([]) == 0
+    assert order == ["controller.stop", "run returned", "stack.stop", "reexec"]

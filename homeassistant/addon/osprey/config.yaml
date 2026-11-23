@@ -40,7 +40,7 @@ options:
   rtsp_password: ""
   security: auto
 schema:
-  advertised_host: str
+  advertised_host: str?
   camera_ip: str?
   camera_mac: str?
   camera_name: str
