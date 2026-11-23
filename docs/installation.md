@@ -16,16 +16,16 @@ configure or run Frigate. Pick one install path:
 
 ## Before you start
 
-- **Adopting a camera removes it from UniFi Protect.** The camera has one
+- Adopting a camera removes it from UniFi Protect. The camera has one
   controller at a time. You remove it from Protect and factory-reset it, then
   point it at Osprey. [Uninstall and return to Protect](uninstall.md) walks
   back.
-- **A Linux host with a fixed LAN address** that the camera and Frigate can
+- A Linux host with a fixed LAN address that the camera and Frigate can
   both reach. The camera dials this address, so DHCP changes break it.
-- **Host networking** for the container. Docker Desktop on macOS and Windows
+- Host networking for the container. Docker Desktop on macOS and Windows
   cannot serve a LAN camera.
-- **Camera and host on one network** with the ports below open between them.
-- **A camera that is supported.** See [camera models](camera-models.md).
+- Camera and host on one network with the ports below open between them.
+- A camera that is supported. See [camera models](camera-models.md).
 
 Every path uses the same ports. The camera connects to Osprey on TCP 7442
 (control, TLS), 7444 (snapshots) and 7550 (media). Clients use TCP 8000
