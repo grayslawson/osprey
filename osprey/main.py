@@ -43,6 +43,7 @@ import logfile
 import rtsp
 import snapshots
 import setup_wizard
+from version import get_version
 from controller import CONTROL_PORT, Controller, PtzWatchdog, normalise_mac
 from presets import PresetStore
 from unifiwire.envelope import Envelope
@@ -929,7 +930,8 @@ def build(options: Options) -> Stack:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Present a UniFi camera as an ONVIF device.")
+    parser = argparse.ArgumentParser(prog="osprey", description="Present a UniFi camera as an ONVIF device.")
+    parser.add_argument("--version", action="version", version=f"osprey {get_version()}")
     # Overridable settings default to None so the config file shows through when a
     # flag is omitted; a flag that is given always wins. See resolve_options().
     parser.add_argument("--config", default=None,
@@ -974,6 +976,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if (sys.argv[1:] if argv is None else argv) == ["version"]:
+        print(get_version())
+        return 0
     args = parse_args(argv)
     # Configure the deployment's stderr/journal first, then attach the bounded
     # redacted tail used by the authenticated operator console.  ``basicConfig``
@@ -994,14 +999,11 @@ def main(argv: list[str] | None = None) -> int:
         options.cert.parent,
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
-    stopping = threading.Event()
 
     def shutdown(signum: int, frame: FrameType | None) -> None:
-        if stopping.is_set():
-            return
-        stopping.set()
-        log.info("stopping")
-        stack.stop()
+        # Only flag the stop: the control loop notices it, run() returns, and
+        # the teardown below runs on the main thread outside the signal context.
+        stack.controller.stop()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -1011,7 +1013,11 @@ def main(argv: list[str] | None = None) -> int:
         options.control_port, options.ingest_port, options.snapshot_port,
         options.rtsp_port, options.onvif_port, onvif.DEVICE_PATH,
     )
-    stack.run()
+    try:
+        stack.run()
+    finally:
+        log.info("stopping")
+        stack.stop()
     return 0
 
 

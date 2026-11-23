@@ -26,6 +26,7 @@ from unifiwire import discovery
 from unifiwire.envelope import HELLO, PARAM_AGREEMENT
 
 import model
+from version import get_version
 
 BUNDLE_VERSION: Final = 1
 DISCOVERY_PORT: Final = 10001
@@ -154,7 +155,7 @@ def build(camera: str | None, dump_path: Path | None, timeout: float) -> dict[st
     dump = read_dump(dump_path) if dump_path else None
     bundle = {
         "bundle_version": BUNDLE_VERSION,
-        "osprey_version": _version(),
+        "osprey_version": get_version(),
         "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "summary": summarise(found, dump),
         "discovery": found,
@@ -162,15 +163,6 @@ def build(camera: str | None, dump_path: Path | None, timeout: float) -> dict[st
     }
     out: dict[str, Any] = redact(bundle)
     return out
-
-
-def _version() -> str:
-    for candidate in (Path(__file__).resolve().parent.parent / "VERSION", Path("/opt/osprey/VERSION")):
-        try:
-            return candidate.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-    return "unknown"
 
 
 def main(argv: list[str] | None = None) -> int:
