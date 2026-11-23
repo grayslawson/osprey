@@ -7,6 +7,7 @@ at both ends. Uses openssl; any equivalent PEM dropped in place works as well.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Final
@@ -22,11 +23,15 @@ def ensure(path: Path, common_name: str = "unifi-device") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     key = path.with_suffix(".key")
     cert = path.with_suffix(".crt")
-    subprocess.run(
-        ["openssl", "ecparam", "-name", CURVE, "-genkey", "-noout", "-out", str(key)],
-        check=True,
-        capture_output=True,
-    )
+    old_umask = os.umask(0o077)  # openssl writes the bare key with the process umask
+    try:
+        subprocess.run(
+            ["openssl", "ecparam", "-name", CURVE, "-genkey", "-noout", "-out", str(key)],
+            check=True,
+            capture_output=True,
+        )
+    finally:
+        os.umask(old_umask)
     subprocess.run(
         [
             "openssl", "req", "-new", "-x509",
@@ -38,8 +43,11 @@ def ensure(path: Path, common_name: str = "unifi-device") -> Path:
         check=True,
         capture_output=True,
     )
-    path.write_bytes(cert.read_bytes() + key.read_bytes())
+    # Created 0600 from the start, never readable by others.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(cert.read_bytes() + key.read_bytes())
+    os.chmod(path, 0o600)
     key.unlink(missing_ok=True)
     cert.unlink(missing_ok=True)
-    path.chmod(0o600)
     return path
