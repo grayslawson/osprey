@@ -83,3 +83,6 @@ documentation is at <https://github.com/grayslawson/osprey/tree/main/docs>.
 ## License
 
 MIT. See <https://github.com/grayslawson/osprey/blob/main/LICENSE>.
+
+Osprey is an independent project, not affiliated with or endorsed by Ubiquiti
+Inc. UniFi and UniFi Protect are trademarks of Ubiquiti Inc.

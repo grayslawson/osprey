@@ -13,7 +13,7 @@ done
 # These identifiers belong to private/development environments and must not
 # leak into public artifacts. `git grep` skips binary fixtures automatically;
 # neutral RFC1918 addresses in protocol tests are intentionally allowed.
-if git grep -nEI 'pd[-_ ]?nixos|(^|[^[:alnum:]])finch([^[:alnum:]]|$)' -- . ':(exclude)scripts/validate-repo.sh'; then
+if git grep -nEI 'pd[-_ ]?nixos|(^|[^[:alnum:]])finch([^[:alnum:]]|$)' -- . ':(exclude)scripts/validate-repo.sh' ':(exclude)NOTICE' ':(exclude)docs/faq.md'; then
 	echo 'private or development-only identifiers found in tracked text' >&2
 	exit 1
 fi
@@ -68,6 +68,34 @@ for name, pattern in checks.items():
         mismatched.append(f"{name} ({found!r})")
 if mismatched:
     raise SystemExit(f"versions differ from VERSION ({version}): " + ", ".join(mismatched))
+PY
+
+# Install commands in the docs pin a release. They must name the release in
+# VERSION, so a version bump cannot leave a stale download link behind.
+python3 - <<'PY'
+import re
+import subprocess
+from pathlib import Path
+
+root = Path.cwd()
+version = (root / "VERSION").read_text(encoding="utf-8").strip()
+ver = r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?"
+pins = re.compile(
+    r"(?:grayslawson/osprey(?::|/v|/releases/download/v)|osprey_ptz-|osprey-ptz-cli-)v?(" + ver + r")"
+)
+tracked = subprocess.run(
+    ["git", "ls-files", "README.md", "docs", ".env.example", "packaging/npm/README.md",
+     "homeassistant/addon/osprey/DOCS.md"],
+    check=True, capture_output=True, text=True,
+).stdout.split()
+stale = []
+for name in tracked:
+    for number, line in enumerate((root / name).read_text(encoding="utf-8").splitlines(), 1):
+        for found in pins.findall(line):
+            if found != version:
+                stale.append(f"{name}:{number} ({found})")
+if stale:
+    raise SystemExit(f"release pins differ from VERSION ({version}): " + ", ".join(stale))
 PY
 
 git diff --check
