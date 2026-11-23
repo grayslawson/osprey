@@ -217,7 +217,7 @@ The full protocol write-up, with captures, is in the
 
 ## Licence
 
-MIT; see [`LICENSE`](LICENSE).
+MIT; see [`LICENSE`](../LICENSE).
 
 Not affiliated with or endorsed by Ubiquiti Inc. UniFi and UniFi Protect are
 its trademarks. No Ubiquiti firmware or binaries are included.

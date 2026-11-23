@@ -25,7 +25,7 @@ import main
 import onvif
 import ptz
 from unifiwire import ws
-from test_media import IDR, hvcc, length_prefixed, stream_bytes, tag_bytes, video_body
+from test_media import IDR, length_prefixed, stream_bytes, tag_bytes, video_body
 
 HELLO_PAYLOAD: dict[str, Any] = {
     "fwVersion": "5.3.95",

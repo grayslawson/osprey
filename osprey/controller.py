@@ -299,6 +299,7 @@ class Controller:
         watchdog: PtzWatchdog | None = None,
         preset_ack_timeout: float = PRESET_ACK_TIMEOUT_SEC,
         arbiter: arbitration.Arbiter | None = None,
+        learned_peers: set[str] | None = None,
     ) -> None:
         self.cert = cert
         self.arbiter = arbiter or arbitration.Arbiter()
@@ -315,6 +316,8 @@ class Controller:
             normalise_mac(expected_camera_mac) if expected_camera_mac else None
         )
         self.bind_host = bind_host
+        # Shared with the ingest and snapshot servers: an accepted camera's IP joins it.
+        self.learned_peers = learned_peers
         self.configured_cameras = configured_cameras or {}
         self.cameras: dict[str, Camera] = {}
         self._sessions: dict[socket.socket, Session] = {}
@@ -473,6 +476,9 @@ class Controller:
             log.warning("rejected unregistered camera: mac=%s model=%s", mac, upgrade.camera_model)
             sock.close()
             return
+        if self.learned_peers is not None and peer[0] not in self.learned_peers:
+            log.info("adopted camera %s at %s: media and snapshot uploads now accepted from it", mac, peer[0])
+            self.learned_peers.add(peer[0])
         camera = self._camera_for(mac)
         registration = self.configured_cameras.get(mac)
         if registration is not None:
@@ -578,7 +584,7 @@ class Controller:
             return
         try:
             chunk = sock.recv(READ_SIZE)
-        except (TimeoutError,):
+        except TimeoutError:
             return
         except (OSError, ssl.SSLError):
             chunk = b""

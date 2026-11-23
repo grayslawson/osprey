@@ -19,6 +19,9 @@ with that NVR's own firewall instead (see docs/protect-guard.md).
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
+import http.client
 import ipaddress
 import json
 import os
@@ -39,14 +42,56 @@ PAGE: Final = 200
 Request = Callable[[str, str, dict[str, Any] | None], Any]
 
 
-def http_client(console: str, api_key: str, verify: bool) -> Request:
-    """A tiny JSON client for ``{console}/proxy/network/integration/v1``."""
+def _pinned_handler(context: ssl.SSLContext, pin_file: Path) -> urllib.request.HTTPSHandler:
+    """Trust-on-first-use: the first certificate seen is stored; later ones must match."""
+
+    class Pinned(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            super().connect()
+            cert = self.sock.getpeercert(binary_form=True) if isinstance(self.sock, ssl.SSLSocket) else None
+            if not cert:
+                raise ssl.SSLError("no peer certificate to pin")
+            seen = hashlib.sha256(cert).hexdigest()
+            if not pin_file.exists():
+                fd = os.open(pin_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(seen + "\n")
+                print(f"NOTICE  trusting console certificate sha256:{seen} (stored in {pin_file})", file=sys.stderr)
+            elif not hmac.compare_digest(pin_file.read_text(encoding="utf-8").strip().lower(), seen):
+                raise ssl.SSLError(f"console certificate changed (sha256:{seen}); delete {pin_file} to re-trust")
+
+    return _handler(Pinned, context)
+
+
+def _handler(conn: type[http.client.HTTPSConnection], context: ssl.SSLContext) -> urllib.request.HTTPSHandler:
+    class Handler(urllib.request.HTTPSHandler):
+        def https_open(self, req: urllib.request.Request) -> Any:
+            return self.do_open(lambda host, **kw: conn(host, context=context, **kw), req)
+
+    return Handler()
+
+
+def http_client(
+    console: str, api_key: str, *, insecure: bool = False, ca_file: str | None = None,
+    pin_file: Path | None = None,
+) -> Request:
+    """A tiny JSON client for ``{console}/proxy/network/integration/v1``.
+
+    The certificate is verified against the system store (or ``ca_file``) unless
+    ``pin_file`` (trust on first use, for UniFi's self-signed certificate) or
+    ``insecure`` says otherwise.
+    """
     base = console.rstrip("/") + "/proxy/network/integration/v1"
-    context = ssl.create_default_context()
-    if not verify:
-        # UniFi consoles ship a self-signed certificate.
+    context = ssl.create_default_context(cafile=ca_file)
+    if pin_file is not None:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
+        opener = urllib.request.build_opener(_pinned_handler(context, pin_file))
+    else:
+        if insecure:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context))
 
     def request(method: str, path: str, body: dict[str, Any] | None) -> Any:
         data = json.dumps(body).encode() if body is not None else None
@@ -54,7 +99,7 @@ def http_client(console: str, api_key: str, verify: bool) -> Request:
             "X-API-KEY": api_key, "Accept": "application/json",
             **({"Content-Type": "application/json"} if data is not None else {}),
         })
-        with urllib.request.urlopen(req, timeout=15, context=context) as response:
+        with opener.open(req, timeout=15) as response:
             return json.loads(response.read() or b"null")
 
     return request
@@ -166,10 +211,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--api-key-file", help="file holding a UniFi Network API key")
     parser.add_argument("--site", default="default", help="site name or id (default: default)")
     parser.add_argument("--apply", action="store_true", help="create the policy if it is missing")
-    parser.add_argument("--verify-tls", action="store_true", help="verify the console certificate")
+    tls = parser.add_mutually_exclusive_group()
+    tls.add_argument("--ca-file", help="PEM CA or console certificate to verify against")
+    tls.add_argument("--pin-file", help="trust on first use: store the console certificate's "
+                     "sha256 here and require it afterwards (for UniFi's self-signed certificate)")
+    tls.add_argument("--insecure", action="store_true", help="do NOT verify the console certificate")
+    parser.add_argument("--verify-tls", action="store_true", help=argparse.SUPPRESS)  # now the default
     args = parser.parse_args(argv)
     camera_ip = str(ipaddress.IPv4Address(args.camera_ip))
-    request = http_client(args.console, _api_key(args.api_key_file), args.verify_tls)
+    request = http_client(
+        args.console, _api_key(args.api_key_file), insecure=args.insecure, ca_file=args.ca_file,
+        pin_file=Path(args.pin_file) if args.pin_file else None,
+    )
     try:
         code, message = run(request, camera_ip, args.site, args.apply)
     except urllib.error.HTTPError as exc:

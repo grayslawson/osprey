@@ -428,7 +428,7 @@ def test_reboots_are_capped_per_hour_and_the_rearm_wait_backs_off(
     mac = control.camera.mac
     now = 1000.0
     waits = []
-    for i in range(4):
+    for _ in range(4):
         recovery = _exhaust(ctl, mac, now)
         waits.append(recovery.rearm_sec)
         now += recovery.rearm_sec

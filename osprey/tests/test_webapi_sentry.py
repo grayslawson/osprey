@@ -6,7 +6,6 @@ CSRF header and the error shapes are the ones a browser actually sees.
 
 from __future__ import annotations
 
-import json
 from http import HTTPStatus
 from typing import Any
 
@@ -15,7 +14,6 @@ import pytest
 import onvif
 from sentry_manager import SentryManager
 from sentry_runtime import MovementGate, SentryConfig
-from tests_support import a_camera
 from test_webapi import Client, make
 
 
