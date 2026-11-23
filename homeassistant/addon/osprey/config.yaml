@@ -34,6 +34,11 @@ options:
   onvif_port: 8000
   rtsp_port: 8554
   admin_password: ""
+  onvif_username: osprey
+  onvif_password: ""
+  rtsp_username: osprey
+  rtsp_password: ""
+  security: auto
 schema:
   advertised_host: str
   camera_ip: str?
@@ -44,3 +49,8 @@ schema:
   onvif_port: port
   rtsp_port: port
   admin_password: password?
+  onvif_username: str?
+  onvif_password: password?
+  rtsp_username: str?
+  rtsp_password: password?
+  security: list(auto|secure|legacy)?
