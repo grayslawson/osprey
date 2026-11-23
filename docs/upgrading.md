@@ -64,6 +64,50 @@ pip install --upgrade "osprey-ptz[mqtt] @ https://github.com/grayslawson/osprey/
 
 Replace `NEW_VERSION` with the release you want, as in `0.9.0b3`.
 
+## Move a legacy install to secure mode
+
+An install from before secure mode keeps anonymous ONVIF and RTSP and open
+media ports. Osprey records that as `legacy` in `security-mode` in the state
+directory, and warns about it at every start. To check:
+
+```sh
+docker compose -f compose.release.yaml exec osprey cat /var/lib/osprey/security-mode
+```
+
+To switch, plan a short window and have the Frigate configuration open.
+
+1. Set `OSPREY_SECURITY=secure`. With the release Compose file, add it to a
+   `compose.override.yaml`:
+
+   ```yaml
+   services:
+     osprey:
+       environment:
+         OSPREY_SECURITY: secure
+   ```
+
+   In the Home Assistant app, set the `security` option to `secure`.
+2. Name the camera's address, so the media ports accept only the camera:
+   `ip` in a `cameras` entry, `--expected-camera-ip`, or `camera_ip` in the
+   app. Reserve that address in your router.
+3. Restart Osprey and read the log. For each service without credentials,
+   Osprey generates a password, logs it once and keeps it in
+   `onvif-password` or `rtsp-password` in the state directory. If you already
+   configured credentials, it keeps yours. The generated user is `osprey`.
+4. Give every client its login. In Frigate, use
+   `rtsp://osprey:RTSP_PASSWORD@host:8554/...` for the inputs and set
+   `onvif.user` and `onvif.password`. Home Assistant's ONVIF integration needs
+   the ONVIF login too.
+5. Make the ONVIF user `frigate`, or add the name to `ptz.autotrack_users`.
+   Otherwise Frigate's moves count as a person's. See
+   [installation](installation.md#onvif-authentication).
+6. Check that Frigate still detects, records and tracks.
+
+To go back, set `OSPREY_SECURITY=legacy` and restart. To keep one service
+anonymous inside secure mode, set `OSPREY_ONVIF_AUTH=disabled` or
+`OSPREY_RTSP_AUTH=disabled`. The [security](security.md#secure-mode-and-legacy-mode)
+page explains both modes.
+
 ## Notes for older installs
 
 These apply if you ran Osprey before 0.9 or from an early checkout.

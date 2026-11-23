@@ -17,13 +17,22 @@ cameras:
     onvif:
       host: 192.0.2.10
       port: 8000
+      user: frigate
+      password: ONVIF_PASSWORD
 ```
 
+New installs require both logins. The RTSP user is `osprey` and the passwords
+are the ones the setup wizard showed, or that Osprey logged on its first
+start, and that sit in `rtsp-password` and `onvif-password` in the state
+directory. The ONVIF user has to be `frigate` (or a name in
+`ptz.autotrack_users`) for autotracking to work; the
+[installation page](installation.md#onvif-authentication) shows how to rename
+the generated `osprey` user. An install that predates secure mode may still be
+anonymous, in which case drop the credentials. See [security](security.md).
+
 Osprey's three tracks are `video1` (2688×1512), `video2` (1280×720) and
-`video3` (640×360). Leave the RTSP credentials out if RTSP authentication is
-off. If ONVIF authentication is on, add `onvif.user` and `onvif.password` and
-keep `onvif.tls_insecure: false`; see
-[security](security.md#onvif-authentication).
+`video3` (640×360). Leave the credentials out only if the matching authentication is off. Keep
+`onvif.tls_insecure: false`; see [security](security.md#onvif-authentication).
 
 ### Detect and record on different tracks
 
@@ -120,6 +129,8 @@ cameras:
     onvif:
       host: 192.0.2.10
       port: 8000
+      user: frigate
+      password: ONVIF_PASSWORD
       autotracking:
         enabled: true
         track: [person]

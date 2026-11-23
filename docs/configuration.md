@@ -58,7 +58,7 @@ object:
 |---|---|---|
 | `mac` | none, required | 12 hexadecimal digits. Colons and dashes are accepted and stripped. Must be unique. |
 | `name` | the MAC | Display name, shown to ONVIF clients. |
-| `ip` | none | The camera's address. When set, Osprey accepts media and snapshot uploads only from it. It is never the camera's identity; the MAC is. |
+| `ip` | none | The camera's address. When set, Osprey accepts media and snapshot uploads only from it, and it is recommended. Without it, secure mode learns the address from the first camera to connect, and legacy mode accepts any host. It is never the camera's identity; the MAC is. |
 | `tracks` | none | An object that overrides `tracks` for this camera. |
 
 ### PTZ
@@ -157,6 +157,8 @@ ASCII characters each), `mac` (unicast, and different from every camera MAC),
 | `OSPREY_CERT_FILE` | Control-channel certificate (container). |
 | `OSPREY_SECRETS_FILE` | `KEY=value` secrets file. Default `osprey-secrets.env` next to the config. |
 | `OSPREY_SETUP` | `1` opens the setup wizard while the config has no `host`. Same as `--setup`. |
+| `OSPREY_SECURITY` | `secure` or `legacy`. Overrides the mode saved in `security-mode`. See [security](security.md#secure-mode-and-legacy-mode). |
+| `OSPREY_ONVIF_AUTH`, `OSPREY_RTSP_AUTH` | `disabled` keeps that service anonymous in secure mode. |
 | `OSPREY_ANNOUNCE` | `false` disables the WS-Discovery Hello (container). |
 | `OSPREY_EXTRA_ARGS` | Extra controller flags, split on whitespace (container). |
 | `OSPREY_PTZ_MAX_SPEED` | Overrides `ptz.max_speed`. |
