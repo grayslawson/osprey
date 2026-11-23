@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
 
 import adoption
 from unifiwire import envelope
-from unifiwire import flv
 import ptz
-from unifiwire import ws
-from model import AxisRange, Camera, Codec, Position, Preset, VideoTrack
+from model import AxisRange, Camera, Codec, Position, Preset
 
 # --------------------------------------------------------------------------- model
 

@@ -38,7 +38,6 @@ stream with, so each piece is deliberate:
 
 from __future__ import annotations
 
-import base64
 import logging
 import random
 import socket

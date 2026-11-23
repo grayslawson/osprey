@@ -18,7 +18,6 @@ import secrets
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any
 import config
 from frigate_config import validate_url
 
@@ -116,11 +115,11 @@ def _host(value: object, field: str, *, allow_wildcard: bool = False) -> str:
         # DNS names are accepted for advertised host, while bind addresses
         # should remain explicit to avoid surprising wildcard exposure.
         if field == "bind address":
-            raise SetupError("bind address must be an IP address")
+            raise SetupError("bind address must be an IP address") from None
         import re
 
         if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,253}[A-Za-z0-9])?", value):
-            raise SetupError(f"{field} must be an IP address or DNS hostname")
+            raise SetupError(f"{field} must be an IP address or DNS hostname") from None
         return value
 
 

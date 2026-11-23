@@ -578,7 +578,7 @@ class Controller:
             return
         try:
             chunk = sock.recv(READ_SIZE)
-        except (TimeoutError,):
+        except TimeoutError:
             return
         except (OSError, ssl.SSLError):
             chunk = b""
