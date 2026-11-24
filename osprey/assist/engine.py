@@ -21,6 +21,7 @@ from .decide import Decider, DiagnoseContext, JudgeContext
 from .detect import Baselines, Detector
 from .levers import GUARDS, TARGET, Lever, build_levers, candidates, next_value, ranges
 from .store import Store
+from .survey_run import SurveyService
 from .types import Action, Diagnosis, Finding, Metrics, Verdict
 
 log = logging.getLogger("osprey.assist")
@@ -55,6 +56,7 @@ class _Cam:
     last_check: float = 0.0
     last_arrival_check: dict[str, float] = field(default_factory=dict)
     reason: str = ""
+    survey: bool = False   # a survey owns the camera: quality checks wait
 
 
 class Engine:
@@ -70,6 +72,7 @@ class Engine:
         self._thread: threading.Thread | None = None
         self._last_cleanup = 0.0
         self.version = ""
+        self.survey = SurveyService(self)
 
     # ------------------------------------------------------------ settings
     @property
@@ -93,6 +96,7 @@ class Engine:
 
     def _kill(self) -> None:
         """Stop acting: release the patrol and put profile-driven settings back to their home values."""
+        self.survey.cancel()
         for cs in self.cams.values():
             with cs.lock:
                 try:
@@ -115,6 +119,7 @@ class Engine:
 
     def _run(self) -> None:
         self.reconcile()
+        self.survey.reconcile()
         while not self._stop.wait(POLL_SEC):
             for cs in self.cams.values():
                 try:
@@ -128,6 +133,7 @@ class Engine:
     def housekeeping(self) -> None:
         now = self.clock()
         self.expire_pending()
+        self.survey.housekeeping()
         if now - self._last_cleanup > 3600:
             self._last_cleanup = now
             s = self.cfg.storage
@@ -148,10 +154,15 @@ class Engine:
     # ---------------------------------------------------------------- tick
     def tick(self, cam_id: str) -> None:
         cs = self.cams[cam_id]
-        if not self.enabled or self.mode() == "off":
+        if not self.enabled or cs.survey or self.survey.busy:
             return
         with cs.lock:
             state = cs.camera.state()
+            here = (state.get("ptz") or {}).get("position")
+            if here:  # where the camera is, so a Frigate event can be placed on the survey map later
+                self.survey.db.log_position(cam_id, float(here["pan"]), float(here["tilt"]), float(here["zoom"]))
+            if self.mode() == "off":
+                return
             signals = state.get("assist_signals") or {}
             ptz = state.get("ptz") or {}
             now = self.clock()
@@ -198,7 +209,7 @@ class Engine:
         return "(free)"
 
     # ---------------------------------------------------------------- gate
-    def _gate(self, cs: _Cam, state: dict[str, Any], *, moves: bool = False) -> str | None:
+    def _gate(self, cs: _Cam, state: dict[str, Any], *, moves: bool = False, quiet: bool = True) -> str | None:
         """Why Assist must stand down right now, or None. Frigate and people always win."""
         sig = state.get("assist_signals") or {}
         age = sig.get("auto_active_age_sec")
@@ -211,7 +222,7 @@ class Engine:
             return f"the camera is in use ({owner})"
         if (state.get("ptz") or {}).get("status") not in ("IDLE", None) and moves:
             return "the camera is moving"
-        if moves and self._quiet():
+        if moves and quiet and self._quiet():
             return "quiet hours"
         return None
 
@@ -282,6 +293,8 @@ class Engine:
         mode = self.mode()
         if mode == "off":
             raise Refused("quality checks are off")
+        if self.survey.busy:
+            raise Refused("not now: a survey is running")
         with cs.lock:
             state = cs.camera.state()
             reason = self._gate(cs, state)
@@ -854,7 +867,7 @@ class Engine:
         return {
             "enabled": self.enabled, "version": self.version, "paused": not self.enabled, "cameras": cams,
             "capabilities": {c: {"mode": self.mode(c)} for c in self.cfg.modes},
-            "implemented": ["quality"], "pending": self.store.count_decisions("pending"),
+            "implemented": ["quality", "survey"], "survey": self.survey.status(first) if first else {}, "pending": self.store.count_decisions("pending"),
             "budgets": self.budgets(first) if first else {},
             "models": {"calls_today": self.store.calls_today(), "left": self._model_left()},
             "structural_in_auto": self.cfg.guardrails.structural_in_auto,
@@ -888,6 +901,7 @@ class Engine:
 
     def purge(self) -> None:
         self.store.purge()
+        self.survey.purge()
 
 
 def _metrics_from(raw: dict[str, Any]) -> Metrics:

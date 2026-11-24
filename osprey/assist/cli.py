@@ -9,6 +9,10 @@ import signal
 import sys
 import tempfile
 import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +53,9 @@ def build(cfg: config_mod.AssistConfig, *, adapter: MqttAdapter | None = None) -
         def check_now() -> None:
             engine.check(next(iter(engine.cams)), "manual")
 
+        def start_survey() -> None:
+            engine.survey.start(next(iter(engine.cams)), "manual")
+
         mqtt_adapter = adapter
         if mqtt_adapter is None and cfg.notify.mqtt:
             try:
@@ -56,7 +63,8 @@ def build(cfg: config_mod.AssistConfig, *, adapter: MqttAdapter | None = None) -
             except RuntimeError as exc:
                 log.warning("MQTT is off: %s", exc)
         notifier = Notifier(cfg.notify, mqtt_adapter,
-                            Callbacks(decide, engine.set_enabled, engine.set_mode, check_now, newest), store.frame)
+                            Callbacks(decide, engine.set_enabled, engine.set_mode, check_now, newest, start_survey,
+                                      engine.survey.cancel), store.frame)
         engine.notifier = notifier
     server = AssistServer((cfg.listen.bind, cfg.listen.port), engine, cfg.osprey.token_file)
     return engine, server, notifier
@@ -89,6 +97,16 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--model")
     rp.add_argument("--send-frames", action="store_true")
     rp.add_argument("--out")
+    sv = sub.add_parser("survey", help="sweep the camera's whole range and map what it sees")
+    sv.add_argument("--camera", help="camera id (default: the first one Assist watches)")
+    what = sv.add_mutually_exclusive_group()
+    what.add_argument("--plan", action="store_true", help="print the grid and the time it should take, and move nothing")
+    what.add_argument("--status", action="store_true", help="show the current or last survey")
+    what.add_argument("--cancel", action="store_true", help="stop a running survey")
+    what.add_argument("--resume", action="store_true", help="carry on an interrupted survey")
+    what.add_argument("--apply", action="store_true", help="apply every waiting proposal")
+    what.add_argument("--revert", action="store_true", help="undo the last apply")
+    sv.add_argument("--wait", action="store_true", help="follow the survey until it ends")
     pg = sub.add_parser("purge", help="forget every frame and everything learned")
     pg.add_argument("--yes", action="store_true", help="really do it")
     args = parser.parse_args(argv)
@@ -98,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"osprey assist: {exc}", file=sys.stderr)
         return 2
+    if args.command == "survey":
+        return _survey(cfg, args)
     if args.command == "purge":
         if not args.yes:
             print("This deletes every stored frame and all learned baselines. Run again with --yes.", file=sys.stderr)
@@ -125,6 +145,85 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.out).write_text(json.dumps(result, indent=1), encoding="utf-8")
         return 0
     return _run(cfg)
+
+
+def _api(cfg: config_mod.AssistConfig, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call the running Assist on its own address with the shared token."""
+    token = Path(cfg.osprey.token_file).read_text(encoding="utf-8").strip()
+    request = urllib.request.Request(
+        f"http://{cfg.listen.bind}:{cfg.listen.port}{path}", method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "X-Osprey-Principal": "cli"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as reply:  # noqa: S310 - the operator's own address
+            return dict(json.loads(reply.read()))
+    except urllib.error.HTTPError as exc:
+        try:
+            message = json.loads(exc.read())["error"]["message"]
+        except (ValueError, KeyError, TypeError):
+            message = exc.reason
+        raise RuntimeError(str(message)) from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError(f"Assist is not answering on {cfg.listen.bind}:{cfg.listen.port} ({type(exc).__name__}). "
+                           "Is `osprey assist run` going?") from None
+
+
+def _line(status: dict[str, Any]) -> str:
+    run = status.get("run") or {}
+    if not run:
+        return "No survey has run yet."
+    done = f"{run.get('done', 0)} of {run.get('total', 0)}"
+    why = f" ({run['reason']})" if run.get("reason") else ""
+    return f"Survey {run['id']}, {run['kind']}: {run['status']}, {run.get('phase', '')}, {done}{why}"
+
+
+def _survey(cfg: config_mod.AssistConfig, args: argparse.Namespace) -> int:
+    camera = args.camera or cfg.osprey.cameras[0]
+    q = f"?camera={urllib.parse.quote(camera)}"
+    try:
+        if args.plan:
+            from . import survey_plan as sp
+            client = OspreyClient(cfg.osprey.url, cfg.osprey.token_file, camera)
+            geo = sp.Geometry.from_state((client.state().get("ptz") or {}).get("fov"))
+            if geo is None and cfg.survey.fov:
+                geo = sp.Geometry.from_config(cfg.survey.fov)
+            if geo is None:
+                print("This camera has no field-of-view calibration. Add survey.fov to osprey-assist.json.", file=sys.stderr)
+                return 2
+            cells = sp.plan(geo, cfg.survey.overlap, cfg.survey.wide_zoom)
+            cols, rows = sp.grid_size(geo, cfg.survey.overlap, cfg.survey.wide_zoom)
+            est = sp.estimate_sec(geo, cells, cfg.survey.max_zoom_ins,
+                                  sp.Timing(settle_sec=cfg.survey.settle_sec, zoom_settle_sec=cfg.survey.zoom_settle_sec))
+            print(f"{cols} columns by {rows} rows, {len(cells)} pictures, up to {cfg.survey.max_zoom_ins} closer looks.")
+            print(f"About {est['total_sec'] / 60:.1f} minutes of camera time ({est['sweep_sec']:.0f} s sweep, "
+                  f"{est['zoom_sec']:.0f} s zoom-ins). An estimate from the geometry, not a measurement.")
+            return 0
+        if args.cancel:
+            _api(cfg, "POST", "/survey/cancel", {"camera": camera})
+            print("Asked the survey to stop.")
+            return 0
+        if args.apply or args.revert:
+            out = _api(cfg, "POST", "/survey/revert" if args.revert else "/survey/apply", {"camera": camera})
+            print(json.dumps(out, indent=1))
+            return 0
+        if args.resume:
+            _api(cfg, "POST", "/survey/resume", {"camera": camera})
+        elif not args.status:
+            _api(cfg, "POST", "/survey/start", {"camera": camera})
+            print("Survey started.")
+        status = _api(cfg, "GET", "/survey/status" + q)
+        print(_line(status))
+        while args.wait and status.get("busy"):
+            time.sleep(3)
+            status = _api(cfg, "GET", "/survey/status" + q)
+            print(_line(status), flush=True)
+        run = status.get("run") or {}
+        if args.wait and run.get("status") in ("ready", "partial"):
+            print(f"Done. {status.get('pending', 0)} proposal(s) wait in the console's Survey tab.")
+        return 0 if not args.wait or run.get("status") in ("ready", "partial") else 1
+    except (RuntimeError, OSError, ValueError) as exc:
+        print(f"osprey assist: {exc}", file=sys.stderr)
+        return 2
 
 
 def _run(cfg: config_mod.AssistConfig) -> int:

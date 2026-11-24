@@ -15,9 +15,10 @@ from .providers import ProviderConfig, parse_provider
 from .types import MODES, PROBLEMS
 
 DEFAULT_PATH: Final = "/var/lib/osprey-assist/osprey-assist.json"
-TASKS: Final = ("quality.diagnose", "quality.judge")
-CAPABILITIES: Final = ("quality", "patrol", "followup", "presets")
-IMPLEMENTED: Final = ("quality",)
+TASKS: Final = ("quality.diagnose", "quality.judge", "survey.label", "survey.interest", "survey.change")
+SURVEY_TASKS: Final = ("survey.label", "survey.interest", "survey.change")
+CAPABILITIES: Final = ("quality", "patrol", "followup", "presets", "survey")
+IMPLEMENTED: Final = ("quality", "survey")
 
 
 def _only(raw: Any, allowed: set[str], where: str) -> dict[str, Any]:
@@ -109,6 +110,53 @@ class Guardrails:
 
 
 @dataclass(frozen=True)
+class Frigate:
+    url: str
+    camera: str | None = None
+    api_key_file: str | None = None
+    lookback_days: float = 14
+    refresh_min: float = 60
+    half_life_days: float = 14
+
+
+@dataclass(frozen=True)
+class Schedule:
+    day: str | None = "11:00"
+    night: str | None = "02:00"
+    every_days: float = 7
+
+
+@dataclass(frozen=True)
+class Survey:
+    overlap: float = 0.25
+    wide_zoom: float = 0.0
+    tiles: tuple[int, int] = (4, 3)
+    max_zoom_ins: int = 8
+    zoom_in_max: float = 0.7
+    settle_sec: float = 2.0
+    zoom_settle_sec: float = 4.0
+    speed: float = 1.0
+    max_moves: int = 120
+    max_minutes: float = 25
+    resume_wait_sec: float = 600
+    max_runs_per_day: int = 3
+    model_concurrency: int = 4
+    max_presets: int = 10
+    min_interest: float = 0.35
+    dwell: dict[str, float] = field(default_factory=lambda: {"base_sec": 20.0, "min_sec": 8.0, "max_sec": 60.0})
+    patrol_policy: str = "merge"
+    enable_patrol: bool = True
+    keep_maps: int = 4
+    frames_days: float = 7
+    verify_min_ncc: float = 0.35
+    projection: str = "rectilinear"
+    panorama_ppd: float = 8
+    fov: dict[str, Any] | None = None
+    schedule: Schedule | None = field(default_factory=Schedule)
+    frigate: Frigate | None = None
+
+
+@dataclass(frozen=True)
 class Privacy:
     redact_names: bool = False
     debug_prompts: bool = False
@@ -124,10 +172,11 @@ class AssistConfig:
     tasks: dict[str, TaskConfig] = field(default_factory=lambda: {name: TaskConfig() for name in TASKS})
     quality: Quality = field(default_factory=Quality)
     modes: dict[str, str] = field(default_factory=lambda: {"quality": "suggest", "patrol": "off",
-                                                          "followup": "off", "presets": "off"})
+                                                          "followup": "off", "presets": "off", "survey": "suggest"})
     guardrails: Guardrails = field(default_factory=Guardrails)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     privacy: Privacy = field(default_factory=Privacy)
+    survey: Survey = field(default_factory=Survey)
 
     @property
     def state_dir(self) -> Path:
@@ -158,9 +207,85 @@ def _hhmm(items: Any, where: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _hhmm1(value: Any, where: str) -> str | None:
+    if value is None:
+        return None
+    if not (isinstance(value, str) and len(value) == 5 and value[2] == ":" and value[:2].isdigit()
+            and value[3:].isdigit() and int(value[:2]) < 24 and int(value[3:]) < 60):
+        raise ValueError(f'"{where}" must look like "11:00"')
+    return value
+
+
+def parse_survey(raw: Any) -> Survey:
+    keys = {"overlap", "wide_zoom", "tiles", "max_zoom_ins", "zoom_in_max", "settle_sec", "zoom_settle_sec", "speed",
+            "max_moves", "max_minutes", "resume_wait_sec", "max_runs_per_day", "model_concurrency", "max_presets",
+            "min_interest", "dwell", "patrol_policy", "enable_patrol", "keep_maps", "frames_days", "verify_min_ncc",
+            "projection", "panorama_ppd", "fov", "schedule", "frigate"}
+    r = _only(raw, keys, "survey")
+    w = "survey"
+    tiles = r.get("tiles", [4, 3])
+    if (not isinstance(tiles, list) or len(tiles) != 2 or not all(isinstance(t, int) and not isinstance(t, bool)
+                                                                   and 1 <= t <= 8 for t in tiles)):
+        raise ValueError('"survey.tiles" must be [across, down], each 1 to 8')
+    dwell = dict(Survey().dwell)
+    given = r.get("dwell", {})
+    if not isinstance(given, dict) or set(given) - set(dwell):
+        raise ValueError('"survey.dwell" may hold base_sec, min_sec and max_sec')
+    for k in given:
+        dwell[k] = _num(given, k, dwell[k], 1, 600, "survey.dwell")
+    if not dwell["min_sec"] <= dwell["base_sec"] <= dwell["max_sec"]:
+        raise ValueError('"survey.dwell" needs min_sec <= base_sec <= max_sec')
+    policy = r.get("patrol_policy", "merge")
+    if policy not in ("merge", "replace"):
+        raise ValueError('"survey.patrol_policy" must be merge or replace')
+    projection = r.get("projection", "rectilinear")
+    if projection not in ("rectilinear", "linear"):
+        raise ValueError('"survey.projection" must be rectilinear or linear')
+    fov = r.get("fov")
+    if fov is not None:
+        from .survey_plan import Geometry
+        try:
+            Geometry.from_config(fov)
+        except (KeyError, TypeError, ValueError, IndexError):
+            raise ValueError('"survey.fov" needs pan_degrees, tilt_degrees, wide [h, v] and tele [h, v], all positive') from None
+    sched: Schedule | None = Schedule()
+    if "schedule" in r:
+        sraw = r["schedule"]
+        if sraw is None:
+            sched = None
+        else:
+            s = _only(sraw, {"day", "night", "every_days"}, "survey.schedule")
+            sched = Schedule(_hhmm1(s.get("day"), "survey.schedule.day") if "day" in s else None,
+                             _hhmm1(s.get("night"), "survey.schedule.night") if "night" in s else None,
+                             _num(s, "every_days", 7, 1, 365, "survey.schedule"))
+    frigate: Frigate | None = None
+    if r.get("frigate") is not None:
+        f = _only(r["frigate"], {"url", "camera", "api_key_file", "lookback_days", "refresh_min", "half_life_days"},
+                  "survey.frigate")
+        url = _text(f, "url", None, "survey.frigate")
+        if not url or not url.startswith(("http://", "https://")):
+            raise ValueError('"survey.frigate.url" must be an http or https URL')
+        frigate = Frigate(url.rstrip("/"), _text(f, "camera", None, "survey.frigate"),
+                          _text(f, "api_key_file", None, "survey.frigate"),
+                          _num(f, "lookback_days", 14, 1, 365, "survey.frigate"),
+                          _num(f, "refresh_min", 60, 5, 1440, "survey.frigate"),
+                          _num(f, "half_life_days", 14, 1, 365, "survey.frigate"))
+    return Survey(
+        _num(r, "overlap", 0.25, 0.15, 0.6, w), _num(r, "wide_zoom", 0.0, 0, 1, w), (tiles[0], tiles[1]),
+        int(_num(r, "max_zoom_ins", 8, 0, 40, w)), _num(r, "zoom_in_max", 0.7, 0, 1, w),
+        _num(r, "settle_sec", 2.0, 0, 60, w), _num(r, "zoom_settle_sec", 4.0, 0, 60, w), _num(r, "speed", 1.0, 0.05, 1, w),
+        int(_num(r, "max_moves", 120, 1, 2000, w)), _num(r, "max_minutes", 25, 1, 240, w),
+        _num(r, "resume_wait_sec", 600, 0, 86400, w), int(_num(r, "max_runs_per_day", 3, 1, 48, w)),
+        int(_num(r, "model_concurrency", 4, 1, 32, w)), int(_num(r, "max_presets", 10, 1, 40, w)),
+        _num(r, "min_interest", 0.35, 0, 1, w), dwell, str(policy), _flag(r, "enable_patrol", True, w),
+        int(_num(r, "keep_maps", 4, 1, 50, w)), _num(r, "frames_days", 7, 0.1, 365, w),
+        _num(r, "verify_min_ncc", 0.35, -1, 1, w), str(projection), _num(r, "panorama_ppd", 8, 2, 16, w),
+        fov, sched, frigate)
+
+
 def parse(raw: Any) -> AssistConfig:
     top = _only(raw, {"enabled", "osprey", "listen", "storage", "providers", "tasks", "capabilities",
-                      "guardrails", "notify", "privacy"}, "config")
+                      "guardrails", "notify", "privacy", "survey"}, "config")
     enabled = _flag(top, "enabled", False, "config")
     o = _only(top.get("osprey"), {"url", "token_file", "cameras"}, "osprey")
     url = _text(o, "url", OspreyLink.url, "osprey") or OspreyLink.url
@@ -208,7 +333,7 @@ def parse(raw: Any) -> AssistConfig:
     unknown = set(caps) - set(CAPABILITIES)
     if unknown:
         raise ValueError(f'unknown capability: {", ".join(sorted(unknown))}')
-    modes = {"quality": "suggest", "patrol": "off", "followup": "off", "presets": "off"}
+    modes = {"quality": "suggest", "patrol": "off", "followup": "off", "presets": "off", "survey": "suggest"}
     for cap, body in caps.items():
         if cap == "quality":
             modes[cap] = _mode(body.get("mode", "suggest") if isinstance(body, dict) else None, "capabilities.quality.mode")
@@ -257,8 +382,12 @@ def parse(raw: Any) -> AssistConfig:
     )
     pv = _only(top.get("privacy"), {"redact_names", "debug_prompts"}, "privacy")
     privacy = Privacy(_flag(pv, "redact_names", False, "privacy"), _flag(pv, "debug_prompts", False, "privacy"))
+    for name in SURVEY_TASKS:
+        task = tasks[name]
+        if task.mode != "rules" and not task.send_frames:
+            raise ValueError(f'task "{name}" needs "send_frames": true: a model cannot judge a picture it is not sent')
     return AssistConfig(enabled, link, listen, storage, providers, tasks, quality, modes, guardrails,
-                        parse_notify(top.get("notify")), privacy)
+                        parse_notify(top.get("notify")), privacy, parse_survey(top.get("survey")))
 
 
 def load(path: str | os.PathLike[str] | None = None) -> AssistConfig:

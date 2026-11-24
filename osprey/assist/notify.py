@@ -222,6 +222,8 @@ class Callbacks:
     set_mode: Callable[[str, str], None]
     check_now: Callable[[], None]
     newest_pending: Callable[[], dict[str, Any] | None]
+    start_survey: Callable[[], None] | None = None
+    cancel_survey: Callable[[], None] | None = None
 
 
 # post(url, body, headers, method) -> None; raises on failure.
@@ -249,7 +251,7 @@ class Notifier:
         self._lock = threading.Lock()
         self._retained: dict[str, bytes] = {}
         self._ident = f"osprey_{cfg.device}_assist"
-        self._selects: list[tuple[str, str]] = [("quality", "Quality mode")]  # (capability, name)
+        self._selects: list[tuple[str, str]] = [("quality", "Quality mode"), ("survey", "Survey mode")]  # (capability, name)
         self._active = False
 
     # -- lifecycle
@@ -338,6 +340,13 @@ class Notifier:
             self._entity("sensor", "model_calls", "Model calls today", state_topic=f"{p}/state/model_calls",
                          state_class="total_increasing"),
             self._entity("sensor", "budget_left", "Budget left", state_topic=f"{p}/state/budget_left"),
+            self._entity("button", "survey_start", "Start survey", command_topic=f"{p}/command/survey_start"),
+            self._entity("button", "survey_cancel", "Cancel survey", command_topic=f"{p}/command/survey_cancel"),
+            self._entity("sensor", "survey_status", "Survey status", state_topic=f"{p}/state/survey",
+                         json_attributes_topic=f"{p}/state/survey_attrs"),
+            self._entity("sensor", "survey_progress", "Survey progress", state_topic=f"{p}/state/survey_progress",
+                         unit_of_measurement="%"),
+            self._entity("sensor", "survey_pending", "Survey proposals", state_topic=f"{p}/state/survey_pending"),
         ]
         for cap, name in self._selects:
             out.append(self._entity("select", f"{cap}_mode", name, state_topic=f"{p}/state/mode/{cap}",
@@ -353,7 +362,7 @@ class Notifier:
     # -- commands
     def _subscribe_all(self) -> None:
         assert self.adapter is not None
-        topics = ["decision", "enabled", "approve_newest", "reject_newest", "check"]
+        topics = ["decision", "enabled", "approve_newest", "reject_newest", "check", "survey_start", "survey_cancel"]
         topics += [f"mode/{cap}" for cap, _ in self._selects]
         for t in topics:
             self.adapter.subscribe(f"{self.p}/command/{t}", self._on_message)
@@ -392,6 +401,11 @@ class Notifier:
             cb.set_enabled(text.upper() == "ON")
         elif action == "check":
             cb.check_now()
+        elif action in ("survey_start", "survey_cancel"):
+            fn = cb.start_survey if action == "survey_start" else cb.cancel_survey
+            if fn is None:
+                raise ValueError("survey is not available")
+            fn()
         elif action.startswith("mode/"):
             cap = action[5:]
             if text not in MODES:
@@ -410,6 +424,14 @@ class Notifier:
         models = status.get("models") or {}
         self._pub(f"{p}/state/model_calls", str(models.get("calls_today", 0)), retain=True)
         self._pub(f"{p}/state/budget_left", str(models.get("left", "")), retain=True)
+        sv = status.get("survey") or {}
+        run = sv.get("run") or {}
+        text = "first_run" if sv.get("first_run") else str(run.get("status", "idle")) if run else "idle"
+        total = int(run.get("total") or 0)
+        self._pub(f"{p}/state/survey", text, retain=True)
+        self._pub(f"{p}/state/survey_attrs", {k: run.get(k) for k in ("kind", "phase", "reason", "done", "total")}, retain=True)
+        self._pub(f"{p}/state/survey_progress", str(round(100 * int(run.get("done") or 0) / total) if total else 0), retain=True)
+        self._pub(f"{p}/state/survey_pending", str(sv.get("pending", 0)), retain=True)
 
     def publish_pending(self, count: int, newest: dict[str, Any] | None) -> None:
         self._pub(f"{self.p}/state/pending", str(count), retain=True)

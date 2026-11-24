@@ -6,10 +6,11 @@ it skips the cookie and CSRF checks, tags its moves ``ASSIST`` and may reach
 only the routes listed here. The core enforces this; Assist's own validator is
 the second line.
 
-Two scopes exist. ``quality`` covers reading, moving, going to presets, ISP and
+Three scopes exist. ``quality`` covers reading, moving, going to presets, ISP and
 the patrol hold. ``presets`` adds writing presets and a patrol's night view, the
-structural changes. ``OSPREY_ASSIST_SCOPES`` (comma separated) picks them; both
-are on by default.
+structural changes. ``patrol`` adds rewriting the patrol's points and deleting a
+preset, which Survey needs. ``OSPREY_ASSIST_SCOPES`` (comma separated) picks them;
+all are on by default.
 
 Pure and standard library only, so tests need no server.
 """
@@ -26,7 +27,8 @@ from typing import Final
 
 SCOPE_QUALITY: Final = "quality"
 SCOPE_PRESETS: Final = "presets"
-SCOPES: Final = (SCOPE_QUALITY, SCOPE_PRESETS)
+SCOPE_PATROL: Final = "patrol"
+SCOPES: Final = (SCOPE_QUALITY, SCOPE_PRESETS, SCOPE_PATROL)
 
 # The camera accepts these keys and ignores them. Nothing may send them, whatever the model says.
 ISP_DENY: Final = frozenset({"focusPosition", "irLedLevel", "irLedMode", "wdr"})
@@ -60,6 +62,7 @@ _ROUTES: Final[tuple[tuple[str, re.Pattern[str], str], ...]] = tuple(
         ("POST", _CAMERA + r"/presets", SCOPE_PRESETS),
         ("PUT", _CAMERA + r"/presets/\d{1,6}", SCOPE_PRESETS),
         ("POST", _CAMERA + r"/sentry", SCOPE_PRESETS),
+        ("DELETE", _CAMERA + r"/presets/\d{1,6}", SCOPE_PATROL),
     )
 )
 # Routes that move the head or write a preset, so they take the movement lease.
@@ -70,11 +73,14 @@ _MOVES: Final = re.compile(_CAMERA + r"/(ptz/move|ptz/center|presets|presets/\d{
 PROXY_ROUTES: Final[tuple[tuple[str, re.Pattern[str]], ...]] = tuple(
     (method, re.compile(pattern)) for method, pattern in (
         ("GET", r"/(status|settings|decisions|decisions/\d{1,12}|frames/[A-Za-z0-9_.-]{1,80}\.jpg)"),
+        ("GET", r"/survey/(status|maps|map|proposals|frigate\.json|(panorama\.jpg|overlay\.png|preview\.jpg)"
+                r"|proposals/\d{1,12}/preview\.jpg)"),
         ("POST", r"/(settings|check|decisions/\d{1,12}/(approve|reject|snooze|undo))"),
+        ("POST", r"/survey/(start|cancel|resume|apply|revert|proposals/\d{1,12}/(accept|reject|goto))"),
         ("DELETE", r"/data"),
     )
 )
-PROXY_QUERY: Final = frozenset({"status", "limit", "before", "camera", "capability"})
+PROXY_QUERY: Final = frozenset({"status", "limit", "before", "camera", "capability", "kind", "pan", "tilt", "zoom", "map"})
 PROXY_MAX_BYTES: Final = 8 * 1024 * 1024
 PROXY_TIMEOUT_SEC: Final = 15.0
 

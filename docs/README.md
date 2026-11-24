@@ -28,6 +28,7 @@
 - [Protect guard](protect-guard.md): keep Protect from adopting the camera.
 - [MQTT](mqtt.md): commands and state topics.
 - [Assist](assist.md): the optional image-quality helper and the doors it uses.
+- [Survey](survey.md): one button that maps what the camera sees and proposes presets and a patrol.
 
 ## Operate
 

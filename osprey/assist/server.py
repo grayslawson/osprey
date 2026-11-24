@@ -18,6 +18,7 @@ from typing import Any, Final
 from urllib.parse import parse_qs, urlsplit
 
 from .engine import Engine, Refused
+from .survey_run import Refused as SurveyRefused
 from .types import MODES
 
 log = logging.getLogger("osprey.assist.http")
@@ -25,6 +26,7 @@ MAX_BODY: Final = 4096
 _DECISION = re.compile(r"/decisions/(\d{1,12})(?:/(approve|reject|snooze|undo))?")
 _FRAME = re.compile(r"/frames/([0-9]{8}f?_[0-9a-f]{8})\.jpg")
 _REASONS: Final = ("not_a_problem", "wrong_fix", "looks_worse", "dont_touch")
+_PROPOSAL = re.compile(r"/survey/proposals/(\d{1,12})(?:/(accept|reject|goto|preview\.jpg))?")
 
 
 class AssistServer(ThreadingHTTPServer):
@@ -98,7 +100,9 @@ class _Handler(BaseHTTPRequestHandler):
         engine = self.server.engine
         path = url.path
         try:
-            if method == "GET" and path in ("/status", "/settings"):
+            if path.startswith("/survey/"):
+                self._survey(engine, method, path, query, principal)
+            elif method == "GET" and path in ("/status", "/settings"):
                 self._json(200, engine.status())
             elif method == "GET" and path == "/decisions":
                 self._list(engine, query)
@@ -124,11 +128,101 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True})
             else:
                 self._error(404, "not_found", "no such Assist resource")
-        except Refused as exc:
+        except (Refused, SurveyRefused) as exc:
             self._error(409, "refused", str(exc))
         except Exception:  # noqa: BLE001 - never leak internals to the caller
             log.exception("assist request failed")
             self._error(500, "internal", "Assist could not do that")
+
+    def _camera(self, engine: Engine, query: dict[str, str], data: dict[str, Any] | None = None) -> str:
+        camera = str((data or {}).get("camera") or query.get("camera") or next(iter(engine.cams)))
+        if camera not in engine.cams:
+            raise Refused("unknown camera")
+        return camera
+
+    def _survey(self, engine: Engine, method: str, path: str, query: dict[str, str], principal: str) -> None:
+        svc = engine.survey
+        db = svc.db
+        if method == "GET":
+            camera = self._camera(engine, query)
+            if path == "/survey/status":
+                self._json(200, svc.status(camera))
+                return
+            if path == "/survey/maps":
+                self._json(200, {"maps": [{k: m[k] for k in ("id", "run", "kind", "ts", "coverage", "seams")}
+                                          for m in db.maps(camera)]})
+                return
+            if path == "/survey/proposals":
+                st = query.get("status")
+                rows = db.proposals(camera=camera, statuses=tuple(st.split(",")) if st and st != "all" else None)
+                self._json(200, {"proposals": rows})
+                return
+            if (m := _PROPOSAL.fullmatch(path)) and m.group(2) == "preview.jpg":
+                row = db.proposal(int(m.group(1)))
+                smap = db.map(row["map"]) if row else None
+                img = svc.preview(smap, row["pan"], row["tilt"], row["zoom"]) if smap and row and "pan" in row else None
+                self._send(200, img, "image/jpeg") if img else self._error(404, "not_found", "no preview")
+                return
+            if (m := _PROPOSAL.fullmatch(path)) and not m.group(2):
+                row = db.proposal(int(m.group(1)))
+                self._json(200, row) if row else self._error(404, "not_found", "no such proposal")
+                return
+            kind = query.get("kind", "day")
+            if kind not in ("day", "night"):
+                raise Refused("kind must be day or night")
+            smap = db.latest_map(camera, kind)
+            if smap is None:
+                self._error(404, "not_found", f"no {kind} map yet")
+                return
+            if path == "/survey/map":
+                self._json(200, {**smap, "proposals": db.proposals(map_id=smap["id"])})
+            elif path == "/survey/panorama.jpg":
+                self._send(200, db.read_file(smap["run"], "panorama.jpg") or b"", "image/jpeg")
+            elif path == "/survey/overlay.png":
+                self._send(200, db.read_file(smap["run"], "overlay.png") or b"", "image/png")
+            elif path == "/survey/frigate.json":
+                self._send(200, db.read_file(smap["run"], "frigate-suggestions.json") or b"{}")
+            elif path == "/survey/preview.jpg":
+                try:
+                    pan, tilt, zoom = (float(query.get(k, "0")) for k in ("pan", "tilt", "zoom"))
+                except ValueError:
+                    raise Refused("pan, tilt and zoom must be numbers") from None
+                img = svc.preview(smap, max(-1.0, min(1.0, pan)), max(-1.0, min(1.0, tilt)), zoom)
+                self._send(200, img, "image/jpeg") if img else self._error(404, "not_found", "no panorama")
+            else:
+                self._error(404, "not_found", "no such Survey resource")
+            return
+        data = self._body()
+        camera = self._camera(engine, query, data)
+        if path == "/survey/start":
+            self._json(200, {"ok": True, "run": svc.start(camera, "manual")})
+        elif path == "/survey/cancel":
+            svc.cancel()
+            self._json(200, {"ok": True})
+        elif path == "/survey/resume":
+            self._json(200, {"ok": True, "run": svc.resume(camera)})
+        elif path == "/survey/apply":
+            ids = data.get("ids")
+            if ids is not None and not (isinstance(ids, list) and all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+                raise Refused("ids must be a list of proposal numbers")
+            if svc.mode() in ("off", "observe"):
+                raise Refused(f"survey is in {svc.mode()} mode; nothing is applied")
+            self._json(200, svc.apply(camera, ids if ids is not None else
+                                      [p["id"] for p in db.proposals(camera=camera, statuses=("pending",)) if p["type"] != "frigate"],
+                                      principal))
+        elif path == "/survey/revert":
+            self._json(200, svc.revert(camera, principal))
+        elif (m := _PROPOSAL.fullmatch(path)) and m.group(2) in ("accept", "reject", "goto"):
+            pid = int(m.group(1))
+            if m.group(2) == "accept":
+                self._json(200, svc.accept(pid, principal))
+            elif m.group(2) == "reject":
+                self._json(200, svc.reject(pid, principal))
+            else:
+                svc.goto(pid)
+                self._json(200, {"ok": True})
+        else:
+            self._error(404, "not_found", "no such Survey resource")
 
     def _list(self, engine: Engine, query: dict[str, str]) -> None:
         status = query.get("status", "all")
@@ -178,7 +272,7 @@ class _Handler(BaseHTTPRequestHandler):
             mode = body.get("mode") if isinstance(body, dict) else None
             if mode not in MODES:
                 raise Refused(f"mode must be one of {', '.join(MODES)}")
-            if name != "quality":
+            if name not in ("quality", "survey"):
                 raise Refused(f"{name} arrives in a later release")
         if "enabled" in data:
             if not isinstance(data["enabled"], bool):

@@ -76,8 +76,9 @@ def test_route_scopes() -> None:
     assert assist_scope.route_scope("POST", "/cameras/default/sentry") == "presets"
     for method, path in (("DELETE", "/cameras/default/sentry"), ("POST", "/cameras/default/ptz/recover"),
                          ("PUT", "/cameras/default/frigate"), ("GET", "/logs"), ("POST", "/session"),
-                         ("DELETE", "/cameras/default/presets/3"), ("POST", "/assist/check")):
+                         ("POST", "/assist/check")):
         assert assist_scope.route_scope(method, path) is None
+    assert assist_scope.route_scope("DELETE", "/cameras/default/presets/3") == "patrol"
     assert assist_scope.takes_lease("POST", "/cameras/default/ptz/move")
     assert not assist_scope.takes_lease("POST", "/cameras/default/isp")
 
@@ -92,7 +93,7 @@ def test_isp_allowlist_and_deny_list() -> None:
 
 
 def test_scopes_and_token_file(tmp_path: Path) -> None:
-    assert assist_scope.parse_scopes(None) == frozenset({"quality", "presets"})
+    assert assist_scope.parse_scopes(None) == frozenset({"quality", "presets", "patrol"})
     assert assist_scope.parse_scopes("quality") == frozenset({"quality"})
     with pytest.raises(ValueError):
         assist_scope.parse_scopes("admin")

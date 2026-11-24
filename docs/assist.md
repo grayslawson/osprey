@@ -7,8 +7,9 @@ optional, it is off until you switch it on, and it is a separate process, so the
 controller does not depend on it.
 
 It ships in the same image and wheel as Osprey. This release covers picture
-quality. Smart patrol, follow-up on small subjects and self-tuning presets come
-later, and their autonomy settings are accepted but do nothing yet.
+quality. [Survey](survey.md) maps the whole scene and proposes presets and a patrol.
+Smart patrol, follow-up on small subjects and self-tuning presets come later, and
+their autonomy settings are accepted but do nothing yet.
 
 ## What it does
 
@@ -146,8 +147,9 @@ Each task picks how it decides, in `tasks`:
 | `model` | The model decides. Rules still check its answer against the picture's numbers. |
 | `both` | Both run. If they name different problems, `on_disagree` says whether the rules win, the model wins, or nothing happens (`log`, the default). |
 
-The two tasks are `quality.diagnose` (what is wrong, and which fix) and
-`quality.judge` (is the after picture better). A model answer that fails
+The quality tasks are `quality.diagnose` (what is wrong, and which fix) and
+`quality.judge` (is the after picture better). Survey adds `survey.label`,
+`survey.interest` and `survey.change`; see [Survey](survey.md#model-tasks). A model answer that fails
 validation is logged and the rules decide, so a bad reply cannot change the
 camera.
 
@@ -254,6 +256,8 @@ Every key in `osprey-assist.json`; unknown keys are an error.
 | `capabilities.quality.periodic_min` | `10` | Minutes between checks while parked. |
 | `capabilities.quality.verify_after_sec` | `[60, 600]` | When to re-check an applied change. |
 | `capabilities.quality.min_gain`, `max_regress` | `0.10`, `0.10` | Better by this much to keep, worse by this much to revert. |
+| `capabilities.survey.mode` | `suggest` | The autonomy level for [Survey](survey.md). |
+| `survey.*` | see [Survey](survey.md#settings) | Grid, budgets, schedule and Frigate. |
 | `capabilities.patrol`, `followup`, `presets` | `off` | Accepted, not implemented yet. |
 | `guardrails.*` | see above | `moves_per_hour`, `isp_writes_per_hour`, `trials_per_hour`, `probe_sessions_per_night`, `max_probe_offsets`, `max_offset_frac`, `preset_changes_per_day`, `structural_in_auto`, `tracking_hold_sec`, `pending_expire_hours`, `quiet_hours`, `quiet_isp`. |
 | `providers`, `tasks` | none, rules | See Models. |
@@ -289,4 +293,5 @@ restart. Delete it and restart Osprey to rotate it. Set `assist.enabled` back to
 `false` (and unset `OSPREY_ASSIST_TOKEN_FILE`) to close the door. `scopes` in the
 `assist` block limits the token: `quality` covers reading, moving, going to
 presets, ISP and the patrol hold, and `presets` adds saving presets and setting a
-patrol point's night view. Both are on by default.
+patrol point's night view, and `patrol` adds rewriting the patrol's points and
+deleting a preset, which Survey needs. All three are on by default.

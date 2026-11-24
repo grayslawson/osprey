@@ -237,6 +237,25 @@ class Decider:
     def _frames(t: TaskConfig, p: ChatProvider | DecisionsProvider) -> bool:
         return p.cfg.allow_frames and t.send_frames
 
+    # ------------------------------------------------------------- generic
+    def available(self, name: str) -> bool:
+        """True when the task is set to use a model, and the provider may be sent frames if it needs them."""
+        tp = self._task(name)
+        return tp is not None and self._frames(*tp)
+
+    def calls_left(self, name: str) -> int:
+        tp = self._task(name)
+        return tp[1].budget.left if tp is not None else 0
+
+    def run(self, name: str, ask: Callable[[TaskConfig, ChatProvider | DecisionsProvider], ModelReply],
+            check: Callable[[TaskConfig, ChatProvider | DecisionsProvider, ModelReply], Any]) -> Any | None:
+        """One validated model call for a task of any capability. None when unavailable or on any failure."""
+        tp = self._task(name)
+        if tp is None or not self._frames(*tp):
+            return None
+        t, p = tp
+        return self._call(name, t, p, lambda: ask(t, p), lambda reply: check(t, p, reply))
+
     # ------------------------------------------------------------ diagnose
     def diagnose(self, ctx: DiagnoseContext, rules: Diagnosis | None, frame: bytes | None) -> Diagnosis:
         base = rules or Diagnosis("ok", 1.0, "rules")

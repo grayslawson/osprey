@@ -223,8 +223,8 @@ def validate_assist(value: Any) -> dict[str, Any]:
         raise ValueError('"assist.token_file" must be a path or null')
     scopes = out["scopes"]
     if (not isinstance(scopes, list) or not scopes
-            or any(item not in ("quality", "presets") for item in scopes)):
-        raise ValueError('"assist.scopes" must be a list of "quality" and "presets"')
+            or any(item not in ("quality", "presets", "patrol") for item in scopes)):
+        raise ValueError('"assist.scopes" must be a list of "quality", "presets" and "patrol"')
     return out
 
 
@@ -493,7 +493,7 @@ DEFAULTS: Final[dict[str, Any]] = {
         "enabled": False,
         "url": "http://127.0.0.1:8090",
         "token_file": None,
-        "scopes": ["quality", "presets"],
+        "scopes": ["quality", "presets", "patrol"],
     },
     # WS-Discovery: pin multicast to one LAN interface/address, repeat Hello
     # every hello_interval seconds (0 = only at startup), add scopes.
