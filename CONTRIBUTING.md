@@ -48,8 +48,9 @@ Security reports should follow [`SECURITY.md`](SECURITY.md), not a public issue.
 
 Releases are tag-driven. The tag must be `vMAJOR.MINOR.PATCH`, or a PEP 440
 pre-release such as `v0.9.0b1`, equal to the `VERSION` file, and point at a
-commit on `main`. Pre-release tags publish a GitHub pre-release, PyPI
-pre-release and image tags `0.9.0b1`/`v0.9.0b1`, without moving `latest`.
+commit on `main`. Pre-release tags publish a GitHub pre-release and image
+tags `0.9.0b1`/`v0.9.0b1` (plus a PyPI pre-release once PyPI publishing is on),
+without moving `latest`.
 
 1. Set `VERSION`, and the same version in
    `homeassistant/addon/osprey/config.yaml` (also its image tag),
@@ -68,11 +69,36 @@ pre-release and image tags `0.9.0b1`/`v0.9.0b1`, without moving `latest`.
 `.github/workflows/release.yml` then runs the tests, builds the sdist and
 wheel, builds and signs the multi-architecture image (keyless cosign, with SBOM
 and provenance), publishes `osprey-ptz` to PyPI and `@osprey-ptz/cli` to npm
-through trusted publishing, creates the GitHub release with package assets and
-the notes git-cliff generates for the tag (`CLIFF_NOTES=1 git-cliff --latest`,
+through trusted publishing when those are switched on (see below), creates
+the GitHub release with package assets and the notes git-cliff generates for the tag (`CLIFF_NOTES=1 git-cliff --latest`,
 the same text as the changelog section without its heading), and builds the
 Home Assistant app image. The Homebrew tap, the Chocolatey feed and the Home Assistant app repository pick up
 the release from there.
+
+### Switching on PyPI and npm publishing
+
+Neither registry is set up yet, so the `pypi` and `npm` release jobs are
+skipped unless a repository variable turns them on. With both off, a release
+still creates the GitHub Release, the images and the Home Assistant app.
+
+1. PyPI: add a trusted publisher for the project `osprey-ptz` with owner
+   `grayslawson`, repository `osprey`, workflow `release.yml` and environment
+   `pypi`. The `pypi` environment already exists on GitHub.
+2. npm: in the `@osprey-ptz/cli` package settings, add a trusted publisher
+   for `grayslawson/osprey` with workflow `release.yml`. If npm only offers
+   this for a package that already exists, publish the first version by hand.
+3. Turn the jobs on:
+
+   ```sh
+   gh variable set PUBLISH_PYPI --body true --repo grayslawson/osprey
+   gh variable set PUBLISH_NPM --body true --repo grayslawson/osprey
+   ```
+
+4. For a release that has already been tagged, publish it afterwards with
+   `gh workflow run release.yml --ref vX.Y.Z`.
+
+Delete a variable (`gh variable delete PUBLISH_NPM`), or set it to anything
+other than `true`, to turn that job off again.
 
 Verify an image signature with:
 
