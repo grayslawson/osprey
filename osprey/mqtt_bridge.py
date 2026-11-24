@@ -284,8 +284,8 @@ class MqttBridge:
                 for item in points:
                     if not isinstance(item, dict) or not isinstance(item.get("name"), str):
                         raise ValueError("each point needs a name")
-                    if set(item) - {"name", "dwell_sec"}:
-                        raise ValueError("each point takes only name and dwell_sec")
+                    if set(item) - {"name", "dwell_sec", "night_preset"}:
+                        raise ValueError("each point takes only name, dwell_sec and night_preset")
 
     def publish_state(self, state: dict[str, object]) -> None:
         """Publish the current PTZ state; a no-op unless MQTT is enabled."""

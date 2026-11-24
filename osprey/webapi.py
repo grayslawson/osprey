@@ -597,7 +597,7 @@ class WebApp:
         for index, item in enumerate(value):
             if not isinstance(item, dict):
                 raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", f"points[{index}] must be an object")
-            unknown = set(item) - {"name", "dwell_sec"}
+            unknown = set(item) - {"name", "dwell_sec", "night_preset"}
             if unknown:
                 raise ApiError(HTTPStatus.BAD_REQUEST, "invalid",
                                f"points[{index}] has unexpected field(s): {', '.join(sorted(unknown))}")
@@ -613,7 +613,13 @@ class WebApp:
                 if not 1 <= float(dwell) <= 86400:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "invalid",
                                    f"points[{index}].dwell_sec must be between 1 and 86400")
-            points.append({"name": name.strip(), "dwell_sec": None if dwell is None else float(dwell)})
+            night = item.get("night_preset")
+            if night is not None and (not isinstance(night, str) or not night.strip()
+                                      or len(night) > _PRESET_NAME_MAX):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid",
+                               f"points[{index}].night_preset must be 1-{_PRESET_NAME_MAX} characters")
+            points.append({"name": name.strip(), "dwell_sec": None if dwell is None else float(dwell),
+                           **({"night_preset": night.strip()} if night else {})})
         return points
 
     # ----------------------------------------------------------- cameras
