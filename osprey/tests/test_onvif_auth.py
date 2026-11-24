@@ -52,6 +52,17 @@ def test_username_token_accepts_fractional_timestamp() -> None:
     assert auth.valid(_request(created=time.strftime("%Y-%m-%dT%H:%M:%S.123Z", time.gmtime())))
 
 
+def test_username_token_accepts_zeep_offset_timestamp() -> None:
+    # zeep (onvif-zeep, used by Frigate) sends Created as 2026-11-24T20:12:44+00:00, not ...Z.
+    auth = onvif.OnvifAuth("frigate", "correct horse")
+    assert auth.valid(_request(created=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())))
+
+
+def test_username_token_rejects_timestamp_without_zone() -> None:
+    auth = onvif.OnvifAuth("frigate", "correct horse")
+    assert not auth.valid(_request(created=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), nonce=b"0123456789zonele"))
+
+
 def test_username_token_rejects_bad_credentials_and_stale_timestamp() -> None:
     auth = onvif.OnvifAuth("frigate", "correct horse")
     assert not auth.valid(_request(username="intruder"))

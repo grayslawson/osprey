@@ -360,13 +360,7 @@ class OnvifAuth:
                 return AuthResult(error="malformed UsernameToken")
             # ONVIF devices vary: both second precision and fractional
             # precision UTC timestamps are common.
-            parsed = None
-            for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
-                try:
-                    parsed = datetime.strptime(created, fmt).replace(tzinfo=timezone.utc)
-                    break
-                except ValueError:
-                    continue
+            parsed = _utc_timestamp(created)
             if parsed is None:
                 return AuthResult(error="malformed Created timestamp")
             now = self._clock()
@@ -402,6 +396,16 @@ class OnvifAuth:
     def valid(self, payload: bytes, peer: str = "") -> bool:
         """Backwards-compatible boolean form of :meth:`authenticate`."""
         return self.authenticate(payload, peer).ok
+
+
+def _utc_timestamp(text: str) -> datetime | None:
+    """An xsd:dateTime with a zone: ``...Z`` or ``...+00:00`` (zeep, which Frigate uses, sends the offset form),
+    with or without fractional seconds. A time without a zone is rejected rather than guessed."""
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
 
 
 SOAP: Final = "http://www.w3.org/2003/05/soap-envelope"
@@ -753,13 +757,8 @@ def parse_termination(text: str, now: float) -> float | None:
             int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes or 0) * 60
             + float(seconds or 0)
         )
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
-        try:
-            when = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc).timestamp()
-        except ValueError:
-            continue
-        return when - now
-    return None
+    parsed = _utc_timestamp(text)
+    return None if parsed is None else parsed.timestamp() - now
 
 
 def motion_event(camera: Camera, active: bool) -> Event:
