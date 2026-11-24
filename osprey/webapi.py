@@ -275,6 +275,42 @@ def health_checks(services: "Services") -> list[dict[str, object]]:
     return checks
 
 
+DOCS_URL: Final = "https://github.com/grayslawson/osprey/blob/main/docs/"
+
+
+def setup_checks(services: "Services", onboarding: Onboarding) -> list[dict[str, object]]:
+    """The wizard's last step: the four things that must work, each with its help page."""
+    health = {str(c["id"]): c for c in health_checks(services)}
+    checks: list[dict[str, object]] = []
+
+    def check(identifier: str, label: str, ok: bool | None, detail: str, help_page: str) -> None:
+        checks.append({"id": identifier, "label": label, "detail": detail,
+                       "status": "skip" if ok is None else "ok" if ok else "bad",
+                       "help": DOCS_URL + help_page if ok is False else ""})
+
+    adoption = health.get("adoption", {})
+    adopted = adoption.get("status") == "ok"
+    connected = services.backend.camera_connected()
+    check("adoption", "Camera adopted", adopted, str(adoption.get("detail", "")),
+          "troubleshooting.md#the-camera-connects-but-adoption-does-not-finish" if connected
+          else "troubleshooting.md#the-camera-never-connects")
+    tracks = [c for key, c in health.items() if key.startswith("track:")]
+    playing = [str(c["label"]).removeprefix("Stream ") for c in tracks if c["status"] == "ok"]
+    check("video", "Video flowing", bool(playing),
+          f"Playable: {', '.join(playing)}." if playing else "No track has delivered a decodable keyframe yet.",
+          "troubleshooting.md#no-video")
+    onvif_ok, onvif_detail = onboarding.onvif_check()
+    check("onvif", "ONVIF reachable", onvif_ok, onvif_detail,
+          "troubleshooting.md#frigate-gets-401-or-cannot-connect-after-an-upgrade")
+    url = services.frigate_url
+    if url:
+        frigate_ok, frigate_detail = onboarding.frigate_check(url)
+        check("frigate", "Frigate connected", frigate_ok, frigate_detail, "frigate-integration.md#check-the-connection")
+    else:
+        check("frigate", "Frigate connected", None, "No Frigate URL configured; skipped.", "")
+    return checks
+
+
 def preset_list(camera: Camera | None, thumbs: Callable[[int], bool]) -> list[dict[str, object]]:
     if camera is None:
         return []
@@ -518,6 +554,8 @@ class WebApp:
             elif path == "/setup/frigate" and method == "GET":
                 named: dict[str, object] = {"name": query["name"][0]} if query.get("name") else {}
                 result = {**onboarding.frigate_block(named), "frigate_url": self.server.services.frigate_url or ""}
+            elif path == "/setup/checks" and method == "GET":
+                result = {"checks": setup_checks(self.server.services, onboarding)}
             elif path == "/setup/frigate/preview" and method == "POST":
                 result = onboarding.frigate_preview(self._read_json(h), self.server.services.frigate_url)
             elif path == "/setup/frigate/apply" and method == "POST":

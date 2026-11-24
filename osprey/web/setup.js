@@ -445,7 +445,43 @@
     // Keep a typed URL for the console and the health check even without Add to Frigate.
     if (url) await call("PUT", "api/v1/cameras/default/frigate", { base_url: url }).catch(() => {});
     next("frigate");
+    runChecks();
   });
+
+  // ----------------------------------------------------------------- checks
+
+  async function runChecks() {
+    const list = $("#checks");
+    const button = $("#checks-run");
+    button.disabled = true;
+    list.replaceChildren(element("li", "Checking\u2026", "muted"));
+    try {
+      const checks = (await call("GET", "api/v1/setup/checks")).checks || [];
+      list.replaceChildren();
+      for (const check of checks) {
+        const item = element("li", "", `check ${check.status}`);
+        const mark = { ok: "Pass", bad: "Fail", skip: "Skip" }[check.status] || check.status;
+        const text = element("span");
+        text.append(element("strong", check.label), document.createElement("br"), check.detail);
+        if (check.help) {
+          const link = element("a", "How to fix this");
+          link.href = check.help;
+          link.target = "_blank";
+          link.rel = "noopener";
+          text.append(" ", link);
+        }
+        item.append(element("span", mark, "mark"), text);
+        list.append(item);
+      }
+    } catch (failure) {
+      list.replaceChildren(element("li", failure.message, "check bad"));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  $("#checks-run").addEventListener("click", runChecks);
+  $("#checks-next").addEventListener("click", () => next("check"));
 
   // ------------------------------------------------------------------ start
 
