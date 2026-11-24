@@ -150,3 +150,42 @@ def test_osprey_adopt_takes_its_defaults_from_the_config(
     monkeypatch.setattr(manage, "take_custody", record)
     assert manage.main(["--camera", "192.0.2.20"]) == 0
     assert seen == [("192.0.2.20", "ubnt", "ubnt", "192.0.2.10", "osprey", 7443, 443)]
+
+
+def test_the_onvif_check_logs_in_as_frigate_would(tmp_path: Path) -> None:
+    auth = onvif.OnvifAuth("frigate", "o-pw")
+    backend = onvif.Backend(camera=lambda: a_model(), stream_uri=lambda t: "", snapshot_uri=lambda t: "")
+    services = onvif.Services(backend, "127.0.0.1", port=0, onvif_auth=auth)
+    server = onvif.OnvifServer(services, port=0, bind_host="127.0.0.1")
+    server.start()
+    try:
+        good = Onboarding(host="127.0.0.1", control_port=7442, onvif_port=server.port, onvif_login=("frigate", "o-pw"))
+        assert good.onvif_check() == (True, f"Frigate can reach ONVIF at 127.0.0.1:{server.port} with its login.")
+        wrong = Onboarding(host="127.0.0.1", control_port=7442, onvif_port=server.port, onvif_login=("frigate", "x"))
+        ok, detail = wrong.onvif_check()
+        assert not ok and "refused the credentials" in detail
+    finally:
+        server.stop()
+    ok, detail = good.onvif_check()
+    assert not ok and "Nothing answers" in detail
+
+
+def test_the_frigate_check_accepts_a_login_page_and_reports_silence() -> None:
+    ok, detail = Onboarding.frigate_check("http://127.0.0.1:9")
+    assert not ok and "Cannot reach Frigate" in detail
+
+
+def test_setup_checks_report_each_failure_with_its_help_page(tmp_path: Path) -> None:
+    import webapi
+
+    backend = onvif.Backend(camera=lambda: None, stream_uri=lambda t: "", snapshot_uri=lambda t: "",
+                            camera_connected=lambda: False)
+    services = onvif.Services(backend, "127.0.0.1", port=0)
+    services.frigate_url = None
+    checks = webapi.setup_checks(services, Onboarding(host="127.0.0.1", control_port=7442, onvif_port=9))
+    assert [(c["id"], c["status"]) for c in checks] == [
+        ("adoption", "bad"), ("video", "bad"), ("onvif", "bad"), ("frigate", "skip"),
+    ]
+    assert str(checks[0]["help"]).endswith("troubleshooting.md#the-camera-never-connects")
+    assert str(checks[1]["help"]).endswith("troubleshooting.md#no-video")
+    assert checks[3]["help"] == ""
