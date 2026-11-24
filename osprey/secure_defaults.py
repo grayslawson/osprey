@@ -64,7 +64,7 @@ def resolve(state_dir: Path, existing: tuple[Path, ...]) -> str:
 
 
 def credential(state_dir: Path, service: str) -> str:
-    """The generated password for ``service`` (``onvif`` or ``rtsp``); created on first use, shown once.
+    """The generated password for ``service`` (``onvif`` or ``rtsp``), created on first use.
 
     A new ONVIF credential is for the user ``frigate``, the name ``ptz.autotrack_users``
     expects, and the name is stored beside it. A credential generated before the
@@ -75,10 +75,8 @@ def credential(state_dir: Path, service: str) -> str:
     if _write_new(path, password + "\n"):
         name = "frigate" if service == "onvif" else USERNAME
         _write_new(state_dir / f"{service}-username", name + "\n")
-        log.warning(
-            "generated %s credentials (shown once): username=%s password=%s; stored in %s",
-            service.upper(), name, password, path,
-        )
+        # The password itself stays out of the log, which the console and log files keep.
+        log.warning("generated %s credentials for user %s; the password is in %s", service.upper(), name, path)
         return password
     return path.read_text(encoding="utf-8").strip()
 
