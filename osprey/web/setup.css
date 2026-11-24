@@ -35,6 +35,7 @@ button[disabled] { opacity: 0.55; cursor: default; }
 .check { display: flex; gap: 0.6rem; align-items: baseline; }
 .check .mark { font-weight: 700; min-width: 3.2rem; }
 .check.ok .mark { color: var(--ok); }
-.check.bad .mark, .check.warn .mark { color: var(--bad); }
+.check.bad .mark { color: var(--bad); }
+.check.warn .mark, .check.skip .mark { color: var(--muted); }
 .diff { max-height: 24rem; overflow: auto; }
 a { color: var(--accent); }

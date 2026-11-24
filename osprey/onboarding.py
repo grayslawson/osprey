@@ -8,10 +8,17 @@ and point it at this controller's control port.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import ipaddress
 import logging
+import secrets
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import frigate_setup
 import manage
@@ -140,3 +147,54 @@ class Onboarding:
                                   502, f"frigate_{exc.code}") from None
         log.info("setup: added camera %s to Frigate at %s; previous config kept in %s", name, client.url, saved)
         return {"ok": True, "name": name, "message": message, "backup": str(saved)}
+
+    # --------------------------------------------------------------- checks
+
+    def onvif_check(self) -> tuple[bool, str]:
+        """Call our own ONVIF service at the advertised address, as Frigate will."""
+        address = f"[{self.host}]" if ":" in self.host else self.host
+        url = f"http://{address}:{self.onvif_port}/onvif/device_service"
+        header = ""
+        if self.onvif_login:
+            user, password = self.onvif_login
+            nonce = secrets.token_bytes(16)
+            created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            digest = base64.b64encode(hashlib.sha1(nonce + created.encode() + password.encode()).digest()).decode()
+            header = (
+                "<s:Header><Security xmlns='http://docs.oasis-open.org/wss/2004/01/"
+                "oasis-200401-wss-wssecurity-secext-1.0.xsd'><UsernameToken>"
+                f"<Username>{escape(user)}</Username><Password>{digest}</Password>"
+                f"<Nonce>{base64.b64encode(nonce).decode()}</Nonce>"
+                f"<Created xmlns='http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd'>"
+                f"{created}</Created></UsernameToken></Security></s:Header>"
+            )
+        body = (
+            "<s:Envelope xmlns:s='http://www.w3.org/2003/05/soap-envelope'>" + header +
+            "<s:Body><GetDeviceInformation xmlns='http://www.onvif.org/ver10/device/wsdl'/></s:Body></s:Envelope>"
+        ).encode()
+        request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/soap+xml"})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - our own http URL
+                ok = b"GetDeviceInformationResponse" in response.read(65536)
+        except urllib.error.HTTPError as exc:
+            if b"NotAuthorized" in exc.read(65536):
+                return False, f"ONVIF at {address}:{self.onvif_port} refused the credentials in the Frigate block."
+            return False, f"ONVIF at {address}:{self.onvif_port} answered {exc.code}."
+        except OSError as exc:
+            return False, f"Nothing answers at {address}:{self.onvif_port} ({exc}). Check the address Osprey advertises."
+        if not ok:
+            return False, f"ONVIF at {address}:{self.onvif_port} gave an unexpected answer."
+        return True, f"Frigate can reach ONVIF at {address}:{self.onvif_port}" + (" with its login." if header else ".")
+
+    @staticmethod
+    def frigate_check(url: str) -> tuple[bool, str]:
+        try:
+            with urllib.request.urlopen(url + "/api/version", timeout=5) as response:  # noqa: S310 - validated URL
+                version = response.read(256).decode("utf-8", errors="replace").strip().strip('"')
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                return True, f"Frigate answers at {url} (it asks for a login)."
+            return False, f"Frigate at {url} answered {exc.code}."
+        except OSError as exc:
+            return False, f"Cannot reach Frigate at {url} ({exc})."
+        return True, f"Frigate {version[:40]} answers at {url}."
