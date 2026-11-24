@@ -24,6 +24,7 @@ from .engine import Engine
 from .notify import MqttAdapter, Notifier, PahoAdapter
 from .providers import build_provider
 from .server import AssistServer
+from .signals import Signals
 from .store import Store
 
 log = logging.getLogger("osprey.assist")
@@ -35,7 +36,7 @@ def build(cfg: config_mod.AssistConfig, *, adapter: MqttAdapter | None = None) -
     providers = {name: build_provider(name, p) for name, p in cfg.providers.items()}
     decider = Decider(cfg.tasks, providers, store.log_call, cfg.privacy.redact_names)
     cameras = {cid: OspreyClient(cfg.osprey.url, cfg.osprey.token_file, cid) for cid in cfg.osprey.cameras}
-    engine = Engine(cfg, store, cameras, decider)  # type: ignore[arg-type]  # OspreyClient implements Camera
+    engine = Engine(cfg, store, cameras, decider, signals=Signals(cfg.tasks, providers, store.log_call))  # type: ignore[arg-type]  # OspreyClient implements Camera
     notifier: Notifier | None = None
     if cfg.notify.mqtt or cfg.notify.ntfy.url:
         from .notify import Callbacks

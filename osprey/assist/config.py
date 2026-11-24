@@ -15,7 +15,7 @@ from .providers import ProviderConfig, parse_provider
 from .types import MODES, PROBLEMS
 
 DEFAULT_PATH: Final = "/var/lib/osprey-assist/osprey-assist.json"
-TASKS: Final = ("quality.diagnose", "quality.judge", "survey.label", "survey.interest", "survey.change")
+TASKS: Final = ("quality.diagnose", "quality.judge", "quality.glare", "quality.blur", "quality.action", "survey.label", "survey.interest", "survey.change")
 SURVEY_TASKS: Final = ("survey.label", "survey.interest", "survey.change")
 CAPABILITIES: Final = ("quality", "patrol", "followup", "presets", "survey")
 IMPLEMENTED: Final = ("quality", "survey")

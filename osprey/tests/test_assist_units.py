@@ -31,7 +31,7 @@ def test_defaults_are_off_and_safe() -> None:
     cfg = acfg.parse({})
     assert cfg.enabled is False and cfg.modes == {"quality": "suggest", "patrol": "off", "followup": "off", "presets": "off", "survey": "suggest"}
     assert cfg.guardrails.structural_in_auto is True and cfg.storage.frames_days == 14 and cfg.storage.followup_frames_days == 3
-    assert set(cfg.tasks) == {"quality.diagnose", "quality.judge", "survey.label", "survey.interest", "survey.change"} and all(t.mode == "rules" for t in cfg.tasks.values())
+    assert set(cfg.tasks) == set(acfg.TASKS) and all(t.mode == "rules" for t in cfg.tasks.values())
     assert cfg.listen.bind == "127.0.0.1"
 
 
