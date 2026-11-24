@@ -8,4 +8,5 @@ pillow==13.0.0
 pytest==9.1.1
 ruff==0.17.6
 twine==7.0.0
+zeep==4.3.3
 types-paho-mqtt==1.6.0.20240321

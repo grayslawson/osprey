@@ -181,7 +181,8 @@ class _Handler(BaseHTTPRequestHandler):
             elif path == "/survey/overlay.png":
                 self._send(200, db.read_file(smap["run"], "overlay.png") or b"", "image/png")
             elif path == "/survey/frigate.json":
-                self._send(200, db.read_file(smap["run"], "frigate-suggestions.json") or b"{}")
+                found = [p for p in db.proposals(map_id=smap["id"]) if p["type"] == "frigate"]
+                self._json(200, {**found[-1]["suggestion"], "writer": found[-1]["writer"]} if found else {})
             elif path == "/survey/preview.jpg":
                 try:
                     pan, tilt, zoom = (float(query.get(k, "0")) for k in ("pan", "tilt", "zoom"))

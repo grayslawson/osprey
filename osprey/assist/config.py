@@ -117,6 +117,9 @@ class Frigate:
     lookback_days: float = 14
     refresh_min: float = 60
     half_life_days: float = 14
+    # Who writes PTZ zones into Frigate: nobody ("off"), Osprey after you accept them in the console ("osprey"), or Kestrel,
+    # which fetches them from Survey's API ("kestrel"). One writer per Frigate.
+    writer: str = "off"
 
 
 @dataclass(frozen=True)
@@ -260,16 +263,21 @@ def parse_survey(raw: Any) -> Survey:
                              _num(s, "every_days", 7, 1, 365, "survey.schedule"))
     frigate: Frigate | None = None
     if r.get("frigate") is not None:
-        f = _only(r["frigate"], {"url", "camera", "api_key_file", "lookback_days", "refresh_min", "half_life_days"},
+        f = _only(r["frigate"], {"url", "camera", "api_key_file", "lookback_days", "refresh_min", "half_life_days", "writer"},
                   "survey.frigate")
         url = _text(f, "url", None, "survey.frigate")
         if not url or not url.startswith(("http://", "https://")):
             raise ValueError('"survey.frigate.url" must be an http or https URL')
+        writer = f.get("writer", "off")
+        if writer not in ("off", "osprey", "kestrel"):
+            raise ValueError('"survey.frigate.writer" must be off, osprey or kestrel')
+        if writer == "osprey" and not f.get("camera"):
+            raise ValueError('"survey.frigate.writer": "osprey" needs "survey.frigate.camera", the camera\'s name in Frigate')
         frigate = Frigate(url.rstrip("/"), _text(f, "camera", None, "survey.frigate"),
                           _text(f, "api_key_file", None, "survey.frigate"),
                           _num(f, "lookback_days", 14, 1, 365, "survey.frigate"),
                           _num(f, "refresh_min", 60, 5, 1440, "survey.frigate"),
-                          _num(f, "half_life_days", 14, 1, 365, "survey.frigate"))
+                          _num(f, "half_life_days", 14, 1, 365, "survey.frigate"), str(writer))
     return Survey(
         _num(r, "overlap", 0.25, 0.15, 0.6, w), _num(r, "wide_zoom", 0.0, 0, 1, w), (tiles[0], tiles[1]),
         int(_num(r, "max_zoom_ins", 8, 0, 40, w)), _num(r, "zoom_in_max", 0.7, 0, 1, w),

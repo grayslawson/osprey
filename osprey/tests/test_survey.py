@@ -26,7 +26,8 @@ from survey_world import GEO, PanoWorld, decisions_reply
 
 class SRig:
     def __init__(self, tmp: Path, *, mode: str = "suggest", models: StubModels | None = None, survey: dict[str, Any] | None = None,
-                 tasks: dict[str, Any] | None = None, guardrails: dict[str, Any] | None = None, **world: Any) -> None:
+                 tasks: dict[str, Any] | None = None, guardrails: dict[str, Any] | None = None, chat: bool = False,
+                 **world: Any) -> None:
         self.clock = Clock()
         self.world = PanoWorld(tmp, self.clock, **world)
         raw: dict[str, Any] = {"enabled": True, "storage": {"dir": str(tmp / "state")},
@@ -36,7 +37,7 @@ class SRig:
         if guardrails:
             raw["guardrails"] = guardrails
         if models is not None:
-            raw["providers"] = {"stub": {"kind": "decisions", "base_url": models.url, "allow_frames": True,
+            raw["providers"] = {"stub": {"kind": "chat" if chat else "decisions", "base_url": models.url, "allow_frames": True,
                                          "max_calls_per_hour": 10000, "max_calls_per_day": 100000}}
             raw["tasks"] = tasks or {"survey.label": {"mode": "model", "provider": "stub", "model": "m", "send_frames": True,
                                                        "min_confidence": 0.3},

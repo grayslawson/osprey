@@ -215,13 +215,13 @@ def night_variant(mosaic: Mosaic, view: dict[str, Any], max_frac: float = 0.04, 
 
 def frigate_suggestions(geo: sp.Geometry, grid: LabelGrid, stops: list[dict[str, Any]], camera: str,
                         projection: str = "rectilinear", night: bool = False) -> dict[str, Any]:
-    """Zones and motion masks as Frigate wants them, per stop. A suggestion file; nothing is written to Frigate."""
+    """Zones and motion masks as Frigate wants them, per stop. Pure data: whoever writes to Frigate does it elsewhere."""
     zones = grid.components(ZONE_LABELS)
     masks = grid.components(MASK_LABELS)
     out: dict[str, Any] = {}
     for stop in stops:
         view = view_of(geo, stop["pan"], stop["tilt"], stop["zoom"])
-        entry: dict[str, Any] = {"zones": {}, "motion_masks": []}
+        entry: dict[str, Any] = {"position": {k: stop[k] for k in ("pan", "tilt", "zoom")}, "zones": {}, "motion_masks": []}
         counts: dict[str, int] = {}
         for kind, regions in (("zones", zones), ("masks", masks)):
             for r in regions:
@@ -235,9 +235,8 @@ def frigate_suggestions(geo: sp.Geometry, grid: LabelGrid, stops: list[dict[str,
                 else:
                     entry["motion_masks"].append(coords)
         out[stop["name"]] = entry
-    return {"note": "Suggestions only. Osprey never edits Frigate. Frigate zones and masks are drawn in frame "
-                    "coordinates, so each set is right only at its own preset. Check them on a live picture before use.",
-            "camera": camera, "map": "night" if night else "day", "presets": out, "yaml": _yaml(camera, out)}
+    return {"note": "Frigate zones and masks are drawn in frame coordinates, so each set is right only at its own preset.",
+            "camera": camera, "map": "night" if night else "day", "presets": out}
 
 
 def _project(bbox: list[float], view: dict[str, Any], geo: sp.Geometry, projection: str) -> tuple[float, float, float, float] | None:
@@ -253,14 +252,3 @@ def _project(bbox: list[float], view: dict[str, Any], geo: sp.Geometry, projecti
     x1, y0n = sp.from_angles(a1 - view["az"], e1 - view["el"], fov, projection)
     rect = ((x0 + 1) / 2, (1 - y0n) / 2, (x1 + 1) / 2, (1 - y1n) / 2)
     return rect if (rect[2] - rect[0]) * (rect[3] - rect[1]) >= 0.04 else None
-
-
-def _yaml(camera: str, presets: dict[str, Any]) -> str:
-    lines = [f"# Suggested for camera {camera}; merge by hand. One block per preset.", "cameras:", f"  {camera}:"]
-    for name, e in presets.items():
-        lines.append(f"    # at preset {name}")
-        for zone, body in e["zones"].items():
-            lines += [f"    zones:  # {name}", f"      {zone}:", f"        coordinates: {body['coordinates']}"]
-        if e["motion_masks"]:
-            lines += ["    motion:", "      mask:", *(f"        - {m}" for m in e["motion_masks"])]
-    return "\n".join(lines) + "\n"

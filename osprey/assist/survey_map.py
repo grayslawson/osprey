@@ -17,17 +17,19 @@ from typing import Any, Final
 
 from PIL import Image, ImageChops
 
+from third_party.raptor_vision import labels as rv_labels
+from third_party.raptor_vision.geometry import rasterize
+from third_party.raptor_vision.types import Region
+
 from . import survey_plan as sp
 
-LABELS: Final = ("door", "gate", "driveway", "path", "street", "yard", "fence_line", "sky", "wall_eaves",
-                 "foliage", "glare_source", "other")
-UNKNOWN: Final = "unknown"
-COLORS: Final[dict[str, tuple[int, int, int]]] = {
-    "door": (230, 80, 60), "gate": (240, 150, 40), "driveway": (120, 130, 150), "path": (200, 170, 110),
-    "street": (80, 80, 100), "yard": (110, 190, 90), "fence_line": (190, 120, 200), "sky": (90, 170, 240),
-    "wall_eaves": (160, 160, 150), "foliage": (30, 130, 60), "glare_source": (255, 240, 80),
-    "other": (150, 150, 150), UNKNOWN: (0, 0, 0),
-}
+# The vocabulary is raptor-vision's. The first twelve keep Osprey's old order because a stored labels.png holds indexes into
+# this tuple; the new labels are appended, never inserted. ``building`` is not listed: it is the alias of ``wall_eaves``.
+_LEGACY: Final = ("door", "gate", "driveway", "path", "street", "yard", "fence_line", "sky", "wall_eaves",
+                  "foliage", "glare_source", "other")
+LABELS: Final = (*_LEGACY, *(k for k in rv_labels.LABELS if k not in _LEGACY and k not in rv_labels.ALIASES.values()))
+UNKNOWN: Final = rv_labels.UNKNOWN
+COLORS: Final = rv_labels.COLORS
 _STRIPS: Final = (40, 12)
 
 
@@ -212,6 +214,35 @@ class LabelGrid:
                     continue
                 self.label[k], self.conf[k], self.entry[k], self.detail[k] = idx, c, round(entry * 255), int(detail)
                 self.closer[k] = round(closer * 255)
+
+    def paint_regions(self, regions: list[Region], az: float, el: float, fov: tuple[float, float], projection: str,
+                      detail: bool) -> None:
+        """Paint labelled polygons (picture fractions) of one picture taken at (az, el) with field of view ``fov``.
+
+        Each 2-degree square whose centre falls inside a polygon takes its label, with the same winner rules as ``paint``.
+        ``entry`` and ``closer`` come from the region's ``extra``.
+        """
+        res = 128
+        masks = [(r, rasterize(r.polygon, res, res)) for r in regions]
+        a, b = self.cell_of(max(az - fov[0] / 2, self.az0), min(el + fov[1] / 2, self.el1)), self.cell_of(az + fov[0] / 2, el - fov[1] / 2)
+        if a is None or b is None:
+            return
+        for y in range(a[1], b[1] + 1):
+            for x in range(a[0], b[0] + 1):
+                cx, cy = self.center(x, y)
+                try:
+                    px, py = sp.from_angles(cx - az, cy - el, fov, projection)
+                except (ValueError, ZeroDivisionError):
+                    continue
+                if abs(px) > 1 or abs(py) > 1:
+                    continue
+                ix, iy = round((px + 1) / 2 * (res - 1)), round((1 - py) / 2 * (res - 1))
+                for r, mask in masks:
+                    if mask.getpixel((ix, iy)):
+                        e, c = r.extra.get("entry", 0.0), r.extra.get("closer", 0.0)
+                        self.paint(cx - 0.9, cy - 0.9, cx + 0.9, cy + 0.9, r.label, r.confidence,
+                                   float(e) if isinstance(e, (int, float)) else 0.0, detail,
+                                   float(c) if isinstance(c, (int, float)) else 0.0)
 
     def at(self, az: float, el: float) -> str:
         pos = self.cell_of(az, el)

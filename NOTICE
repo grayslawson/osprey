@@ -48,3 +48,7 @@ Osprey does not bundle Frigate, FFmpeg, OpenSSL or Python. Container images
 built from docker/Dockerfile include Debian packages (including FFmpeg and
 OpenSSL) and paho-mqtt under their own licenses; the image SBOM published with
 each release lists them.
+
+osprey/third_party/raptor_vision is a copy of the core of raptor-vision
+(https://github.com/grayslawson/raptor-vision), MIT licence, by the same author.
+Its licence text is in that directory.

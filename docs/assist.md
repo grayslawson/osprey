@@ -175,7 +175,15 @@ A provider is one of two kinds:
 ```
 
 A provider can also carry `extra_body`, an object merged into every request, for example
-`{"provider": {"data_collection": "deny"}}` for OpenRouter.
+`{"provider": {"data_collection": "deny"}}` for OpenRouter, and `private`, which says the pictures
+stay private (the shared library carries it; Osprey does not act on it).
+
+The providers, the task settings (`mode`, `provider`, `model`, `send_frames`, `min_confidence`,
+`threshold`, `fallback`) and Survey's labelling come from the shared library
+[raptor-vision](https://github.com/grayslawson/raptor-vision), carried in `osprey/third_party/raptor_vision/`
+(see [Survey](survey.md#scene-layer)). Assist adds `on_disagree` and `explain` to a task, and the
+quality tasks' own questions. For Survey a chat provider with `fallback` models is the recommended
+setup: see [the recommended `survey.label`](survey.md#model-tasks).
 
 A picture leaves the machine only when the provider has `allow_frames: true` and
 the task has `send_frames: true`. A private address does not count: a gateway on
