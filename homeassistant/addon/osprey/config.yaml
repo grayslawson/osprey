@@ -1,5 +1,5 @@
 name: Osprey
-version: "0.9.0b5"
+version: "0.9.0b6"
 slug: osprey
 # A beta: it works, but expect rough edges and changes.
 stage: experimental

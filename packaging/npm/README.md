@@ -8,9 +8,9 @@ npm publishing starts with a later release; pre-releases will then be on the
 install the tarball attached to the GitHub release:
 
 ```sh
-npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b5/osprey-ptz-cli-0.9.0b5.tgz
+npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b6/osprey-ptz-cli-0.9.0b6.tgz
 export OSPREY_RUNTIME=docker                # or podman
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b5
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b6
 osprey doctor --host 192.0.2.10
 ```
 

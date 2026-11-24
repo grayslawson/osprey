@@ -137,7 +137,7 @@ To see every ONVIF call and who made it, set `"onvif": {"log_calls": true}` in
 A new install requires ONVIF and RTSP logins, and the credentials are generated
 unless you set your own. Use the RTSP user `osprey` with the password from
 `rtsp-password` in the state directory, and set `onvif.user` (`frigate`, or
-`osprey` for credentials generated before 0.9.0b5) and `onvif.password` from
+`osprey` for credentials generated before 0.9.0b6) and `onvif.password` from
 `onvif-password`. The setup wizard's check step tries the ONVIF login itself
 and says if the address or the login is wrong. If you want to keep the old
 anonymous behaviour, an existing install stays in legacy mode on its own; see

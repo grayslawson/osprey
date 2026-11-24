@@ -36,8 +36,8 @@ setup wizard's camera scan uses UDP 10001.
 
 `ghcr.io/grayslawson/osprey` is published for `linux/amd64` and
 `linux/arm64`. A final release is tagged `X.Y.Z`, `vX.Y.Z`, `X.Y` and
-`latest`. A pre-release such as `0.9.0b5` gets only `0.9.0b5` and
-`v0.9.0b5`. Each image is signed by digest with keyless cosign;
+`latest`. A pre-release such as `0.9.0b6` gets only `0.9.0b6` and
+`v0.9.0b6`. Each image is signed by digest with keyless cosign;
 [`CONTRIBUTING.md`](../CONTRIBUTING.md#releasing) has the verify command.
 
 ### First run
@@ -48,7 +48,7 @@ Osprey works out the rest on first start.
 
 ```sh
 mkdir osprey && cd osprey
-curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b5/compose.release.yaml
+curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b6/compose.release.yaml
 docker compose up -d --wait && docker compose logs osprey
 ```
 
@@ -143,9 +143,9 @@ Use this to set the address and image yourself. Compose files from 0.9.0b3
 and earlier require `OSPREY_HOST` and `OSPREY_IMAGE`:
 
 ```sh
-curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b5/compose.release.yaml
+curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b6/compose.release.yaml
 export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b5
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b6
 export OSPREY_SETUP=1           # open the setup wizard
 docker compose -f compose.release.yaml up -d
 docker compose -f compose.release.yaml logs osprey | grep 'setup token'
@@ -173,7 +173,7 @@ state volume:
 docker compose exec osprey cat /var/lib/osprey/onvif-password
 ```
 
-ONVIF credentials generated before 0.9.0b5 use the user `osprey`. Rename it
+ONVIF credentials generated before 0.9.0b6 use the user `osprey`. Rename it
 so autotracking works:
 
 ```sh
@@ -309,16 +309,16 @@ and Frigate. Download
 and read its plan first:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/grayslawson/osprey/v0.9.0b5/scripts/proxmox-install.sh
+curl -fsSLO https://raw.githubusercontent.com/grayslawson/osprey/v0.9.0b6/scripts/proxmox-install.sh
 sh proxmox-install.sh --host 192.0.2.10 \
-  --image ghcr.io/grayslawson/osprey:v0.9.0b5 --runtime podman
+  --image ghcr.io/grayslawson/osprey:v0.9.0b6 --runtime podman
 ```
 
 It is a dry run until you add `--apply`, which must run as root. Other options: `--bind-address`
 (defaults to `--host`), `--state-dir` (default `/var/lib/osprey`),
 `--onvif-port`, `--rtsp-port`, and `--force` to overwrite an existing Compose
-file. The image must use the `v` tag form (`v0.9.0b5`) or a digest; the
-script rejects `0.9.0b5`. It can install the runtime with `apt-get`, writes
+file. The image must use the `v` tag form (`v0.9.0b6`) or a digest; the
+script rejects `0.9.0b6`. It can install the runtime with `apt-get`, writes
 `compose.yaml` under the state directory and starts only Osprey. It never
 creates or changes a Proxmox VM or LXC. On first start the setup wizard opens;
 the link is in `podman compose -f /var/lib/osprey/compose.yaml logs osprey`.
@@ -340,7 +340,7 @@ attached to the GitHub release:
 
 ```sh
 python3.13 -m venv ~/.local/osprey && . ~/.local/osprey/bin/activate
-pip install "osprey-ptz[mqtt] @ https://github.com/grayslawson/osprey/releases/download/v0.9.0b5/osprey_ptz-0.9.0b5-py3-none-any.whl"
+pip install "osprey-ptz[mqtt] @ https://github.com/grayslawson/osprey/releases/download/v0.9.0b6/osprey_ptz-0.9.0b6-py3-none-any.whl"
 osprey --config ~/.config/osprey/osprey.json --cert ~/.config/osprey/osprey.pem
 ```
 
@@ -398,8 +398,8 @@ release, with pre-releases on the `next` dist-tag
 tarball attached to the GitHub release:
 
 ```sh
-npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b5/osprey-ptz-cli-0.9.0b5.tgz
-OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b5 osprey doctor --host 192.0.2.10
+npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b6/osprey-ptz-cli-0.9.0b6.tgz
+OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b6 osprey doctor --host 192.0.2.10
 ```
 
 Each command runs in a fresh container that sees no host files, so
@@ -452,7 +452,7 @@ and prints the image it would use, without pulling or restarting anything:
 scripts/osprey-update.sh \
   --file /var/lib/osprey/compose.release.yaml \
   --env-file /etc/osprey/release.env \
-  --image ghcr.io/grayslawson/osprey:0.9.0b5
+  --image ghcr.io/grayslawson/osprey:0.9.0b6
 ```
 
 Add `--apply` to pull and recreate the `osprey` service. Other services in the

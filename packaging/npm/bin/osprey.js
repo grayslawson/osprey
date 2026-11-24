@@ -4,7 +4,7 @@ const { spawnSync } = require("node:child_process");
 
 const args = process.argv.slice(2);
 const runtime = process.env.OSPREY_RUNTIME || "docker";
-const image = process.env.OSPREY_IMAGE || "ghcr.io/grayslawson/osprey:0.9.0b5";
+const image = process.env.OSPREY_IMAGE || "ghcr.io/grayslawson/osprey:0.9.0b6";
 
 // The release image exposes the controller entrypoint, not a bare `osprey`
 // binary. Read-only commands are run through the same entrypoint so they see
