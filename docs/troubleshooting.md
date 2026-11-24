@@ -14,12 +14,16 @@ docker compose -f compose.release.yaml logs --tail 200 osprey
 `/healthz` answers `503` with `"camera": false`, and the log has no
 `channel up` line.
 
-- The camera was never pointed at Osprey. Adopting is a separate step from
-  starting Osprey. Run `manage.sh` as in
+- The camera was never pointed at Osprey. Run the setup wizard's adopt step,
+  or `osprey adopt` as in
   [point the camera at Osprey](installation.md#point-the-camera-at-osprey).
-- `manage.sh` fails to log in. The camera only accepts `ubnt`/`ubnt` while
-  it is factory fresh. If another controller adopted it, remove it there and
-  reset the camera first.
+- Adopting fails to log in ("the camera rejected the credential"). The camera
+  only accepts `ubnt`/`ubnt` while it is factory fresh. If another controller
+  adopted it, remove it there and reset the camera first. The wizard's camera
+  scan marks a camera that a controller still manages.
+- The wizard's scan finds nothing. The scan is a UDP 10001 broadcast, which
+  stays on one network segment and does not leave a container bridge. Type the
+  camera's address and select **Look up** instead.
 - Osprey's address is wrong. `OSPREY_HOST` (or `host`) is the address the
   camera dials. It has to be reachable from the camera, so not `localhost`, a
   container bridge address or a wildcard.
@@ -48,7 +52,7 @@ console's Health tab.
 
 - A camera that still thinks another controller owns it may send nothing but
   time sync messages and ignore Osprey. Release it from that controller, or
-  factory-reset it, then run `manage.sh` again.
+  reset it to factory settings, then adopt it again.
 - Keep the state volume. The camera trusts the certificate Osprey made on its
   first run (`osprey.pem`). If you lose the volume, expect to point the camera
   at Osprey again.
@@ -132,8 +136,10 @@ To see every ONVIF call and who made it, set `"onvif": {"log_calls": true}` in
 
 A new install requires ONVIF and RTSP logins, and the credentials are generated
 unless you set your own. Use the RTSP user `osprey` with the password from
-`rtsp-password` in the state directory (or the first start's log), and set
-`onvif.user` and `onvif.password` in Frigate. If you want to keep the old
+`rtsp-password` in the state directory, and set `onvif.user` (`frigate`, or
+`osprey` for credentials generated before 0.9.0b4) and `onvif.password` from
+`onvif-password`. The setup wizard's check step tries the ONVIF login itself
+and says if the address or the login is wrong. If you want to keep the old
 anonymous behaviour, an existing install stays in legacy mode on its own; see
 [security](security.md#secure-mode-and-legacy-mode).
 

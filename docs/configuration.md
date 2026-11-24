@@ -150,13 +150,13 @@ ASCII characters each), `mac` (unicast, and different from every camera MAC),
 
 | Variable | Meaning |
 |---|---|
-| `OSPREY_HOST` | Advertised host. Required by the container unless the file sets `host`. |
+| `OSPREY_HOST` | Advertised host. Overrides `host`. Unset on first run: the setup wizard detects it from the default route and asks you to confirm it. |
 | `OSPREY_BIND` | Listener address. With the bridge Compose file, also the address ports are published on. |
 | `OSPREY_CONFIG_FILE` | Config file path. |
 | `OSPREY_STATE_DIR` | Writable state directory (container). Default `/var/lib/osprey`. |
 | `OSPREY_CERT_FILE` | Control-channel certificate (container). |
 | `OSPREY_SECRETS_FILE` | `KEY=value` secrets file. Default `osprey-secrets.env` next to the config. |
-| `OSPREY_SETUP` | `1` opens the setup wizard while the config has no `host`. Same as `--setup`. |
+| `OSPREY_SETUP` | Unset: the setup wizard opens by itself when no host is configured, or a host is given on a new state directory. `1` (same as `--setup`) forces it open while the config has no `host`; `0` never opens it. |
 | `OSPREY_SECURITY` | `secure` or `legacy`. Overrides the mode saved in `security-mode`. See [security](security.md#secure-mode-and-legacy-mode). |
 | `OSPREY_ONVIF_AUTH`, `OSPREY_RTSP_AUTH` | `disabled` keeps that service anonymous in secure mode. |
 | `OSPREY_ANNOUNCE` | `false` disables the WS-Discovery Hello (container). |

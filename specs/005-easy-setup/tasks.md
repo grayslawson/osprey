@@ -6,7 +6,7 @@
 - [x] Camera discovery and adoption in the wizard; `osprey adopt` in the image.
 - [x] ONVIF user `frigate` for new installs; Frigate block; Add to Frigate.
 - [x] Health-check step.
-- [ ] README quick start and installation guide.
+- [x] README quick start and installation guide.
 
 ## Verification
 
