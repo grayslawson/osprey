@@ -99,14 +99,11 @@ so check Frigate's [autotracking requirements](https://docs.frigate.video/config
 
 ## Quick start
 
-This needs Osprey 0.9.0b4 or later. For 0.9.0b3, follow the
-[manual setup](docs/installation.md#manual-setup).
-
 1. On the Linux host, start Osprey and print its log:
 
    ```sh
    mkdir osprey && cd osprey
-   curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/compose.release.yaml
+   curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b4/compose.release.yaml
    docker compose up -d --wait && docker compose logs osprey
    ```
 

@@ -3,7 +3,101 @@
 Every release of Osprey, newest first. Each section is generated from the
 Conventional Commit titles merged for that release, and it is also the body
 of the GitHub release. See cliff.toml and CONTRIBUTING.md. The sections for
-0.9.0b1 to 0.9.0b3 were written by hand, before the notes came from git-cliff.
+0.9.0b1 to 0.9.0b3 were written by hand, before the notes came from git-cliff,
+and the 0.9.0b4 section was rewritten by hand from the git-cliff output.
+
+## [0.9.0b4] - 2026-11-24
+
+### Setup
+- Setting up now takes three steps: start Osprey with one command, open the
+  link it prints in its log, and follow the wizard. The release Compose file
+  needs no settings, because its image defaults to the release it came with.
+  On first start the wizard opens by itself and fills in the host's LAN
+  address. The link it logs expires after an hour, and the next request logs a
+  new one. After you save, Osprey restarts itself.
+- The wizard finds the camera. It sends the UniFi discovery probe on UDP 10001
+  and lists each camera with its model, its firmware and whether that firmware
+  has been tested. If UniFi Protect still manages the camera, the wizard shows
+  how to remove and reset it, with a button to scan again. Then it adopts the
+  camera, which used to need a `git clone` and `manage.sh`. `osprey adopt
+  --camera IP` does the same from the command line.
+- Once the camera is adopted, the wizard gives you a Frigate camera block with
+  the address, ports and passwords filled in. It can also add the block to
+  Frigate for you through Frigate's config API. You see a diff first, the old
+  config is backed up to the state directory, and Osprey refuses if the config
+  changed after the preview or already has a camera of the same name.
+- The wizard ends with a check of the camera adoption, the video, ONVIF at the
+  advertised address with Frigate's login, and the Frigate connection. Each
+  failed check links to its fix in the troubleshooting guide.
+
+### Security
+- New installs are secure by default. ONVIF and RTSP require a login, and
+  Osprey generates the credentials, stores them with mode 0600 in the state
+  directory and logs them once. The camera ports accept only the adopted
+  camera's address. An existing install is recorded as `legacy` and behaves as
+  before, with a startup warning that recommends turning auth on. Set
+  `OSPREY_SECURITY=secure` or `legacy` to choose. `OSPREY_ONVIF_AUTH=disabled`
+  and `OSPREY_RTSP_AUTH=disabled` turn off one service at a time.
+- New installs get the ONVIF user `frigate`, which `ptz.autotrack_users`
+  already expects, so Frigate's moves count as autotracking with no config
+  change. Credentials generated before this release keep the user `osprey`,
+  and existing Frigate configs keep working.
+- The Home Assistant app has options for the ONVIF and RTSP logins and for the
+  security mode (`auto`, `secure` or `legacy`). Its base image is pinned by
+  digest.
+- `osprey protect-guard` verifies the console's TLS certificate by default.
+  Use `--ca-file`, or `--pin-file` to trust the certificate it sees first.
+  `--insecure` turns the check off. Its missing `sys` import is fixed too.
+- The camera management command reads the camera password from
+  `--password-file`, `OSPREY_CAMERA_PASSWORD` or a prompt. `--password` still
+  works but warns, because the password shows up in `ps` and shell history.
+- The control key and its PEM file are created with mode 0600, rather than
+  being tightened after they're written.
+
+### Camera and patrol
+- Osprey sets the camera's ISP `hdr` to 1 every time PTZ connects
+  (`ptz.isp_baseline`, default `{"hdr": 1}`; `{}` turns it off). On our G5 PTZ,
+  Protect had left `hdr` at 2 and the image stayed soft at the preset zoom.
+  With `hdr` at 1 both patrol presets were sharp. The camera won't go back to
+  `hdr` 2, so we couldn't prove that this was the cause. `POST
+  /api/v1/cameras/<id>/isp` passes other ISP settings through.
+- A patrol point can have a `night_preset`. While the camera reports night,
+  the patrol visits that preset instead, and falls back to the normal one if
+  the night preset is missing or refused. A scene change has to hold for 120
+  seconds before the patrol switches, so a flickering scene can't keep moving
+  the head. We added it because the camera's own IR lit up a structure next to
+  the camera and washed out a third of one view. The console keeps the setting
+  when you edit a point, but can't set it yet.
+- Osprey keeps a list of tested camera firmware. Today that's 5.3.95. Other
+  firmware still works, but logs a warning when the camera is ready and shows
+  up as a warning in the health checks and as `camera.firmware_status` in the
+  state API.
+
+### Other changes
+- `osprey --version` and `osprey version` print the version.
+- The container health check counts "waiting for a camera" and an unfinished
+  first setup as healthy.
+- The camera IP is optional in the wizard.
+- A locked operator console is now a warning that says what to do, not an
+  error.
+- `osprey-update.sh --latest` works while every release is still a beta.
+
+### Docs
+- New guides for troubleshooting, upgrading and uninstalling, plus a FAQ and
+  API and configuration references.
+- The README is rewritten around the new quick start, and the security
+  guide covers secure mode, the generated credentials and the camera address.
+- NOTICE credits Finch. The package descriptions and the Home Assistant app
+  say Osprey isn't affiliated with Ubiquiti.
+
+### Not tested yet
+- Camera discovery and adoption in the wizard haven't been tried on a real
+  camera yet. They follow the measured protocol notes, and the whole wizard
+  ran end to end in podman against a fake G5 PTZ and a fake Frigate. The
+  managed flag on a factory reset G5 and the adoption call are the parts
+  only real hardware can confirm.
+
+Full list of changes: [v0.9.0b3...v0.9.0b4](https://github.com/grayslawson/osprey/compare/v0.9.0b3...v0.9.0b4)
 
 ## [0.9.0b3] - 2026-11-21
 

@@ -4,13 +4,13 @@ Runs Osprey's read-only tools from the published container image. It does
 not install Docker or Podman and never starts the controller.
 
 npm publishing starts with a later release; pre-releases will then be on the
-`next` dist-tag (`npm install --global @osprey-ptz/cli@next`). For 0.9.0b3,
+`next` dist-tag (`npm install --global @osprey-ptz/cli@next`). Until then,
 install the tarball attached to the GitHub release:
 
 ```sh
-npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/osprey-ptz-cli-0.9.0b3.tgz
+npm install --global https://github.com/grayslawson/osprey/releases/download/v0.9.0b4/osprey-ptz-cli-0.9.0b4.tgz
 export OSPREY_RUNTIME=docker                # or podman
-export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b3
+export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b4
 osprey doctor --host 192.0.2.10
 ```
 

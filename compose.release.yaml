@@ -24,7 +24,7 @@ services:
     # The release this file was published with (scripts/validate-repo.sh
     # keeps it equal to VERSION). OSPREY_IMAGE overrides it, as
     # scripts/osprey-update.sh does.
-    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b3}
+    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b4}
     pull_policy: missing
     network_mode: host
     environment:

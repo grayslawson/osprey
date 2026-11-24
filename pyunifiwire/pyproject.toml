@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyunifiwire"
-version = "0.9.0b3"
+version = "0.9.0b4"
 description = "The wire protocol UniFi Protect cameras and controllers speak, measured rather than guessed. Not affiliated with Ubiquiti."
 readme = "README.md"
 requires-python = ">=3.13"
