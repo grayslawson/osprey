@@ -1,6 +1,6 @@
 # Osprey Assist
 
-Status: phases 0 and 1 in progress.
+Status: phase 0 shipped, phase 1 implemented and awaiting a hardware run.
 
 ## User outcome
 

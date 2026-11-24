@@ -8,6 +8,7 @@
 #                      does); the host and control port come from the config
 #   protect-guard ...  check/create the UniFi firewall policy that keeps
 #                      Protect from adopting the physical camera
+#   assist [OPTS...]   the optional Assist helper: run, eval, replay, purge
 #   healthcheck        exit 0 when GET /healthz on the ONVIF listener returns 200
 #   version            print the packaged Osprey version
 #   -<flag> ...        shorthand for `run -<flag> ...`
@@ -78,6 +79,7 @@ case "$1" in
     probe) shift; exec python3 /opt/osprey/osprey/probe.py "$@" ;;
     adopt) shift; exec python3 /opt/osprey/osprey/manage.py "$@" ;;
     protect-guard) shift; exec python3 /opt/osprey/osprey/protect_guard.py "$@" ;;
+    assist) shift; PYTHONPATH="/opt/osprey/osprey${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m assist.cli "$@" ;;
     healthcheck) shift; exec python3 /usr/local/bin/osprey-healthcheck "$@" ;;
     version) cat /opt/osprey/VERSION ;;
     *) exec "$@" ;;

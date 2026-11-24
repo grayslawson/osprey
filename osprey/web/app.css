@@ -186,3 +186,22 @@ dialog::backdrop { background: rgb(0 0 0 / 0.5); }
 @media (forced-colors: active) {
   .pill, .badge, button { border: 1px solid ButtonText; }
 }
+
+/* ---- assist tab ---- */
+.assist-item { border-top: 1px solid var(--line); padding: 0.75rem 0; display: grid; gap: 0.5rem; }
+.assist-frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.5rem; }
+.assist-frame { margin: 0; }
+.assist-shot { position: relative; background: var(--stage); border-radius: var(--r-sm); overflow: hidden; }
+.assist-shot img { display: block; width: 100%; height: auto; }
+.assist-none { background: var(--panel-2); color: var(--muted); padding: 2rem 0; text-align: center; border-radius: var(--r-sm); }
+.assist-grid { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(12, 1fr); grid-template-rows: repeat(8, 1fr); pointer-events: none; }
+.assist-grid span { background: var(--bad); border: 1px solid rgba(255, 255, 255, 0.2); }
+.assist-reasons { display: flex; flex-wrap: wrap; gap: 0.5rem; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.assist-caps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+.assist-seg { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; }
+.assist-seg button[aria-checked="true"] { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 650; }
+.assist-meter meter { display: block; width: 100%; max-width: 20rem; }
+.assist-note:empty { display: none; }
+.assist-detail { background: var(--panel-2); }
+.assist-detail pre { overflow: auto; max-height: 14rem; }
+.table-wrap { overflow-x: auto; }

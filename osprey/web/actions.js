@@ -208,7 +208,7 @@ function parseHash() {
 export function routeFromHash(hash) {
   const [path, query = ""] = hash.replace(/^#/, "").split("?", 2);
   const name = path.replace(/^\//, "");
-  const view = ["live", "health", "logs", "patrol", "settings"].includes(name) ? name : "live";
+  const view = ["live", "health", "logs", "patrol", "assist", "settings"].includes(name) ? name : "live";
   return { view, cam: new URLSearchParams(query).get("cam") || "" };
 }
 

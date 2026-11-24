@@ -33,6 +33,8 @@ dependencies = []
 
 [project.optional-dependencies]
 mqtt = ["paho-mqtt>=2.1,<3"]
+# `osprey assist`: image metrics need Pillow, Home Assistant approvals need MQTT.
+assist = ["pillow>=12,<14", "paho-mqtt>=2.1,<3"]
 
 [project.scripts]
 osprey = "osprey_ptz.launcher:main"
