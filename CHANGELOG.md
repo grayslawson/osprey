@@ -4,11 +4,22 @@ Every release of Osprey, newest first. Each section is generated from the
 Conventional Commit titles merged for that release, and it is also the body
 of the GitHub release. See cliff.toml and CONTRIBUTING.md. The sections for
 0.9.0b1 to 0.9.0b3 were written by hand, before the notes came from git-cliff,
-and the 0.9.0b4 to 0.9.0b6 sections were rewritten by hand from the git-cliff output.
+and the 0.9.0b4 to 0.9.0b7 sections were rewritten by hand from the git-cliff output.
 
-## Unreleased
+## [0.9.0b7] - 2026-11-24
+
+### Controller
+- ONVIF authentication accepts the WS-Security `Created` time with a UTC
+  offset (`+00:00`), as zeep sends it. Before, every login from Frigate's ONVIF
+  client was rejected as a malformed timestamp, so with ONVIF authentication
+  on (the default in secure mode) Frigate could not move the camera or
+  autotrack. A time without a zone is still rejected.
 
 ### Assist
+- A model that is capped for the day, out of budget or rate limited is not
+  called again on every check: it waits until the next UTC day, or backs off
+  from 60 seconds up to an hour, and the next model in the chain or the rules
+  answer meanwhile.
 - Survey labels with the shared library raptor-vision 0.2.0 (vendored in
   `osprey/third_party/raptor_vision/`, so every install path needs no network).
   A chat model now draws labelled outlines on each whole picture, with fallback

@@ -19,7 +19,7 @@
 name: osprey
 services:
   osprey:
-    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b6}
+    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b7}
     pull_policy: missing
     environment:
       OSPREY_HOST: ${OSPREY_HOST:-${OSPREY_BIND:?Set OSPREY_BIND to the host LAN address}}

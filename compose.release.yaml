@@ -24,7 +24,7 @@ services:
     # The release this file was published with (scripts/validate-repo.sh
     # keeps it equal to VERSION). OSPREY_IMAGE overrides it, as
     # scripts/osprey-update.sh does.
-    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b6}
+    image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b7}
     pull_policy: missing
     network_mode: host
     environment:
@@ -60,7 +60,7 @@ services:
   # "assist": {"enabled": true} in osprey.json first, so Osprey makes the token,
   # then remove the leading "#" from this block and from `assist-state` below.
   # assist:
-  #   image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b6}
+  #   image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b7}
   #   command: ["assist", "run"]
   #   network_mode: host
   #   environment:

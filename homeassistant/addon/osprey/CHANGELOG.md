@@ -4,6 +4,10 @@ The changes to the Osprey Home Assistant app, newest version on top. The app
 ships the Osprey controller, so the controller's own changelog is at
 <https://github.com/grayslawson/osprey/blob/main/CHANGELOG.md>.
 
+## 0.9.0b7
+
+- Bundles controller 0.9.0b7. Assist and Survey are not part of the app yet.
+
 ## 0.9.0b6
 
 - Bundles controller 0.9.0b6. Assist and Survey are not part of the app yet.

@@ -33,4 +33,4 @@ __all__ = [
     "ws",
     "wsclient",
 ]
-__version__ = "0.9.0b6"
+__version__ = "0.9.0b7"
