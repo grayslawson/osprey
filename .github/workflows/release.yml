@@ -25,7 +25,7 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+b[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+rc[0-9]+'
   # Re-publish to PyPI and npm for an existing tag:
-  #   gh workflow run release.yml --ref v0.9.0b4
+  #   gh workflow run release.yml --ref v0.9.0b5
   # Only the build and publish jobs run; the image, GitHub Release and add-on
   # are skipped.  The ref must be the tag itself (verify enforces the pattern).
   workflow_dispatch:

@@ -4,7 +4,41 @@ Every release of Osprey, newest first. Each section is generated from the
 Conventional Commit titles merged for that release, and it is also the body
 of the GitHub release. See cliff.toml and CONTRIBUTING.md. The sections for
 0.9.0b1 to 0.9.0b3 were written by hand, before the notes came from git-cliff,
-and the 0.9.0b4 section was rewritten by hand from the git-cliff output.
+and the 0.9.0b4 and 0.9.0b5 sections were rewritten by hand from the git-cliff output.
+
+## [0.9.0b5] - 2026-11-24
+
+### Assist
+- Osprey Assist is a new, optional helper that watches the camera's picture
+  and fixes what it can: glare, blur, a picture that is too dark or too bright,
+  and noise. It runs as a separate process from the same image (`osprey assist
+  run`), it is off until you turn it on, and the controller does not depend on
+  it. It asks before it changes anything, unless you set a capability to `act`
+  or `auto`, and it undoes a change that does not help. See `docs/assist.md`.
+- For night glare, where infrared light bounces off a wall near the camera,
+  Assist looks for a nearby view that avoids it and suggests saving it as the
+  patrol's night view.
+- Approve suggestions in the console's new **Assist** tab, or in Home Assistant
+  over MQTT. Assist adds a device with discovery, and can also send a ntfy
+  message.
+- A model can help decide, per task: rules, a model, or both. Assist speaks
+  OpenAI-compatible chat and decision-model endpoints. A picture is sent only
+  when both the provider and the task allow it. `osprey assist eval` scores a
+  model on frames you have labelled.
+- The image now includes Pillow, which only Assist uses.
+
+### Controller
+- The state document, the `ptz` event and the MQTT `state/ptz` message carry
+  `scene`, `DAY` or `NIGHT`, as the camera reports it.
+- The console's patrol tab can now set a night view for each position.
+- The API can pause the patrol for up to five minutes and change how long it
+  stays at a position for a while. Both expire on their own and neither is
+  saved.
+- A bearer token for Assist, switched on with `assist.enabled` or
+  `OSPREY_ASSIST_TOKEN_FILE`, limited to a short list of routes and image
+  settings. Nothing is open by default.
+- The architecture notes now say which moves take the movement lease: the patrol
+  and MQTT do, ONVIF and the console do not.
 
 ## [0.9.0b4] - 2026-11-24
 

@@ -103,7 +103,7 @@ so check Frigate's [autotracking requirements](https://docs.frigate.video/config
 
    ```sh
    mkdir osprey && cd osprey
-   curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b4/compose.release.yaml
+   curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b5/compose.release.yaml
    docker compose up -d --wait && docker compose logs osprey
    ```
 
