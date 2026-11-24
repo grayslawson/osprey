@@ -67,7 +67,8 @@ def test_credentials_are_generated_once_0600(
         first = secure_defaults.credential(tmp_path, "onvif")
         again = secure_defaults.credential(tmp_path, "onvif")
     assert first == again and len(first) >= 24
-    assert caplog.text.count(first) == 1  # shown in the log exactly once
+    assert first not in caplog.text  # never logged; the log names the file instead
+    assert str(tmp_path / "onvif-password") in caplog.text
     assert (tmp_path / "onvif-password").stat().st_mode & 0o777 == 0o600
 
 
@@ -136,3 +137,17 @@ def test_configured_camera_ip_is_the_only_allowed_peer(fresh: None, tmp_path: Pa
         assert stack.controller.learned_peers is None  # a configured IP is never widened
     finally:
         stack.stop()
+
+
+def test_a_new_onvif_credential_is_for_frigate_and_an_old_one_keeps_osprey(
+    fresh: None, tmp_path: Path,
+) -> None:
+    new, old = tmp_path / "new", tmp_path / "old"
+    secure_defaults.credential(new, "onvif")
+    secure_defaults.credential(new, "rtsp")
+    assert secure_defaults.username(new, "onvif") == "frigate"
+    assert secure_defaults.username(new, "rtsp") == "osprey"
+    old.mkdir()
+    (old / "onvif-password").write_text("generated-before-the-name-was-stored\n")
+    secure_defaults.credential(old, "onvif")
+    assert secure_defaults.username(old, "onvif") == "osprey"

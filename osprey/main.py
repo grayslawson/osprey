@@ -422,8 +422,9 @@ def build(options: Options) -> Stack:
     # One credential store for ONVIF, snapshots and (opt-in) RTSP.
     onvif_auth = onvif.OnvifAuth.from_environment()
     if secure and not onvif_auth.configured and os.environ.get("OSPREY_ONVIF_AUTH") != "disabled":
+        onvif_password = secure_defaults.credential(state_dir, "onvif")
         onvif_auth = onvif.OnvifAuth(
-            secure_defaults.USERNAME, secure_defaults.credential(state_dir, "onvif"),
+            secure_defaults.username(state_dir, "onvif"), onvif_password,
             users=onvif_auth.directory,
         )
     if secure and not rtsp_user and not onvif_auth.directory.rtsp_require_auth \
@@ -759,6 +760,11 @@ def build(options: Options) -> Stack:
     north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry, bind_host=options.bind_host)
     north.web.onboarding = onboarding.Onboarding(
         host=options.host, control_port=options.control_port, cameras=options.cameras,
+        rtsp_port=stream.port, onvif_port=north.port,
+        rtsp_login=(rtsp_user, rtsp_password) if rtsp_user and rtsp_password else None,
+        onvif_login=(onvif_auth.username, onvif_auth.password)
+        if onvif_auth.username and onvif_auth.password else None,
+        state_dir=options.config_path.parent,
     )
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
