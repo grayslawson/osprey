@@ -6,6 +6,31 @@ of the GitHub release. See cliff.toml and CONTRIBUTING.md. The sections for
 0.9.0b1 to 0.9.0b3 were written by hand, before the notes came from git-cliff,
 and the 0.9.0b4 to 0.9.0b6 sections were rewritten by hand from the git-cliff output.
 
+## Unreleased
+
+### Assist
+- Survey labels with the shared library raptor-vision 0.2.0 (vendored in
+  `osprey/third_party/raptor_vision/`, so every install path needs no network).
+  A chat model now draws labelled outlines on each whole picture, with fallback
+  models tried in turn; a decisions model keeps labelling tiles. Recommended
+  `survey.label`: hy4-flash, then glm-5.3-flash, then ling-3.0-flash-vl (your
+  own gateway aliases; none is built in). With no model set, the rules still
+  label sky, foliage and glare.
+- The label list grows from 12 to 16: `sidewalk`, `porch`, `timestamp` and
+  `neighbour` are new. Stored maps still read.
+- Frigate zones are no longer a file to copy. Set `survey.frigate.writer` to
+  `osprey` and accept the "Frigate zones" proposal in the console: Osprey writes
+  the zones to Frigate with a backup, a version and lock check and a read-back.
+  Set it to `kestrel` and Kestrel fetches them from `GET /survey/frigate.json`.
+  The default, `off`, writes nothing. `frigate-suggestions.json` stays as a debug
+  file and the download link is gone.
+- Providers take a `private` key, as in raptor-vision.
+
+### Tests
+- A CI test runs the real zeep `UsernameToken` (what Frigate's ONVIF client
+  sends) against Osprey's ONVIF authentication, so the `+00:00` timestamp bug
+  fixed in #84 cannot come back. zeep is a test-only dependency.
+
 ## [0.9.0b6] - 2026-11-24
 
 ### Assist

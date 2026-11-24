@@ -14,13 +14,14 @@ const MODES = [["off", "Off"], ["observe", "Observe"], ["suggest", "Suggest"], [
 const COLORS = {
   door: "#e6503c", gate: "#f09628", driveway: "#788296", path: "#c8aa6e", street: "#505064", yard: "#6ebe5a",
   fence_line: "#be78c8", sky: "#5aaaf0", wall_eaves: "#a0a096", foliage: "#1e823c", glare_source: "#fff050", other: "#969696",
+  sidewalk: "#aaaabe", porch: "#d28c78", timestamp: "#ffffff", neighbour: "#78645a",
 };
 const LABEL = {
   door: "Door", gate: "Gate", driveway: "Driveway", path: "Path", street: "Street", yard: "Yard", fence_line: "Fence line",
-  sky: "Sky", wall_eaves: "Wall or eaves", foliage: "Foliage", glare_source: "Glare", other: "Other",
+  sky: "Sky", wall_eaves: "Wall or eaves", foliage: "Foliage", glare_source: "Glare", other: "Other", sidewalk: "Sidewalk", porch: "Porch", timestamp: "Clock text", neighbour: "Neighbour",
 };
 const STATE = { ready: "ok", partial: "warn", running: "warn", paused: "warn", analysing: "warn", queued: "warn", interrupted: "warn", failed: "bad", cancelled: "muted" };
-const PROP_TONE = { pending: "warn", applied: "ok", rejected: "muted", failed: "bad", reverted: "muted", expired: "muted", observed: "muted", written: "ok" };
+const PROP_TONE = { pending: "warn", applied: "ok", rejected: "muted", failed: "bad", reverted: "muted", expired: "muted", observed: "muted", written: "ok", offered: "ok" };
 
 const when = (ts) => new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
 const q = (cam_id, extra = "") => `?camera=${encodeURIComponent(cam_id)}${extra}`;
@@ -61,6 +62,8 @@ function Detail({ item, geo, map, camId, busy, run, onClose }) {
         <figcaption>What the panorama shows there. The camera may look a little different.</figcaption></figure>
       ${item.label ? html`<p>Interest ${Math.round((item.interest || 0) * 100)}%, zoom ${Math.round((item.zoom || 0) * 100)}%.</p>` : null}` : null}
     ${item.type === "night" ? html`<p>Glare drops from ${Math.round(item.glare_before * 100)}% to ${Math.round(item.glare_after * 100)}% of the picture. It is checked with a real picture before it is used.</p>` : null}
+    ${item.type === "frigate" ? html`<p>Osprey writes ${item.presets} preset${item.presets === 1 ? "" : "s"} of zones to Frigate when you accept. Frigate keeps a backup of its config first and the change is checked after.</p>
+      ${item.diff ? html`<pre class="muted">${item.diff}</pre>` : null}` : null}
     ${item.type === "route" ? html`<ol class="survey-route">${item.points.map((p) => html`<li key=${p.name}>${p.name}${p.dwell_sec ? `, ${Math.round(p.dwell_sec)} s` : ""}${(item.new || []).includes(p.name) ? " (new)" : ""}</li>`)}</ol>
       <p class="muted">${item.policy === "merge" ? "Your own stops keep their order. New ones go where they add the least travel." : "This replaces the whole route."}${item.enable ? " The patrol will be switched on." : ""}</p>` : null}
     <div class="row">
@@ -143,7 +146,8 @@ export function SurveyTab() {
   if (!status) return html`<p class="boot" role="status">Loading Survey…</p>`;
 
   const run_ = status.run;
-  const proposals = map ? map.proposals.filter((p) => p.type !== "frigate") : [];
+  // Frigate zones are a row to accept only when Osprey is the Frigate writer; otherwise Kestrel fetches them or nothing writes them.
+  const proposals = map ? map.proposals.filter((p) => p.type !== "frigate" || p.writer === "osprey") : [];
   const pendingList = proposals.filter((p) => p.status === "pending");
   const geo = map ? map.geometry : null;
   const route = proposals.filter((p) => p.type === "route").slice(-1)[0];
@@ -225,12 +229,11 @@ export function SurveyTab() {
         ${pendingList.length && modeNow !== "observe" ? html`<button type="button" class="primary" disabled=${busy || running}
           onClick=${() => run("apply", {}, "Applied.")}>Apply all</button>` : null}
         ${status.can_revert ? html`<button type="button" disabled=${busy || running} onClick=${() => run("revert", {}, "Reverted.")}>Revert last apply</button>` : null}
-        <a class="button" href=${pageUrl(`${BASE}/frigate.json${q(camId, `&kind=${kind}`)}`)} download="frigate-suggestions.json">Frigate suggestions</a>
       </div>`}>
       ${proposals.length ? html`<div class="table-wrap"><table>
         <thead><tr><th>What</th><th>Name</th><th>Why</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
         <tbody>${proposals.map((p) => html`<tr key=${p.id}>
-          <td>${p.type === "preset" ? (p.action === "reuse" ? "Existing preset" : "New preset") : p.type === "night" ? "Night view" : "Patrol route"}</td>
+          <td>${p.type === "preset" ? (p.action === "reuse" ? "Existing preset" : "New preset") : p.type === "night" ? "Night view" : p.type === "frigate" ? "Frigate zones" : "Patrol route"}</td>
           <td>${p.name || `${(p.points || []).length} stops`}</td><td>${p.reason || ""}</td>
           <td><${Badge} tone=${PROP_TONE[p.status] || "muted"}>${p.status}</${Badge}></td>
           <td><button type="button" aria-label=${`Details for ${p.name || p.type}`} onClick=${() => setOpen(p.id)}>Details</button></td></tr>`)}</tbody></table></div>`

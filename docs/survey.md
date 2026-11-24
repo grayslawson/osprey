@@ -25,14 +25,14 @@ the night map shows infrared glare.
 | Result | Where |
 |---|---|
 | A panorama of everything the camera can see, one for day and one for night | Survey tab |
-| Labelled regions: door, gate, driveway, path, street, yard, fence line, sky, wall or eaves, foliage, glare source | Survey tab, the overlay |
+| Labelled regions: door, gate, driveway, path, street, sidewalk, yard, porch, fence line, sky, wall or eaves, foliage, glare source, clock text, neighbour | Survey tab, the overlay |
 | An interest score for each region | Survey tab |
 | Preset proposals for the interesting regions, shown as pins | Survey tab |
 | A patrol route with the order and the dwell time at each stop | Survey tab, the path |
 | A night variant of any view that glares | A pin's detail |
-| Suggested Frigate zones and motion masks | `survey/frigate-suggestions.json` in Assist's state directory, and a download link |
+| PTZ zones for Frigate, one set per preset | A proposal you accept (writer `osprey`), or an API Kestrel reads (writer `kestrel`). See [Frigate zones](#frigate-zones) |
 
-Assist never edits Frigate. The Frigate file is a suggestion for you to copy from.
+Nothing is ever copied by hand: with no Frigate writer set, Survey proposes no Frigate change at all.
 
 ## Autonomy
 
@@ -114,39 +114,27 @@ where they overlap.
 
 ## Scene layer
 
-The parts of Survey that understand a picture are written so a fixed camera, or the Kestrel
-sidecar that proposes Frigate zones for any camera, can use them. This section is the shared
-contract. The code lives in `osprey/assist/` for now (`survey_understand.py`, `survey_map.py`,
-`providers.py`, `decide.py`); extraction into one library comes later, as one task.
+The parts of Survey that understand a picture are the shared library
+[raptor-vision](https://github.com/grayslawson/raptor-vision) (MIT), which Kestrel, the sidecar
+that proposes Frigate zones for any camera, uses too. Osprey carries its core, unchanged, in
+`osprey/third_party/raptor_vision/` (see the `VERSION` file there; refresh it with
+`scripts/sync-raptor-vision.sh vX.Y.Z`). It is copied in rather than installed so that every way
+of running Osprey (the image, the Home Assistant app, Nix, the PyPI wheel) works with no network.
+Only the standard library and Pillow are needed. The contract, in the library's own words:
 
-**Rules.** The scene layer imports nothing about PTZ, Frigate or Osprey's web API. It takes
-pictures with an opaque key and returns labelled regions and scores. It never decides to move
-a camera or write to an NVR.
+| Piece | In raptor-vision | What Osprey adds |
+|---|---|---|
+| Frame | `Frame(jpeg, width, height, kind, ts, key="")` | One per survey picture; `key` is the cell index |
+| Region | `Region(label, polygon, confidence, source, refined, note, extra)`, polygon in 0..1 of the frame; `extra` may hold `entry`, `closer` | `survey_map.LabelGrid.paint_regions` paints a region onto the 2-degree grid; `entry` and `closer` come from `extra` |
+| Labeller | `Labeller(task, provider).label(frame, labels=..., context=...)`. A chat model draws labelled polygons on the whole picture, trying the task's `fallback` models in turn; a decisions model labels the tiles of a grid; the rules floor names sky, foliage and glare. It never raises on a model failure. | `survey_understand.label_frame`: the grid for a decisions model, the rules fallback when a model gave nothing, a door or gate that a model drew counts as a way in, and a night tile that is 30 percent blown out is glare |
+| Labels | One vocabulary of 17 (`building` is `wall_eaves`) | The first twelve keep their old order, so stored label maps still read; `sidewalk`, `porch`, `timestamp` and `neighbour` come after |
+| Interest | `interest(label, entry, heat, model)` | Unchanged |
+| Providers and tasks | `ProviderConfig`, `TaskConfig` (`mode`, `provider`, `model`, `send_frames`, `min_confidence`, `threshold`, `fallback`) | `assist.providers` re-exports the library's; `decide.TaskConfig` adds `on_disagree` and `explain` |
+| Map store | `MapStore` | Osprey keeps its own SQLite `SurveyStore` (same contract) |
+| Frigate writer | `raptor_vision.frigate.Writer` | See [Frigate zones](#frigate-zones) |
 
-| Piece | Contract | Survey's implementation | Kestrel's |
-|---|---|---|---|
-| Frame source | `Frame(jpeg, width, height, kind, ts, key="")`. `kind` is `day` or `night`. `key` is opaque: Survey puts a cell and tile in it, Kestrel leaves it empty. | The sweep makes frames from PTZ cells | Frigate snapshots |
-| Region | `Region(label, polygon, confidence, source, refined=False, note="", extra={})`. `polygon` is a list of `(x, y)` in 0..1 of the frame. `source` is `chat:<model>`, `decider:<model>`, `rules`, `metrics` or `segmenter`. `extra` may hold `entry`, `closer` (0..1). | Tiles come back as four-point polygons; Survey maps them to degrees itself | Free polygons, snapped to edges |
-| Labeller | `label(frame, *, labels=LABELS, context="") -> list[Region]`. It never raises on a model failure: it returns what the rules found. | `label_tiles` (a grid of tiles, one decider or chat call each, run a few at a time, rules floor) | `label_with_chat`, `label_with_decider` |
-| Labels | One vocabulary. Each adapter passes the subset it uses with `labels=`. | The twelve in `survey_map.LABELS` | Its own list, see below |
-| Interest | `interest(label, entry, heat, model) -> float` in 0..1. `heat` is `None` or a 0..1 number the caller computes; the layer does not know where it comes from. | Frigate event heat by 10-degree block | Frigate event density |
-| Map store | A map is a JSON body plus named files (`panorama.jpg`, `labels.png`, `overlay.png`). `put(camera, kind, body, files)`, `latest(camera, kind)`, `read_file(map, name)`, with retention by count. | `SurveyStore` | Not needed until it keeps maps |
-| Provider config | `ProviderConfig` keys: `kind` (`chat` or `decisions`), `base_url`, `path`, `api_key_file`, `api_key_env`, `allow_frames`, `json_schema`, `timeout_sec`, `max_calls_per_hour`, `max_calls_per_day`, `headers`, `extra_body`. | `providers.py` | A near copy, plus `private` |
-| Task config | `{mode: rules\|model\|both, provider, model, send_frames, min_confidence}`. A task that sends frames needs `send_frames` and a provider with `allow_frames`. | `decide.TaskConfig` | Same keys |
-
-**Label vocabulary.** The union is: `door`, `gate`, `driveway`, `path`, `street`, `sidewalk`,
-`yard`, `porch`, `fence_line`, `sky`, `wall_eaves`, `building`, `foliage`, `glare_source`,
-`timestamp`, `neighbour`, `other`. Survey uses `door`, `gate`, `driveway`, `path`, `street`,
-`yard`, `fence_line`, `sky`, `wall_eaves`, `foliage`, `glare_source` and `other`. Kestrel uses
-its own subset. Its `building` is Survey's `wall_eaves`, and its `door` covers Survey's `gate`
-(it can say `gate` when it passes that label). The criteria sentence for each label is shared
-in one table so two systems describe `driveway` the same way to a model.
-
-**Open for Kestrel.** Survey labels tiles and merges them into regions on a degree grid, because
-a PTZ cell is only part of the scene. Kestrel labels whole frames and snaps model polygons to
-edges. Both fit `label(frame) -> list[Region]`: Survey's labeller is the tile grid, Kestrel's is
-polygons from chat plus the segmenter. The tile call in Survey and `label_with_decider` in
-Kestrel do the same job and should become one function.
+The scene layer imports nothing about PTZ, Frigate's events or Osprey's web API, and it never
+decides to move a camera.
 
 ## Data model
 
@@ -174,11 +162,27 @@ provider, because a model cannot label a picture it cannot see. The config check
 
 | Task | Question it answers | Per |
 |---|---|---|
-| `survey.label` | What is the main thing here, is it a way in, would a closer look help | Tile of a cell (4 by 3 by default) |
+| `survey.label` | What is where in this picture (a chat model draws polygons), or what is the main thing in this tile (a decisions model) | A whole picture, or a tile of it (4 by 3 by default) |
 | `survey.interest` | How much does a person care about this region, and what zoom frames it | Candidate region |
 | `survey.change` | Between the old and new map, what changed here | Changed block |
 
-`survey.label` on a decisions provider:
+**Recommended `survey.label`** (a chat provider, such as an OpenAI-compatible gateway; the model names are
+examples, use your own aliases). One call draws the whole picture, and a model that fails or draws nothing
+passes the picture to the next:
+
+```json
+"survey.label": {"mode": "model", "provider": "gw", "model": "hy4-flash", "send_frames": true,
+                 "min_confidence": 0.3,
+                 "fallback": [{"model": "glm-5.3-flash"}, {"model": "ling-3.0-flash-vl"}]}
+```
+
+In the 2026-11 drawing bake-off whole-picture polygons from a cheap vision model beat every tile grid
+and box design, at about $0.0001 a picture ([numbers](https://github.com/grayslawson/raptor-vision/blob/main/docs/bakeoff-2026-11.md)).
+No model name is built in. With no model set the rules label what they can and the rest stays `unknown`: Survey
+still works, with fewer labels. A decisions provider keeps the tile grid (`survey.tiles`); a chat provider ignores it.
+The model must be a vision model. Check what a gateway sends where: a picture goes only to a provider with `allow_frames`.
+
+`survey.label` on a decisions provider (one call per tile):
 
 ```
 state:     [ text, image ]
@@ -191,19 +195,21 @@ questions: kind    choice  "What is the main thing in this part of the picture?"
            closer  noul    "Would a closer view help to tell what this is?"
 ```
 
-On a chat provider the same asks come back as one JSON object `{label, confidence, entry,
-closer}` that Assist validates against the label list. An answer is used only when the label
-is in the list and its probability is at least the task's `min_confidence`; otherwise the
-tile is `unknown` and the rules label it. A reply that fails validation is logged and ignored.
+A tile answer is used only when the label is in the list and its probability is at least the task's
+`min_confidence`; otherwise the tile is `unknown` and the rules label it. A drawn polygon below
+`min_confidence`, or with fewer than three usable points, is dropped. A reply that fails validation is logged
+and ignored. Models often answer in thousandths or pixels instead of fractions; the library reads those too.
+A chat model gives no `entry` answer, so a door or gate it draws counts as a way in with its own confidence.
 
 Rules, the cheap first pass that also backs up the models: sky (bright, smooth, upper
 half), foliage (green, high texture), glare (a hot cluster on the night map), and plain
 `unknown` for the rest. They are not a substitute for a model, only a floor.
 
 Calls run a few at a time (`model_concurrency`), count against the provider's hourly and
-daily limits, and a survey that would pass them labels the most promising tiles first and
-leaves the rest to the rules. Raise `max_calls_per_hour` for the provider: a 24-cell survey
-makes about 290 label calls and a few dozen more for the zoom-ins.
+daily limits, and a survey that would pass them leaves the rest of its pictures to the rules. Pictures
+are labelled in the order of the sweep, not by promise. A decisions provider makes about 290 label calls
+for a 24-cell survey and a few dozen more for the zoom-ins, so raise `max_calls_per_hour` for it; a chat
+provider makes one call per picture (about 30 for the same survey), more when a fallback model is used.
 
 ## Interest
 
@@ -239,9 +245,33 @@ so the dwell weights follow what really happens.
   of the range away, for the nearest place where the glare falls by half. That uses the
   panorama, so the camera does not move. A proposal is named `<Name>Night`, and applying it
   is checked with a real picture before the patrol uses it.
-- **Frigate suggestions.** For each stop, rectangles in Frigate's coordinates for zones (door,
-  gate, driveway, path, street) and for motion masks (sky, foliage, and glare at night), with a
-  note that zones are only right at the preset they were drawn for.
+- **Frigate zones.** For each stop, the rectangles in Frigate's coordinates for zones (door, gate,
+  driveway, path, street). They are right only at the preset they were drawn for. See below.
+
+## Frigate zones
+
+One writer per Frigate. `survey.frigate.writer` says who:
+
+| `writer` | What happens |
+|---|---|
+| `off` (default) | Nothing is proposed to Frigate. Survey still reads Frigate's events for heat. |
+| `osprey` | Each survey adds a **Frigate zones** proposal. You accept it in the Survey tab; Osprey then writes the zones through raptor-vision's Frigate writer. It needs `survey.frigate.camera`, the camera's name in Frigate, and for Frigate's admin API an `api_key_file` if auth is on. |
+| `kestrel` | Osprey does not write. Kestrel fetches the zones from `GET /api/v1/assist/survey/frigate.json?camera=<id>&kind=day` (same bearer token as the rest of Assist's API) and writes them, with the camera's presets for switching sets. |
+
+With `osprey`, the writer reads Frigate first and refuses anything it should not do: an unsupported Frigate
+version (0.17 and 0.18 only), a zone or camera that is locked (a name ending `_locked`, or `[locked]` in
+its friendly name), a zone it did not create, or a config that changed between the preview and the write.
+It creates zones named `rv_<preset>_<label>` only, saves a backup of Frigate's config to `frigate-backups/`
+in Assist's state directory, writes with Frigate's own config API, reads it back, and undoes the write itself if
+the read-back differs. The proposal shows what will change before you accept. **Apply all** and the `auto`
+level never write to Frigate; only accepting that one proposal does. Zones are per camera in Frigate, not per
+preset, so accept the set for the preset the camera rests at until Kestrel switches sets by preset.
+Motion masks are not written by Osprey; Kestrel owns them.
+
+`GET /survey/frigate.json` returns `{camera, map, writer, note, presets: {<preset name>: {position:
+{pan, tilt, zoom}, zones: {<label>: {coordinates: "x1,y1,x2,y2,..."}}, motion_masks: ["x1,y1,..."]}}}`,
+coordinates as fractions of the picture. `survey/frigate-suggestions.json` in the state directory is the
+same data kept as a debug artefact; nothing asks you to use it.
 
 ## Learning
 
@@ -269,7 +299,7 @@ so the dwell weights follow what really happens.
 | A snapshot fails or is black | Retry once, then a gap in the panorama. Three gaps in a row end the run. |
 | Osprey is unreachable | Three misses in a row end the run as `failed`. The patrol hold expires by itself. |
 | Day turns to night mid-run | The run ends as `failed: the scene changed`. Start another. A map never mixes day and night. |
-| A model errors, is slow or is over budget | That tile uses the rules label. The run goes on. |
+| A model errors, is slow or is over budget | A chat model's fallbacks are tried, then the rules label what they can. The run goes on. |
 | A model answer is not in the label list | Logged and ignored. |
 | Assist restarts | A `running` or `paused` run becomes `interrupted` and can be resumed. |
 | Move or time budget used up | The run stops as `partial`, builds a map from what it has, and says which part is missing. |
@@ -302,7 +332,7 @@ Every key in the `survey` block of `osprey-assist.json`. Unknown keys are an err
 |---|---|---|
 | `overlap` | `0.25` | Share of each picture shared with its neighbour. 0.15 to 0.6. |
 | `wide_zoom` | `0` | Zoom for the sweep. |
-| `tiles` | `[4, 3]` | Label tiles per cell, across and down. |
+| `tiles` | `[4, 3]` | Label tiles per cell, across and down, for a decisions model and for the rules floor. A chat model draws the whole picture. |
 | `max_zoom_ins`, `zoom_in_max` | `8`, `0.7` | How many closer looks, and how far in. |
 | `settle_sec`, `zoom_settle_sec` | `2`, `4` | Wait after a move, and after a zoom change. |
 | `max_moves`, `max_minutes` | `120`, `25` | Budgets for one survey. |
@@ -318,7 +348,7 @@ Every key in the `survey` block of `osprey-assist.json`. Unknown keys are an err
 | `projection` | `rectilinear` | `linear` if the lens is already flat. |
 | `fov` | none | `{pan_degrees, tilt_degrees, wide: [h, v], tele: [h, v]}` for an uncalibrated camera. |
 | `schedule` | weekly | `{"day": "11:00", "night": "02:00", "every_days": 7}`, or `null` for none. |
-| `frigate` | none | `{url, camera, api_key_file, lookback_days, refresh_min, half_life_days}`. |
+| `frigate` | none | `{url, camera, api_key_file, lookback_days, refresh_min, half_life_days, writer}`. `writer` is `off`, `osprey` or `kestrel`. |
 
 ## Structure
 
