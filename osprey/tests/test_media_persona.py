@@ -168,10 +168,10 @@ def test_a_persona_must_be_a_boring_token() -> None:
 def test_the_two_personas_are_announced_in_one_datagram() -> None:
     """Two ProbeMatches must fit a 1500-byte MTU, or they get fragmented."""
     primary = discovery.identity_for(
-        host="192.168.1.2", port=8000, path=onvif.DEVICE_PATH, name="front gate", ptz=True
+        host="192.0.2.2", port=8000, path=onvif.DEVICE_PATH, name="front gate", ptz=True
     )
     media = discovery.identity_for(
-        host="192.168.1.2", port=8001, path=onvif.DEVICE_PATH,
+        host="192.0.2.2", port=8001, path=onvif.DEVICE_PATH,
         name="front gate (media)", ptz=False,
     )
     reply = discovery.probe_match(
@@ -184,7 +184,7 @@ def test_the_two_personas_are_announced_in_one_datagram() -> None:
 def test_one_persona_still_gets_the_full_standard_message() -> None:
     """Nothing is given up unless it has to be."""
     primary = discovery.identity_for(
-        host="192.168.1.2", port=8000, path=onvif.DEVICE_PATH, name="front gate", ptz=True
+        host="192.0.2.2", port=8000, path=onvif.DEVICE_PATH, name="front gate", ptz=True
     )
     reply = discovery.probe_match(
         (primary,), "urn:uuid:12345678-1234-1234-1234-123456789abc"
@@ -196,10 +196,10 @@ def test_one_persona_still_gets_the_full_standard_message() -> None:
 
 def test_the_hello_of_two_personas_also_fits_one_datagram() -> None:
     primary = discovery.identity_for(
-        host="192.168.1.2", port=8000, path=onvif.DEVICE_PATH, name="front gate", ptz=True
+        host="192.0.2.2", port=8000, path=onvif.DEVICE_PATH, name="front gate", ptz=True
     )
     media = discovery.identity_for(
-        host="192.168.1.2", port=8001, path=onvif.DEVICE_PATH,
+        host="192.0.2.2", port=8001, path=onvif.DEVICE_PATH,
         name="front gate (media)", ptz=False,
     )
     hello = discovery.announcement((primary, media))
@@ -210,11 +210,11 @@ def test_the_hello_of_two_personas_also_fits_one_datagram() -> None:
 def test_a_long_camera_name_still_fits_one_datagram() -> None:
     """A long name must not push the reply into IP fragments."""
     primary = discovery.identity_for(
-        host="192.168.1.2", port=8000, path=onvif.DEVICE_PATH,
+        host="192.0.2.2", port=8000, path=onvif.DEVICE_PATH,
         name="Front Yard Driveway Camera 4K", ptz=True, hardware="Osprey UniFi G5 PTZ Camera",
     )
     media = discovery.identity_for(
-        host="192.168.1.2", port=8001, path=onvif.DEVICE_PATH,
+        host="192.0.2.2", port=8001, path=onvif.DEVICE_PATH,
         name="Front Yard Driveway Camera 4K (media)", ptz=False,
         hardware="Osprey UniFi G5 PTZ Camera",
     )
@@ -228,12 +228,12 @@ def test_a_long_camera_name_still_fits_one_datagram() -> None:
 def test_the_hardware_scope_is_given_up_before_the_message_is_fragmented() -> None:
     """The hardware scope only repeats the model, which the device reports itself."""
     primary = discovery.identity_for(
-        host="192.168.1.2", port=8000, path=onvif.DEVICE_PATH,
+        host="192.0.2.2", port=8000, path=onvif.DEVICE_PATH,
         name="a very long camera name indeed", ptz=True,
         hardware="Osprey UniFi G5 PTZ Camera with a long model name",
     )
     media = discovery.identity_for(
-        host="192.168.1.2", port=8001, path=onvif.DEVICE_PATH,
+        host="192.0.2.2", port=8001, path=onvif.DEVICE_PATH,
         name="a very long camera name indeed (media)", ptz=False,
         hardware="Osprey UniFi G5 PTZ Camera with a long model name",
     )
