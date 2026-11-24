@@ -95,6 +95,29 @@ removal, so it stays removed even if `osprey.json` still lists it.
 
 To hand a camera back to `osprey.json`, delete its entry from `sentry.json`.
 
+## A different view at night
+
+A point can name a `night_preset`. While the camera reports `NIGHT` (its
+`EventIspSceneStatus`), the patrol visits that preset instead of the point's own.
+Use it when the normal view blooms in infrared, for example a wall or gutter next
+to the camera that the camera's own IR lights up:
+
+```json
+{"points": [{"name": "BackPorch", "dwell_sec": 20, "night_preset": "BackPorchNight"}, {"name": "home"}]}
+```
+
+- If the night preset does not exist, or the camera refuses it, the point's normal
+  preset is used, so a typo never stops the patrol.
+- A day/night change must hold for 2 minutes before the patrol switches views, so a
+  flickering scene state does not thrash the head. The state is read when a move is
+  due, so a switch takes effect on the first move after the 2 minutes.
+- The scene state comes from the camera. The camera's IR level is not adjustable on
+  the G5 PTZ (the camera accepts `irLedLevel` but the image does not change), which is
+  why a different view is the lever.
+- Points without a `night_preset` behave as before, and the field is accepted by the
+  config file, the REST API and MQTT. The console keeps it when you edit a patrol but
+  does not yet show it.
+
 ## Frigate zones and autotracking
 
 Frigate zones are drawn in frame coordinates. A zone named `yard` covers part

@@ -63,6 +63,7 @@ function draftFrom(config) {
     points: (source.points || []).map((point) => ({
       name: point.name,
       dwell_sec: point.dwell_sec === null || point.dwell_sec === undefined ? "" : String(point.dwell_sec),
+      night_preset: point.night_preset || "", // kept through edits; set it via the API or config
     })),
   };
 }
@@ -75,6 +76,7 @@ function buildPayload(draft, enabled) {
     const name = point.name.trim();
     if (!name) return { error: `Patrol position ${index + 1} needs a name.` };
     const entry = { name };
+    if (point.night_preset) entry.night_preset = point.night_preset;
     if (point.dwell_sec !== "") {
       const dwell = Number(point.dwell_sec);
       if (!Number.isFinite(dwell) || dwell < 1) {

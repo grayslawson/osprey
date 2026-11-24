@@ -107,7 +107,9 @@ class SentryManager:
         gate: MovementGate | None = None,
         preset_names: Callable[[str], list[str]] | None = None,
         store: SentryStore | None = None,
+        is_night: Callable[[str], bool] | None = None,
     ) -> None:
+        self._is_night = is_night
         self._goto_preset = goto_preset
         self._tracking_active = tracking_active
         self._camera_idle = camera_idle
@@ -164,6 +166,7 @@ class SentryManager:
                 camera_idle=camera_idle,
                 gate=self.gate,
                 camera_key=camera,
+                is_night=(lambda: is_night(camera)) if (is_night := self._is_night) else None,
             )
             self._runtimes[camera] = runtime
             runtime.start()

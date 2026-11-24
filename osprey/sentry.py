@@ -27,6 +27,9 @@ import arbitration
 log = logging.getLogger("osprey.sentry")
 
 MIN_INTERVAL_SEC: Final = 1.0
+# A day/night change must persist this long before the patrol switches views, so
+# a flickering scene state cannot thrash the head.
+NIGHT_HOLD_SEC: Final = 120.0
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,9 @@ class PatrolPoint:
 
     name: str
     dwell_sec: float | None = None
+    # Preset to visit instead of ``name`` while the camera reports NIGHT, e.g. a
+    # view that avoids IR bounce off a nearby wall. Missing preset: ``name`` is used.
+    night_preset: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,8 @@ class SentryPatrol:
     camera_idle: Callable[[], bool]
     interval_sec: float = 30.0
     movement_lease: Callable[[], ContextManager[object]] | None = None
+    is_night: Callable[[], bool] | None = None
+    night_hold_sec: float = NIGHT_HOLD_SEC
     on_status: Callable[[SentrySnapshot], None] | None = None
     _points: list[PatrolPoint] = field(default_factory=list, init=False)
     _enabled: bool = field(default=False, init=False)
@@ -83,6 +91,8 @@ class SentryPatrol:
     _point: str | None = field(default=None, init=False)
     _last_error: str | None = field(default=None, init=False)
     _moves: int = field(default=0, init=False)
+    _night: bool = field(default=False, init=False)
+    _night_changed_at: float | None = field(default=None, init=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
@@ -101,7 +111,8 @@ class SentryPatrol:
             if dwell < MIN_INTERVAL_SEC:
                 raise ValueError(f"dwell must be at least {MIN_INTERVAL_SEC:g} seconds")
             names.add(name.casefold())
-            clean.append(PatrolPoint(name, dwell))
+            night = point.night_preset.strip() if point.night_preset else None
+            clean.append(PatrolPoint(name, dwell, night or None))
         with self._lock:
             self._points = clean
             self._index = 0
@@ -139,6 +150,19 @@ class SentryPatrol:
                 self._last_error, self._moves,
             )
 
+    def _night_now(self, clock: float) -> bool:
+        """The scene state, switched only after it has held for ``night_hold_sec``."""
+        if self.is_night is None:
+            return False
+        raw = bool(self.is_night())
+        if self._night_changed_at is None:  # first reading is taken as is
+            self._night, self._night_changed_at = raw, clock
+        elif raw != self._night and clock - self._night_changed_at >= self.night_hold_sec:
+            self._night, self._night_changed_at = raw, clock
+        elif raw == self._night:
+            self._night_changed_at = clock  # a blip back resets the pending change
+        return self._night
+
     def step(self, *, now: float | None = None) -> bool:
         """Run one due patrol decision; return True only when a move was sent."""
         clock = time.monotonic() if now is None else now
@@ -168,7 +192,13 @@ class SentryPatrol:
                         return False
                     token = arbitration.source.set(arbitration.PATROL)  # a patrol yields to people
                     try:
-                        accepted = self.goto_preset(point.name)
+                        wanted = [point.name]
+                        if point.night_preset and self._night_now(clock):
+                            wanted.insert(0, point.night_preset)  # a refused night view falls back
+                        for target in wanted:
+                            accepted = self.goto_preset(target)
+                            if accepted:
+                                break
                     finally:
                         arbitration.source.reset(token)
             except BlockingIOError:
@@ -187,7 +217,7 @@ class SentryPatrol:
                 self._publish()
                 return False
             self._last_error = None
-            self._point = point.name
+            self._point = target
             self._moves += 1
             self._index = (self._index + 1) % len(self._points)
             dwell = point.dwell_sec if point.dwell_sec is not None else self.interval_sec

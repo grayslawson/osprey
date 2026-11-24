@@ -271,7 +271,7 @@ def _sentry_points(value: Any, name: str) -> list[dict[str, Any]]:
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             raise ValueError(f'"{name}[{index}]" must be an object')
-        unknown = set(item) - {"name", "dwell_sec"}
+        unknown = set(item) - {"name", "dwell_sec", "night_preset"}
         if unknown:
             raise ValueError(
                 f'"{name}[{index}]" has unknown keys: {", ".join(sorted(unknown))}'
@@ -288,7 +288,13 @@ def _sentry_points(value: Any, name: str) -> list[dict[str, Any]]:
             None if dwell_raw is None
             else _sentry_number(dwell_raw, f'"{name}[{index}].dwell_sec"', 1.0, 86400.0)
         )
-        points.append({"name": point_name.strip(), "dwell_sec": dwell})
+        night = item.get("night_preset")
+        if night is not None and (not isinstance(night, str) or not night.strip()):
+            raise ValueError(f'"{name}[{index}].night_preset" must be a non-empty string')
+        points.append({
+            "name": point_name.strip(), "dwell_sec": dwell,
+            **({"night_preset": night.strip()} if night else {}),
+        })
     return points
 
 

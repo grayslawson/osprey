@@ -133,3 +133,13 @@ def test_gate_rejects_a_second_holder_of_the_same_camera() -> None:
             with gate.lease("manual", "camera-a"):
                 pass
     assert gate.snapshot()["rejected"] == 1
+
+
+def test_night_preset_parses_and_round_trips() -> None:
+    from sentry_runtime import SentryConfig
+
+    config = SentryConfig.from_mapping({"points": [{"name": "porch", "night_preset": " porch-night "}, {"name": "home"}]})
+    assert config.points[0].night_preset == "porch-night"
+    assert config.as_dict()["points"] == [{"name": "porch", "night_preset": "porch-night"}, {"name": "home"}]
+    with pytest.raises(ValueError):
+        SentryConfig.from_mapping({"points": [{"name": "porch", "night_preset": ""}]})
