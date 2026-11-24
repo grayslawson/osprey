@@ -131,7 +131,7 @@ def test_the_http_api_needs_the_token_and_drives_the_loop(stack: Stack) -> None:
     decision = stack.warm_and_detect()
     status, body = stack.call("GET", "/status")
     assert status == 200 and body["pending"] == 1 and body["capabilities"]["quality"]["mode"] == "suggest"
-    assert body["implemented"] == ["quality"] and "budgets" in body
+    assert body["implemented"] == ["quality", "survey"] and "budgets" in body
     status, body = stack.call("GET", "/decisions?status=pending&limit=5")
     assert status == 200 and [d["id"] for d in body["decisions"]] == [decision]
     first = body["decisions"][0]

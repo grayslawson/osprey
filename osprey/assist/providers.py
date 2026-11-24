@@ -20,7 +20,7 @@ from typing import Any
 
 _KEYS = {
     "kind", "base_url", "path", "api_key_file", "api_key_env", "allow_frames",
-    "json_schema", "timeout_sec", "max_calls_per_hour", "max_calls_per_day", "headers",
+    "json_schema", "timeout_sec", "max_calls_per_hour", "max_calls_per_day", "headers", "extra_body",
 }
 _DEFAULT_PATH = {"chat": "/chat/completions", "decisions": "/decisions"}
 
@@ -90,6 +90,7 @@ class ProviderConfig:
     max_calls_per_hour: int = 120
     max_calls_per_day: int = 2000
     headers: dict[str, str] = field(default_factory=dict)
+    extra_body: dict[str, Any] = field(default_factory=dict)   # merged into every request, e.g. OpenRouter provider.data_collection
 
 
 def _bool(name: str, key: str, v: object) -> bool:
@@ -136,7 +137,11 @@ def parse_provider(name: str, raw: dict[str, Any]) -> ProviderConfig:
         raise ValueError(f"provider {name}: headers must map strings to strings")
     if any(k.lower() in ("authorization", "proxy-authorization") for k in headers):
         raise ValueError(f"provider {name}: headers must not carry auth")
+    extra = raw.get("extra_body", {})
+    if not isinstance(extra, dict):
+        raise ValueError(f"provider {name}: extra_body must be an object")
     return ProviderConfig(
+        extra_body=dict(extra),
         kind=kind, base_url=base.rstrip("/"), path=path,
         api_key_file=strs["api_key_file"], api_key_env=strs["api_key_env"],
         allow_frames=_bool(name, "allow_frames", raw.get("allow_frames", False)),
@@ -183,7 +188,7 @@ class _Base:
         if key:
             headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(
-            self.cfg.base_url + self.cfg.path, data=json.dumps(body).encode(), headers=headers, method="POST",
+            self.cfg.base_url + self.cfg.path, data=json.dumps({**self.cfg.extra_body, **body}).encode(), headers=headers, method="POST",
         )
         t0 = time.monotonic()
         try:

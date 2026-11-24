@@ -240,3 +240,14 @@ def test_the_model_budget_leaves_the_rest_to_the_rules(tmp_path: Path) -> None:
         finally:
             rig.close()
     assert time.time() > 0
+
+
+def test_extra_body_is_sent_with_every_model_request(tmp_path: Path) -> None:
+    with StubModels(decisions_reply=decisions_reply) as models:
+        cfg = acfg.parse({"providers": {"gw": {"kind": "decisions", "base_url": models.url,
+                                               "extra_body": {"provider": {"data_collection": "deny"}}}}})
+        from assist.providers import DecisionsProvider
+        DecisionsProvider("gw", cfg.providers["gw"]).decide("m", ["x"], {"q": {"type": "noul", "instructions": "?"}})
+        assert models.requests[0]["json"]["provider"] == {"data_collection": "deny"} and models.requests[0]["json"]["model"] == "m"
+    with pytest.raises(ValueError, match="extra_body"):
+        acfg.parse({"providers": {"gw": {"kind": "decisions", "base_url": "http://x", "extra_body": 3}}})

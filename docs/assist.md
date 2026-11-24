@@ -174,6 +174,9 @@ A provider is one of two kinds:
 }
 ```
 
+A provider can also carry `extra_body`, an object merged into every request, for example
+`{"provider": {"data_collection": "deny"}}` for OpenRouter.
+
 A picture leaves the machine only when the provider has `allow_frames: true` and
 the task has `send_frames: true`. A private address does not count: a gateway on
 your LAN can forward to a cloud model. Without both, the model sees only numbers

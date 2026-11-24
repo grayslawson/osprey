@@ -100,17 +100,16 @@ def test_start_sets_will_subscribes_and_goes_online() -> None:
 def test_discovery_payloads() -> None:
     _, ad, _, _ = make()
     cfgs = {t: json.loads(p) for t, p, r in ad.pubs if t.startswith("homeassistant/") and r}
-    assert len(cfgs) == 11
+    assert len(cfgs) == 17
     comps = sorted(t.split("/")[1] for t in cfgs)
-    assert comps == ["button", "button", "event", "image", "image", "select", "sensor", "sensor", "sensor",
-                     "sensor", "switch"]
+    assert comps == ["button"] * 4 + ["event", "image", "image", "select", "select"] + ["sensor"] * 7 + ["switch"]
     uids = set()
     for t, c in cfgs.items():
         assert c["availability_topic"] == f"{P}/availability"
         assert c["device"]["identifiers"] == ["osprey_cam1_assist"]
         assert t.endswith("/config") and c["unique_id"].startswith("osprey_cam1_assist_")
         uids.add(c["unique_id"])
-    assert len(uids) == 11
+    assert len(uids) == 17
     sw = cfgs["homeassistant/switch/osprey_cam1_assist/enabled/config"]
     assert sw["command_topic"] == f"{P}/command/enabled" and sw["state_topic"] == f"{P}/state/enabled"
     sel = cfgs["homeassistant/select/osprey_cam1_assist/quality_mode/config"]

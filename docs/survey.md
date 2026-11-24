@@ -112,6 +112,42 @@ a closer look. It frames each so the region fills about 70% of the picture, neve
 `zoom_in_max` (0.7), and labels the closer picture again. Closer labels override wide ones
 where they overlap.
 
+## Scene layer
+
+The parts of Survey that understand a picture are written so a fixed camera, or the Kestrel
+sidecar that proposes Frigate zones for any camera, can use them. This section is the shared
+contract. The code lives in `osprey/assist/` for now (`survey_understand.py`, `survey_map.py`,
+`providers.py`, `decide.py`); extraction into one library comes later, as one task.
+
+**Rules.** The scene layer imports nothing about PTZ, Frigate or Osprey's web API. It takes
+pictures with an opaque key and returns labelled regions and scores. It never decides to move
+a camera or write to an NVR.
+
+| Piece | Contract | Survey's implementation | Kestrel's |
+|---|---|---|---|
+| Frame source | `Frame(jpeg, width, height, kind, ts, key="")`. `kind` is `day` or `night`. `key` is opaque: Survey puts a cell and tile in it, Kestrel leaves it empty. | The sweep makes frames from PTZ cells | Frigate snapshots |
+| Region | `Region(label, polygon, confidence, source, refined=False, note="", extra={})`. `polygon` is a list of `(x, y)` in 0..1 of the frame. `source` is `chat:<model>`, `decider:<model>`, `rules`, `metrics` or `segmenter`. `extra` may hold `entry`, `closer` (0..1). | Tiles come back as four-point polygons; Survey maps them to degrees itself | Free polygons, snapped to edges |
+| Labeller | `label(frame, *, labels=LABELS, context="") -> list[Region]`. It never raises on a model failure: it returns what the rules found. | `label_tiles` (a grid of tiles, one decider or chat call each, run a few at a time, rules floor) | `label_with_chat`, `label_with_decider` |
+| Labels | One vocabulary. Each adapter passes the subset it uses with `labels=`. | The twelve in `survey_map.LABELS` | Its own list, see below |
+| Interest | `interest(label, entry, heat, model) -> float` in 0..1. `heat` is `None` or a 0..1 number the caller computes; the layer does not know where it comes from. | Frigate event heat by 10-degree block | Frigate event density |
+| Map store | A map is a JSON body plus named files (`panorama.jpg`, `labels.png`, `overlay.png`). `put(camera, kind, body, files)`, `latest(camera, kind)`, `read_file(map, name)`, with retention by count. | `SurveyStore` | Not needed until it keeps maps |
+| Provider config | `ProviderConfig` keys: `kind` (`chat` or `decisions`), `base_url`, `path`, `api_key_file`, `api_key_env`, `allow_frames`, `json_schema`, `timeout_sec`, `max_calls_per_hour`, `max_calls_per_day`, `headers`, `extra_body`. | `providers.py` | A near copy, plus `private` |
+| Task config | `{mode: rules\|model\|both, provider, model, send_frames, min_confidence}`. A task that sends frames needs `send_frames` and a provider with `allow_frames`. | `decide.TaskConfig` | Same keys |
+
+**Label vocabulary.** The union is: `door`, `gate`, `driveway`, `path`, `street`, `sidewalk`,
+`yard`, `porch`, `fence_line`, `sky`, `wall_eaves`, `building`, `foliage`, `glare_source`,
+`timestamp`, `neighbour`, `other`. Survey uses `door`, `gate`, `driveway`, `path`, `street`,
+`yard`, `fence_line`, `sky`, `wall_eaves`, `foliage`, `glare_source` and `other`. Kestrel uses
+its own subset. Its `building` is Survey's `wall_eaves`, and its `door` covers Survey's `gate`
+(it can say `gate` when it passes that label). The criteria sentence for each label is shared
+in one table so two systems describe `driveway` the same way to a model.
+
+**Open for Kestrel.** Survey labels tiles and merges them into regions on a degree grid, because
+a PTZ cell is only part of the scene. Kestrel labels whole frames and snaps model polygons to
+edges. Both fit `label(frame) -> list[Region]`: Survey's labeller is the tile grid, Kestrel's is
+polygons from chat plus the segmenter. The tile call in Survey and `label_with_decider` in
+Kestrel do the same job and should become one function.
+
 ## Data model
 
 Everything is in Assist's own state directory. SQLite holds the records and the files hold the
@@ -286,11 +322,9 @@ Every key in the `survey` block of `osprey-assist.json`. Unknown keys are an err
 
 ## Structure
 
-The scene-understanding code does not know about pan and tilt: frame sources hand it pictures
-with an opaque location tag, and it hands back labelled regions, interest scores and maps.
+The scene-understanding code does not know about pan and tilt: see [Scene layer](#scene-layer).
 `survey_plan` (PTZ geometry), `survey_run` (the sweep) and the client are the only parts that
-move a camera. The model layer, label tasks, interest scoring and map storage are written so
-a fixed camera, or a sidecar that proposes Frigate zones for any camera, can reuse them.
+move a camera.
 
 ## Core changes
 
