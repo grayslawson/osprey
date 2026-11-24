@@ -16,7 +16,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 _KEYS = {
     "kind", "base_url", "path", "api_key_file", "api_key_env", "allow_frames",
@@ -164,10 +164,37 @@ def _int_or_none(v: object) -> int | None:
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+_CAP_MARKERS: Final = ("no deployments available", "budget", "quota", "credits")
+
+
 class _Base:
     def __init__(self, name: str, cfg: ProviderConfig, clock: Callable[[], float] = time.time) -> None:
         self.name, self.cfg = name, cfg
         self.budget = Budget(cfg.max_calls_per_hour, cfg.max_calls_per_day, clock)
+        self._clock = clock
+        # Per-model cooldown, so a capped or rate-limited route is not called again on every check:
+        # a cap or budget answer waits for the next UTC day, other 429/5xx back off 60 s doubling to 1 h.
+        self._cool: dict[str, tuple[float, float]] = {}  # model -> (until, last backoff seconds)
+        self._cool_lock = threading.Lock()
+
+    def _cooling(self, model: str) -> bool:
+        with self._cool_lock:
+            until = self._cool.get(model, (0.0, 0.0))[0]
+        return self._clock() < until
+
+    def _note(self, model: str, status: int | None, text: str) -> None:
+        now = self._clock()
+        with self._cool_lock:
+            if status is None or status < 400:
+                self._cool.pop(model, None)
+                return
+            capped = status == 402 or any(m in text.lower() for m in _CAP_MARKERS)
+            if capped and status in (400, 402, 403, 429):
+                self._cool[model] = (now - now % 86400 + 86400, 0.0)
+            elif status == 429 or status >= 500:
+                last = self._cool.get(model, (0.0, 0.0))[1]
+                wait = min(3600.0, last * 2 if last else 60.0)
+                self._cool[model] = (now + wait, wait)
 
     def _key(self) -> str | None:
         try:
@@ -180,6 +207,9 @@ class _Base:
         return None
 
     def _post(self, body: dict[str, Any]) -> tuple[dict[str, Any], float]:
+        model = str(body.get("model", ""))
+        if self._cooling(model):
+            raise ProviderError("cooling down")
         if not self.budget.allow():
             raise ProviderError("budget")
         self.budget.record()
@@ -195,9 +225,15 @@ class _Base:
             with urllib.request.urlopen(req, timeout=self.cfg.timeout_sec) as r:  # noqa: S310 - scheme validated
                 raw = r.read()
         except urllib.error.HTTPError as exc:
+            try:
+                text = exc.read(2048).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 - the body is only a hint
+                text = ""
+            self._note(model, exc.code, text)
             raise ProviderError(f"http {exc.code}") from None
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ProviderError(f"network: {type(exc).__name__}") from None
+        self._note(model, None, "")
         ms = (time.monotonic() - t0) * 1000
         try:
             obj = json.loads(raw)
