@@ -188,6 +188,38 @@ The decisions path is the one a gateway exposes. The request body follows
 OpenRouter's alpha decisions API. It has been checked against a stub and against
 how other code in this setup calls the API, not against every decision model.
 
+### One model per question
+
+A bake-off on real G5 frames found that no one model is best at everything, and that a decision
+model beats the local rules for glare and blur. So glare, blur and the choice of fix are separate
+tasks, each with its own model, threshold and fallbacks:
+
+```json
+{
+  "tasks": {
+    "quality.glare":  {"mode": "model", "provider": "gateway", "model": "typesafe/jev-1.13", "threshold": 0.57,
+                       "send_frames": true, "fallback": [{"model": "perplexity/pplx-decider-v1.3:free", "threshold": 0.37}]},
+    "quality.blur":   {"mode": "model", "provider": "gateway", "model": "perplexity/pplx-decider-flash-v1.3:free",
+                       "threshold": 0.6, "send_frames": true, "fallback": [{"model": "liquid/d1.2-ultra", "threshold": 0.5}]},
+    "quality.action": {"mode": "model", "provider": "gateway", "model": "cloudflare/clef-flash", "send_frames": true}
+  }
+}
+```
+
+- The glare and blur models answer a yes or no, and the answer counts when its probability reaches
+  `threshold`. Probabilities are not comparable between models, so every model has its own number.
+  If a model fails, the next in `fallback` is asked, and if all fail the rules decide.
+- A model that answers instead of a rule overrules the rule: a glare rule that fires on a frame the
+  model calls clean does not start a suggestion. Exposure and noise stay with the rules, because the
+  decision models over-called them on ordinary night infrared frames.
+- `quality.action` picks the fix from a list. If it says nothing is worth doing, or to wait because the
+  camera is moving, Assist logs the problem and proposes no change. Otherwise it picks the matching
+  step of the usual order for that problem.
+- After a change, the same glare or blur model scores the before and after pictures, and the change counts as
+  better when the probability drops by at least 0.10.
+- Each request carries all the bake-off's questions and its exact wording, so the thresholds apply. Do not
+  reuse the thresholds with another model without running `osprey assist eval`.
+
 ### Compare models
 
 `osprey assist eval` scores a task on frames you have labelled. Put the frames and

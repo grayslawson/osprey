@@ -12,7 +12,7 @@ from assist.types import DENY_LEVERS, GRID_W, Action, Diagnosis, Finding, Metric
 
 MODES = ("rules", "model", "both")
 DISAGREE = ("rules", "model", "log")
-_TASK_KEYS = {"mode", "provider", "model", "send_frames", "min_confidence", "on_disagree", "explain"}
+_TASK_KEYS = {"mode", "provider", "model", "send_frames", "min_confidence", "on_disagree", "explain", "threshold", "fallback"}
 _PROBLEMS = ("glare", "blur", "under", "over", "noise")
 _ALL = (*_PROBLEMS, "ok", "unknown")
 _BETTER = ("before", "after", "same")
@@ -27,6 +27,10 @@ class TaskConfig:
     min_confidence: float = 0.7
     on_disagree: str = "log"
     explain: bool = False
+    # Signal tasks (quality.glare, quality.blur): the model's yes probability must reach `threshold`.
+    # Probabilities are not comparable across models, so every model has its own threshold.
+    threshold: float | None = None
+    fallback: tuple[tuple[str, float | None], ...] = ()  # (model, threshold), tried in order when the first fails
 
 
 def parse_task(name: str, raw: dict[str, Any]) -> TaskConfig:
@@ -53,8 +57,20 @@ def parse_task(name: str, raw: dict[str, Any]) -> TaskConfig:
             raise ValueError(f"task {name}: {k} must be a non-empty string")
     if mode != "rules" and not (raw.get("provider") and raw.get("model")):
         raise ValueError(f"task {name}: mode {mode} needs provider and model")
+    thr = raw.get("threshold")
+    if thr is not None and (isinstance(thr, bool) or not isinstance(thr, (int, float)) or not 0 <= thr <= 1):
+        raise ValueError(f"task {name}: threshold must be 0..1")
+    fallback: list[tuple[str, float | None]] = []
+    for item in raw.get("fallback", []):
+        if (not isinstance(item, dict) or set(item) - {"model", "threshold"} or not isinstance(item.get("model"), str)
+                or not item["model"]):
+            raise ValueError(f"task {name}: fallback entries are {{\"model\": ..., \"threshold\": ...}}")
+        t = item.get("threshold")
+        if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t <= 1):
+            raise ValueError(f"task {name}: fallback threshold must be 0..1")
+        fallback.append((item["model"], None if t is None else float(t)))
     return TaskConfig(mode, raw.get("provider"), raw.get("model"), raw.get("send_frames", False),
-                      float(mc), od, raw.get("explain", False))
+                      float(mc), od, raw.get("explain", False), None if thr is None else float(thr), tuple(fallback))
 
 
 @dataclass(frozen=True)
