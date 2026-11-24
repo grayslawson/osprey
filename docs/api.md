@@ -134,6 +134,8 @@ patrol.
 
 `GET .../state` also carries two things for Assist. `ptz.scene` is `DAY` or
 `NIGHT` as the camera last reported it, and `null` until it does.
+`ptz.fov` is the camera's measured geometry (`pan_degrees`, `tilt_degrees` and the
+wide and tele fields of view), or `null` when the model is not calibrated.
 `assist_signals` has the scene, `auto_active_age_sec` (seconds since Frigate
 last moved the camera, `null` if never), `manual_hold_remaining_sec`,
 `patrol_hold_remaining_sec` and `lease_owner`.
@@ -154,6 +156,7 @@ The token may call only these routes. Anything else is `403 assist_scope`.
 |---|---|
 | `quality` | `GET` cameras, events, `state`, `snapshot.jpg`, `presets`, `sentry`. `POST` `ptz/move`, `ptz/center`, `presets/{token}/goto`, `isp`, `sentry/hold`, `sentry/dwell`. `DELETE` `sentry/hold`, `sentry/dwell`. |
 | `presets` | `POST presets`, `PUT presets/{token}`, and `POST sentry` with the same points and a changed `night_preset`. |
+| `patrol` | `POST sentry` with a different list of points and an `enabled` flag (nothing else about the patrol), and `DELETE presets/{token}`. Survey uses this. |
 
 `isp` from the token accepts only `hdr`, `gain`, `shutter`, `aeTargetPercent`,
 `brightness`, `contrast`, `sharpness`, `denoise`, `icrSensitivity`,
@@ -163,7 +166,7 @@ The console's own `isp` route is unchanged.
 
 The console reaches Assist through `/api/v1/assist/...`. Osprey checks the
 console session and CSRF token first, then forwards a short list of paths
-(`status`, `settings`, `decisions`, `frames`, `check` and `data`) to
+(`status`, `settings`, `decisions`, `frames`, `check`, `data` and the `survey/` routes) to
 `assist.url` with the token and an `X-Osprey-Principal: console` header.
 `502 assist_unreachable` means Assist did not answer.
 

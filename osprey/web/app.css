@@ -205,3 +205,22 @@ dialog::backdrop { background: rgb(0 0 0 / 0.5); }
 .assist-detail { background: var(--panel-2); }
 .assist-detail pre { overflow: auto; max-height: 14rem; }
 .table-wrap { overflow-x: auto; }
+
+/* ---- survey tab ---- */
+.survey-stage { position: relative; width: 100%; background: var(--stage); border-radius: var(--r-sm); overflow: hidden; }
+.survey-pano, .survey-overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.survey-overlay { opacity: 0.55; pointer-events: none; }
+.survey-label { position: absolute; transform: translate(-50%, -50%); font-size: 0.7rem; line-height: 1; padding: 0.15rem 0.3rem; border: 2px solid; border-radius: 0.25rem; background: rgba(13, 17, 23, 0.78); color: #fff; pointer-events: none; white-space: nowrap; }
+.survey-path { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.survey-path polyline { fill: none; stroke: #ffffff; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; stroke-width: 2px; }
+.survey-step { position: absolute; transform: translate(-50%, -50%); min-width: 1.2rem; height: 1.2rem; display: inline-grid; place-items: center; font-size: 0.7rem; font-weight: 700; border-radius: 50%; background: #fff; color: #000; pointer-events: none; }
+.survey-change { position: absolute; transform: translate(-50%, -50%); width: 1.4rem; height: 1.4rem; display: inline-grid; place-items: center; font-weight: 800; background: var(--bad); color: #fff; border-radius: 0.2rem; }
+.survey-pin { position: absolute; transform: translate(-50%, -50%); width: 2rem; height: 2rem; min-height: 0; padding: 0; border-radius: 50%; border: 3px solid #fff; background: var(--warn-bg); color: var(--warn); font-size: 1rem; line-height: 1; cursor: pointer; }
+.survey-pin.tone-ok { background: var(--ok-bg); color: var(--ok); }
+.survey-pin.tone-bad { background: var(--bad-bg); color: var(--bad); }
+.survey-pin.tone-muted { background: var(--panel-2); color: var(--muted); }
+.survey-pin.on, .survey-pin:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.survey-detail { margin-top: 0.75rem; max-width: 32rem; }
+.survey-toggles { margin-bottom: 0.5rem; }
+.survey-route { margin: 0.25rem 0; padding-left: 1.25rem; }
+@media (forced-colors: active) { .survey-pin { border-color: ButtonText; } }

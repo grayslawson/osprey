@@ -48,3 +48,12 @@ Home Assistant and the console, optional ntfy, guardrails and the kill switch,
 and an `eval` and `replay` command for model bake-offs.
 
 Out of scope for this phase: smart patrol, follow-up, self-tuning presets.
+
+## Phase 2: Survey
+
+A user-triggered sweep of the camera's whole range that stitches a day or night
+panorama, labels regions with the per-task models, scores interest (with Frigate's
+event history when it is connected), and proposes presets, a patrol route, night
+views and Frigate zone and mask suggestions. Applying follows the autonomy level,
+with a record to revert. See `docs/survey.md`. Core changes: `ptz.fov` in the state
+document, and the `patrol` token scope.

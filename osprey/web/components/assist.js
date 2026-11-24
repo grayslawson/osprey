@@ -8,7 +8,7 @@ import { ApiError, del, get, pageUrl, post } from "../api.js";
 
 const POLL_MS = 10000;
 const MODES = [["off", "Off"], ["observe", "Observe"], ["suggest", "Suggest"], ["act", "Act"], ["auto", "Auto"]];
-const CAPABILITIES = [["quality", "Picture quality"], ["patrol", "Patrol"], ["followup", "Follow-up"], ["presets", "Presets"]];
+const CAPABILITIES = [["quality", "Picture quality"], ["survey", "Survey"], ["patrol", "Patrol"], ["followup", "Follow-up"], ["presets", "Presets"]];
 const BUDGETS = [["moves", "Camera moves"], ["isp_writes", "Image setting changes"], ["trials", "Trials"], ["model_calls", "Model calls"]];
 const PROBLEM = { glare: "Glare", blur: "Blur", under: "Too dark", over: "Too bright", noise: "Noise" };
 const REASONS = [["not_a_problem", "Not a problem"], ["wrong_fix", "Wrong fix"], ["looks_worse", "Looks worse"], ["dont_touch", "Do not touch this"]];

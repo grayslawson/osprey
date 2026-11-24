@@ -165,7 +165,7 @@ ASCII characters each), `mac` (unicast, and different from every camera MAC),
 | `OSPREY_PTZ_MAX_SPEED` | Overrides `ptz.max_speed`. |
 | `OSPREY_PRESETS_FILE` | Overrides `ptz.presets_file`. |
 | `OSPREY_ASSIST_TOKEN_FILE` | Turns on the Osprey Assist door and names its token file. Osprey creates the file (0600) on first start. See [Assist](assist.md). |
-| `OSPREY_ASSIST_SCOPES` | `quality`, `presets` or both, comma separated. Overrides `assist.scopes`. |
+| `OSPREY_ASSIST_SCOPES` | `quality`, `presets` and `patrol`, comma separated; all three when unset. Overrides `assist.scopes`. |
 | `OSPREY_FRIGATE_CONFIG_FILE` | Where the Frigate URL set in the console is kept. Without it the setting is lost on restart. |
 
 ### Authentication

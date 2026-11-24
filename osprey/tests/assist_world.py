@@ -49,7 +49,7 @@ class Clock:
 
 class World:
     def __init__(self, tmp: Path, clock: Clock, *, night: bool = True, glare: tuple[float, float, float] | None = (0.93, 0.4, 0.26),
-                 exposure: float = 1.0) -> None:
+                 exposure: float = 1.0, presets: bool = True) -> None:
         self.clock = clock
         self.camera: Camera = a_camera()
         self.night = night
@@ -64,9 +64,10 @@ class World:
         self.camera.scene = "NIGHT" if night else "DAY"
         self.signals: dict[str, object] = {}
         for name, position in (("BackPorch", Position(pan=12000, tilt=12000, zoom=300, focus=50)),
-                               ("Gate", Position(pan=24000, tilt=13000, zoom=200, focus=50))):
+                               ("Gate", Position(pan=24000, tilt=13000, zoom=200, focus=50))) if presets else ():
             self.base[self.add_preset(name, position)] = position  # the two real views; saved views reuse them
-        self.camera.motion.update(self.camera.presets[1].position, activity=0)
+        if presets:
+            self.camera.motion.update(self.camera.presets[1].position, activity=0)
         self.recorder = Recorder(self.camera)
         backend = self.recorder.backend()
         backend.snapshot = self.render
@@ -78,12 +79,13 @@ class World:
         self.manager = SentryManager(
             goto_preset=lambda cam, name, speed: self._goto_name(name), tracking_active=lambda c, h: False,
             camera_idle=lambda c: True, gate=MovementGate(), preset_names=lambda c: [p.name for p in self.camera.presets.values()])
-        self.manager.configure(self.camera.mac, SentryConfig.from_mapping({
-            "enabled": True, "interval_sec": 3600, "points": [{"name": "BackPorch"}, {"name": "Gate"}]}))
+        if presets:
+            self.manager.configure(self.camera.mac, SentryConfig.from_mapping({
+                "enabled": True, "interval_sec": 3600, "points": [{"name": "BackPorch"}, {"name": "Gate"}]}))
         backend.sentry = lambda: self.manager
         self.service = onvif.Services(backend, host="192.0.2.10", port=8000, auth=onvif.AdminAuth(allow_anonymous=True))
         self.server = onvif.OnvifServer(self.service, port=0)
-        self.server.web.assist = assist_scope.AssistLink(TOKEN, frozenset({"quality", "presets"}), "http://127.0.0.1:1")
+        self.server.web.assist = assist_scope.AssistLink(TOKEN, frozenset({"quality", "presets", "patrol"}), "http://127.0.0.1:1")
         self.server.start()
         self.token_file = tmp / "assist-token"
         self.token_file.write_text(TOKEN, encoding="utf-8")

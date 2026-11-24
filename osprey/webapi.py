@@ -16,6 +16,7 @@ clamped to the camera's announced motor range.  See
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -158,6 +159,7 @@ def ptz_state(camera: Camera | None, *, enabled: bool = True) -> dict[str, objec
         "raw": {"pan": position.pan, "tilt": position.tilt, "zoom": position.zoom, "focus": position.focus},
         "updated_at": round(camera.motion.updated_at, 3),
         "fov_calibrated": camera.field_of_view is not None,
+        "fov": dataclasses.asdict(camera.field_of_view) if camera.field_of_view is not None else None,
         # DAY or NIGHT as the camera last reported it; null until it does.
         "scene": camera.scene,
     }
@@ -500,7 +502,8 @@ class WebApp:
         token = arbitration.source.set(arbitration.ASSIST)
         try:
             with self._assist_lease(services, method, path):
-                self._camera_route(h, method, camera_id, services, match.group(2), assist=True)
+                self._camera_route(h, method, camera_id, services, match.group(2), assist=True,
+                                   tour=assist_scope.SCOPE_PATROL in link.scopes)
         finally:
             arbitration.source.reset(token)
 
@@ -540,7 +543,7 @@ class WebApp:
             link.url.rstrip("/") + rest + (f"?{query}" if query else ""),
             data=data if request.method in ("POST", "PUT") else None, method=request.method,
             headers={"Authorization": f"Bearer {link.token}", "X-Osprey-Principal": "console",
-                     "Content-Type": "application/json", "Accept": "application/json, image/jpeg"},
+                     "Content-Type": "application/json", "Accept": "application/json, image/jpeg, image/png"},
         )
         try:
             with urllib.request.urlopen(upstream, timeout=assist_scope.PROXY_TIMEOUT_SEC) as reply:  # noqa: S310
@@ -552,7 +555,7 @@ class WebApp:
                            "Check that it is running and that assist.url is right.") from None
         if len(payload) > assist_scope.PROXY_MAX_BYTES:
             raise ApiError(HTTPStatus.BAD_GATEWAY, "assist_too_large", "Osprey Assist sent too much data")
-        media = "image/jpeg" if kind.startswith("image/jpeg") else "application/json"
+        media = next((m for m in ("image/jpeg", "image/png") if kind.startswith(m)), "application/json")
         try:
             code = HTTPStatus(status)
         except ValueError:
@@ -560,7 +563,7 @@ class WebApp:
         h._send(code, payload, media, headers=(("Cache-Control", "no-store"),))
 
     def _camera_route(self, h: "_Handler", method: str, camera_id: str,
-                      services: "Services", rest: str, *, assist: bool = False) -> None:
+                      services: "Services", rest: str, *, assist: bool = False, tour: bool = False) -> None:
         def body() -> object:
             return self._read_json(h)
 
@@ -611,7 +614,7 @@ class WebApp:
         elif rest == "/sentry" and method == "GET":
             status, result = self.sentry_get(services)
         elif rest == "/sentry" and method == "POST":
-            status, result = self.sentry_post(services, body(), night_only=assist)
+            status, result = self.sentry_post(services, body(), night_only=assist and not tour, assist=assist)
         elif rest == "/sentry/hold" and method == "POST":
             status, result = self.sentry_hold(services, body())
         elif rest == "/sentry/hold" and method == "DELETE":
@@ -714,13 +717,17 @@ class WebApp:
         return HTTPStatus.OK, manager.snapshot(mac)
 
     def sentry_post(self, services: "Services", data: object, *,
-                    night_only: bool = False) -> tuple[HTTPStatus, dict[str, object]]:
+                    night_only: bool = False, assist: bool = False) -> tuple[HTTPStatus, dict[str, object]]:
         manager = self._sentry_manager(services)
         mac = self._sentry_mac(services)
         self._ptz_camera(services)
+        if night_only and isinstance(data, dict) and "enabled" in data:
+            raise ApiError(HTTPStatus.FORBIDDEN, "assist_scope", "Assist may change a night view only, not the patrol itself",
+                           "Rewriting the patrol needs the patrol scope.")
         fields = self._fields(
             data,
-            {"points"} if night_only else {"enabled", "interval_sec", "speed", "tracking_hold_sec", "points"},
+            {"points"} if night_only else {"enabled", "points"} if assist
+            else {"enabled", "interval_sec", "speed", "tracking_hold_sec", "points"},
         )
         current = manager.config(mac)
         if night_only:

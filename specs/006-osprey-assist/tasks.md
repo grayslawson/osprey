@@ -25,3 +25,17 @@
 - [x] T110 Closed-loop tests against a simulated camera behind the real web API
 - [ ] T111 Acceptance run on the real camera in observe, then suggest (owner)
 - [ ] T112 Home Assistant add-on option and NixOS service
+
+## Phase 2: Survey
+
+- [x] T201 `docs/survey.md`: grid math, data model, tasks, failure handling, time
+- [x] T202 Core: `ptz.fov`, `patrol` scope (tour points and preset delete)
+- [x] T203 Geometry, stitching, label grid, seams and map diff (Pillow only)
+- [x] T204 Label and change tasks through the per-task providers; rules floor
+- [x] T205 Proposals: presets, route (merge or replace), night views, Frigate file
+- [x] T206 Run service: yielding, resume, budgets, schedule, first run, apply and revert
+- [x] T207 Frigate event heat and the position log
+- [x] T208 HTTP API, console proxy, `osprey assist survey`, Home Assistant entities
+- [x] T209 Console Survey tab
+- [x] T210 Panorama camera simulator and closed-loop tests
+- [ ] T211 One real survey on the camera once Assist is live

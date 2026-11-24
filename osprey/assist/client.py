@@ -33,7 +33,11 @@ class Camera(Protocol):
     def presets(self) -> list[dict[str, Any]]: ...
     def goto(self, token: int) -> None: ...
     def move_relative(self, pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0) -> None: ...
+    def move_absolute(self, pan: float | None = None, tilt: float | None = None, zoom: float | None = None) -> None: ...
     def isp(self, settings: dict[str, float]) -> bool | None: ...
+    def delete_preset(self, token: int) -> None: ...
+    def set_tour(self, points: list[dict[str, Any]], enabled: bool | None = None) -> None: ...
+    def set_dwell(self, dwell: dict[str, float], ttl_sec: float) -> None: ...
     def save_preset(self, name: str) -> dict[str, Any]: ...
     def set_night_view(self, point: str, preset: str | None) -> None: ...
     def hold(self, seconds: float, reason: str) -> bool: ...
@@ -101,6 +105,26 @@ class OspreyClient:
 
     def move_relative(self, pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0) -> None:
         self._call("POST", self._cam("/ptz/move"), {"mode": "relative", "pan": pan, "tilt": tilt, "zoom": zoom})
+
+    def move_absolute(self, pan: float | None = None, tilt: float | None = None, zoom: float | None = None) -> None:
+        body: dict[str, Any] = {"mode": "absolute"}
+        for key, value in (("pan", pan), ("tilt", tilt), ("zoom", zoom)):
+            if value is not None:
+                body[key] = round(float(value), 5)
+        self._call("POST", self._cam("/ptz/move"), body)
+
+    def delete_preset(self, token: int) -> None:
+        self._call("DELETE", self._cam(f"/presets/{int(token)}"))
+
+    def set_tour(self, points: list[dict[str, Any]], enabled: bool | None = None) -> None:
+        """Replace the patrol's points (and optionally switch it on or off). Needs the patrol scope."""
+        body: dict[str, Any] = {"points": points}
+        if enabled is not None:
+            body["enabled"] = bool(enabled)
+        self._call("POST", self._cam("/sentry"), body)
+
+    def set_dwell(self, dwell: dict[str, float], ttl_sec: float) -> None:
+        self._call("POST", self._cam("/sentry/dwell"), {"dwell_sec": dwell, "ttl_sec": ttl_sec})
 
     def isp(self, settings: dict[str, float]) -> bool | None:
         reply = self._call("POST", self._cam("/isp"), settings)

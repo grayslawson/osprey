@@ -10,6 +10,7 @@ import { HealthPage } from "./components/health.js";
 import { LogsPage } from "./components/logs.js";
 import { SentryPage } from "./components/sentry.js";
 import { AssistTab } from "./components/assist.js";
+import { SurveyTab } from "./components/survey.js";
 import { SettingsPage } from "./components/settings.js";
 import { boot, selectCamera, signOut } from "./actions.js";
 import {
@@ -23,6 +24,7 @@ const VIEWS = [
   ["settings", "Settings"],
   ["patrol", "Patrol"],
   ["assist", "Assist"],
+  ["survey", "Survey"],
 ];
 
 function ThemeButton() {
@@ -76,7 +78,7 @@ function Nav() {
   const suffix = cam.value ? `?cam=${encodeURIComponent(cam.value)}` : "";
   return html`
     <nav class="tabs" aria-label="Sections">
-      ${VIEWS.filter(([key]) => key !== "assist" || assistOn).map(([key, label]) => html`
+      ${VIEWS.filter(([key]) => (key !== "assist" && key !== "survey") || assistOn).map(([key, label]) => html`
         <a href=${`#/${key}${suffix}`} key=${key} aria-current=${active === key ? "page" : null}>${label}</a>`)}
     </nav>`;
 }
@@ -91,6 +93,8 @@ function View() {
       return html`<${SentryPage} />`;
     case "assist":
       return html`<${AssistTab} />`;
+    case "survey":
+      return html`<${SurveyTab} />`;
     case "settings":
       return html`<${SettingsPage} />`;
     default:
