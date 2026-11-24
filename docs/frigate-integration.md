@@ -28,7 +28,7 @@ is `osprey`, the ONVIF user is `frigate`, and the passwords are the ones the
 wizard showed, kept in `rtsp-password` and `onvif-password` in the state
 directory. The ONVIF user has to be `frigate` (or a name in
 `ptz.autotrack_users`) for autotracking to work. Credentials generated before
-0.9.0b4 use the ONVIF user `osprey`; the
+0.9.0b5 use the ONVIF user `osprey`; the
 [installation page](installation.md#onvif-authentication) shows how to rename
 it. An install that predates secure mode may still be anonymous, in which case
 drop the credentials. See [security](security.md).

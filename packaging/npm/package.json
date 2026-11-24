@@ -1,6 +1,6 @@
 {
   "name": "@osprey-ptz/cli",
-  "version": "0.9.0b4",
+  "version": "0.9.0b5",
   "description": "Runs the Osprey UniFi PTZ controller tools from its container image. Not affiliated with Ubiquiti.",
   "bin": { "osprey": "bin/osprey.js" },
   "files": ["bin"],

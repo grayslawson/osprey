@@ -61,7 +61,7 @@ them, shows a Frigate camera block with them filled in, ready to copy, and can
 add it to Frigate for you. The ONVIF user is `frigate`, which autotracking
 needs. Without the wizard, an empty password is generated on the first start
 and kept in `/data/osprey` (ONVIF user `frigate`, RTSP user `osprey`; an install
-that generated them before 0.9.0b4 keeps `osprey` for ONVIF). If you set
+that generated them before 0.9.0b5 keeps `osprey` for ONVIF). If you set
 `onvif_password` yourself, set `onvif_username` to `frigate` with it, or
 Frigate's moves count as a person's. An
 install that predates this stays anonymous until you set the passwords or set
