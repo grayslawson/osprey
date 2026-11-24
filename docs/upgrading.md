@@ -94,7 +94,7 @@ To switch, plan a short window and have the Frigate configuration open.
    Osprey generates a password and keeps it in `onvif-password` or
    `rtsp-password` in the state directory; the log names the file. If you
    already configured credentials, it keeps yours. The generated users are
-   `frigate` for ONVIF and `osprey` for RTSP (before 0.9.0b6, `osprey` for
+   `frigate` for ONVIF and `osprey` for RTSP (before 0.9.0b7, `osprey` for
    both, and the password was in the log).
 4. Give every client its login. In Frigate, use
    `rtsp://osprey:RTSP_PASSWORD@host:8554/...` for the inputs and set

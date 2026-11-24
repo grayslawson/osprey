@@ -23,7 +23,7 @@ autotracking needs, and the RTSP user is `osprey`. The log names the files but
 never holds the passwords, because the console's log view and the log files
 keep what is logged. The setup wizard writes the same two files, shows the
 passwords once after its save, and puts them in the Frigate camera block it
-shows to the admin once signed in. Credentials generated before 0.9.0b6 use the
+shows to the admin once signed in. Credentials generated before 0.9.0b7 use the
 ONVIF user `osprey`.
 
 A legacy install warns at every start that ONVIF or RTSP is anonymous, and
@@ -97,7 +97,7 @@ Osprey's clock are rejected. Change the window with
 Frigate has to use the user name `frigate`, or a name listed in
 `ptz.autotrack_users`. Any other ONVIF user counts as a person, so every move
 Frigate makes would hold Frigate off for `ptz.manual_hold_sec`. The generated
-user is `frigate`. Credentials generated before 0.9.0b6 use `osprey`: rename it
+user is `frigate`. Credentials generated before 0.9.0b7 use `osprey`: rename it
 (see [installation](installation.md#onvif-authentication)) or add `osprey` to
 `ptz.autotrack_users`.
 
