@@ -41,5 +41,5 @@ configuration belong to your deployment, not to this repository. Never run
 The wizard writes the configuration, the Frigate URL and the secret files
 together. If Osprey exits during a save, restart it and check setup status
 before you submit again. A failed save leaves setup pending; do not copy
-temporary files. A lost setup token is replaced on restart. Once setup is
+temporary files. A lost or expired setup link is replaced by a new one in the log, after an hour or on restart. Once setup is
 complete, edit the configuration and restart instead of reopening the wizard.

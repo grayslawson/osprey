@@ -21,14 +21,17 @@ cameras:
       password: ONVIF_PASSWORD
 ```
 
-New installs require both logins. The RTSP user is `osprey` and the passwords
-are the ones the setup wizard showed, or that Osprey logged on its first
-start, and that sit in `rtsp-password` and `onvif-password` in the state
+The setup wizard shows this block with your address, ports and passwords
+filled in, and can [add it to Frigate](installation.md#add-the-camera-to-frigate)
+for you. To write it by hand: new installs require both logins. The RTSP user
+is `osprey`, the ONVIF user is `frigate`, and the passwords are the ones the
+wizard showed, kept in `rtsp-password` and `onvif-password` in the state
 directory. The ONVIF user has to be `frigate` (or a name in
-`ptz.autotrack_users`) for autotracking to work; the
+`ptz.autotrack_users`) for autotracking to work. Credentials generated before
+0.9.0b4 use the ONVIF user `osprey`; the
 [installation page](installation.md#onvif-authentication) shows how to rename
-the generated `osprey` user. An install that predates secure mode may still be
-anonymous, in which case drop the credentials. See [security](security.md).
+it. An install that predates secure mode may still be anonymous, in which case
+drop the credentials. See [security](security.md).
 
 Osprey's three tracks are `video1` (2688×1512), `video2` (1280×720) and
 `video3` (640×360). Leave the credentials out only if the matching authentication is off. Keep

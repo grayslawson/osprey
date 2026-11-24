@@ -17,9 +17,9 @@ configure or run Frigate. Pick one install path:
 ## Before you start
 
 - Adopting a camera removes it from UniFi Protect. The camera has one
-  controller at a time. You remove it from Protect and factory-reset it, then
-  point it at Osprey. [Uninstall and return to Protect](uninstall.md) walks
-  back.
+  controller at a time. You remove it from Protect and reset it, then the
+  setup wizard points it at Osprey. [Uninstall and return to Protect](uninstall.md)
+  walks back.
 - A Linux host with a fixed LAN address that the camera and Frigate can
   both reach. The camera dials this address, so DHCP changes break it.
 - Host networking for the container. Docker Desktop on macOS and Windows
@@ -29,7 +29,8 @@ configure or run Frigate. Pick one install path:
 
 Every path uses the same ports. The camera connects to Osprey on TCP 7442
 (control, TLS), 7444 (snapshots) and 7550 (media). Clients use TCP 8000
-(ONVIF and the console) and 8554 (RTSP). WS-Discovery uses UDP 3702.
+(ONVIF and the console) and 8554 (RTSP). WS-Discovery uses UDP 3702, and the
+setup wizard's camera scan uses UDP 10001.
 
 ## Container image
 
@@ -41,8 +42,106 @@ Every path uses the same ports. The camera connects to Osprey on TCP 7442
 
 ### First run
 
-`compose.release.yaml` is attached to every GitHub release and uses host
-networking. `OSPREY_HOST` and `OSPREY_IMAGE` are required:
+`compose.release.yaml` is attached to every GitHub release. It uses host
+networking and needs no settings: its image is the release it came from, and
+Osprey works out the rest on first start. This needs 0.9.0b4 or later; for
+0.9.0b3, use the [manual setup](#manual-setup).
+
+```sh
+mkdir osprey && cd osprey
+curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/compose.release.yaml
+docker compose up -d --wait && docker compose logs osprey
+```
+
+On a new state volume Osprey opens the setup wizard by itself and logs a link
+to it in a banner:
+
+```text
+  Osprey first-run setup. Open this link in a browser:
+
+    http://192.0.2.10:8000/setup?token=...
+```
+
+The address in the link is the one on the network interface that holds the
+host's default route. The token in it works for one save and expires after an
+hour; after that the log shows a new link. The token lives only in memory, so a
+restart also logs a new one.
+
+The wizard goes through these steps:
+
+1. Confirm the address the camera and Frigate use to reach Osprey, and choose
+   an admin password for the console (at least 8 characters).
+2. Pick the camera. Osprey scans the network for UniFi cameras and lists each
+   one with its model and firmware, marked tested or untested. A camera that a
+   controller still manages is marked too, with the steps to remove it from
+   Protect and reset it, then scan again. If the camera is not listed, type its
+   address and select **Look up**. Reserve the camera's address in your router:
+   Osprey accepts video only from it.
+3. Save. Osprey writes the configuration and restarts itself with it. The
+   wizard shows the generated RTSP and ONVIF passwords once.
+4. Adopt the camera. Osprey logs in to it (`ubnt`/`ubnt` on a reset camera, or
+   a password you type) and points it at itself, then waits for the camera to
+   connect and for video.
+5. Add the camera to Frigate. The wizard shows a camera block for Frigate's
+   config, with Osprey's address, ports and passwords filled in. Copy it, or
+   give the Frigate URL and select **Add to Frigate**; see
+   [add the camera to Frigate](#add-the-camera-to-frigate).
+6. Read the check. It covers the camera's adoption, video, ONVIF at the
+   advertised address with Frigate's login, and Frigate, if you gave its URL.
+   Each failed check links to its fix in [troubleshooting](troubleshooting.md).
+
+If you reload the page after the restart, sign in with the admin password and
+the wizard picks up at the adopt step. You can open `/setup` again later, signed
+in, to repeat any step.
+
+The wizard writes these files to `/var/lib/osprey` in the state volume, all
+mode `0600`:
+
+| File | Contents |
+|---|---|
+| `osprey.json` | Runtime configuration. No secrets. |
+| `osprey-secrets.env` | Admin password hash, user names and file paths. Loaded on start. |
+| `rtsp-password`, `onvif-password` | Generated passwords. |
+| `frigate.json` | The Frigate URL, once you give one. |
+
+Every variable in the Compose file is optional. To change one, put it in a
+`.env` file next to the Compose file, as in [`.env.example`](../.env.example).
+`OSPREY_HOST` sets the advertised address; it then also beats the address you
+confirm in the wizard. `OSPREY_IMAGE` runs another image, and `OSPREY_SETUP=0`
+keeps the wizard closed.
+
+### Host and bridge networking
+
+With host networking (`compose.release.yaml`) the container shares the host's
+network, so the detected address is the host's LAN address, the camera scan
+reaches the LAN, and WS-Discovery works.
+
+With a bridge, the container sits on a private network inside the host. The
+camera cannot reach the container's own address, the scan's broadcast does not
+leave the bridge, and WS-Discovery does not cross it. Use
+`compose.release-bridge.yaml`, which publishes each port on `OSPREY_BIND`, the
+host's LAN address. That variable is required there, and `OSPREY_HOST`
+defaults to it:
+
+```sh
+OSPREY_BIND=192.0.2.10 docker compose -f compose.release-bridge.yaml up -d --wait
+docker compose -f compose.release-bridge.yaml logs osprey
+```
+
+The link in the log names the container's own address, so open
+`http://192.0.2.10:8000/setup?token=...` with the token from the link instead.
+In the wizard, type the camera's address and select **Look up**: a direct
+probe crosses the bridge where the scan cannot. Clients have to add Osprey by
+address. Docker Desktop on macOS and Windows cannot serve a LAN camera in
+either mode.
+
+With `compose.release.yaml`, `OSPREY_BIND` is optional and only restricts
+Osprey's listeners to one local address.
+
+### Manual setup
+
+Use this for 0.9.0b3, or to set the address and image yourself. Older Compose
+files require `OSPREY_HOST` and `OSPREY_IMAGE`:
 
 ```sh
 curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/compose.release.yaml
@@ -53,61 +152,41 @@ docker compose -f compose.release.yaml up -d
 docker compose -f compose.release.yaml logs osprey | grep 'setup token'
 ```
 
-Every later `docker compose` command needs the same variables. To avoid
-exporting them in each shell, put them in a `.env` file next to
-`compose.release.yaml`, as in [`.env.example`](../.env.example).
-
 Open `http://<OSPREY_HOST>:8000/setup` and enter the token from the log. The
-wizard asks for the advertised host, bind address, camera MAC and name,
-optional camera IP, Frigate URL and an admin password of at least 8
-characters. It writes these files to `/var/lib/osprey` in the state volume,
-all mode `0600`:
-
-| File | Contents |
-|---|---|
-| `osprey.json` | Runtime configuration. No secrets. |
-| `osprey-secrets.env` | Admin password hash, RTSP user and file paths. Loaded on start. |
-| `rtsp-password`, `onvif-password` | Generated passwords. |
-| `frigate.json` | The Frigate URL. |
-
-Enter the camera's IP address in the wizard, and reserve it in your router.
-Osprey then accepts media and snapshot uploads only from that address. Without
-it, a new install learns the address from the first camera that connects,
-which is weaker; see [security](security.md#the-cameras-address).
-
-The generated RTSP and ONVIF passwords are shown once, so save them. Both
-services require them after the restart, with the user name `osprey`. See
-[security](security.md#secure-mode-and-legacy-mode).
-
-Restart to load the new configuration:
-
-```sh
-docker compose -f compose.release.yaml restart osprey
-```
+0.9.0b3 wizard asks for the camera's MAC address and does not adopt it:
+restart Osprey after the save, then [point the camera at Osprey](#point-the-camera-at-osprey)
+and [add it to Frigate](frigate-integration.md#camera-entry) by hand.
 
 The wizard only opens while the configuration has no `host`, so leaving
-`OSPREY_SETUP=1` set afterwards is harmless. The setup token lives only in
-memory. If you lose it, restart and read the new one from the log. If a save
-fails, setup stays pending; restart and try again rather than copying
-temporary files.
+`OSPREY_SETUP=1` set afterwards is harmless. If a save fails, setup stays
+pending; restart and try again rather than copying temporary files.
 
 ### ONVIF authentication
 
-Name the ONVIF user `frigate`. Only users in `ptz.autotrack_users` (default
-`["frigate"]`) count as autotrackers, so with the wizard's `osprey` user every
-Frigate move would count as a person taking control. This renames the user:
+Frigate's ONVIF user must be `frigate`, or a name in `ptz.autotrack_users`
+(default `["frigate"]`). Moves by any other user count as a person taking
+control. The wizard, and secure mode without the wizard, generate the ONVIF
+user `frigate`. Without the wizard the password is in `onvif-password` in the
+state volume:
 
 ```sh
-docker compose -f compose.release.yaml exec osprey sed -i \
-  -e 's/^OSPREY_ONVIF_USERNAME=osprey$/OSPREY_ONVIF_USERNAME=frigate/' \
-  /var/lib/osprey/osprey-secrets.env
-docker compose -f compose.release.yaml restart osprey
+docker compose exec osprey cat /var/lib/osprey/onvif-password
 ```
 
-Then give Frigate `onvif.user: frigate` and the ONVIF password the wizard
-showed. If you skipped the wizard, Osprey generated the credentials, with the
-user `osprey`, and logged them once. Either keep that user and list it in
-`ptz.autotrack_users`, or set your own with `OSPREY_ONVIF_USERNAME` and
+ONVIF credentials generated before 0.9.0b4 use the user `osprey`. Rename it
+so autotracking works:
+
+```sh
+docker compose exec osprey sed -i \
+  -e 's/^OSPREY_ONVIF_USERNAME=osprey$/OSPREY_ONVIF_USERNAME=frigate/' \
+  /var/lib/osprey/osprey-secrets.env
+docker compose restart osprey
+```
+
+That covers a wizard install. A secure install without the wizard keeps the
+name in `/var/lib/osprey/onvif-username`; write `frigate` there and restart.
+Then give Frigate `onvif.user: frigate`. You can also keep `osprey` and add it
+to `ptz.autotrack_users`, or set your own with `OSPREY_ONVIF_USERNAME` and
 `OSPREY_ONVIF_PASSWORD_FILE`.
 
 ### Rootless Podman
@@ -117,17 +196,6 @@ podman compose -f compose.release.yaml up -d
 ```
 
 Rootless Podman may need explicit port permissions to reach a camera VLAN.
-
-### Bridge networking
-
-Use `compose.release-bridge.yaml` when host networking is not available. It
-publishes each port on `OSPREY_BIND`, which is then required and must be the
-host's LAN address. WS-Discovery multicast does not cross a bridge, so
-clients have to add Osprey by address. Docker Desktop on macOS and Windows
-cannot serve a LAN camera in either mode.
-
-With `compose.release.yaml`, `OSPREY_BIND` is optional and only restricts
-Osprey's listeners to one local address.
 
 ### Your own configuration file
 
@@ -159,30 +227,55 @@ All keys and environment variables are listed in
 
 ## Point the camera at Osprey
 
-The camera has one native controller at a time. A camera already adopted by
-UniFi Protect keeps talking to Protect until it is released: remove it from
-Protect and factory-reset it, so it is back on the default `ubnt`/`ubnt`
-login. Then point it at Osprey from a source checkout on any machine that can
-reach the camera over HTTPS (Python 3 is enough):
+The camera has one native controller at a time. A camera that UniFi Protect
+adopted keeps talking to Protect until it is released: remove it from Protect,
+and reset it to factory settings if it still shows as managed, so it is back on the
+default `ubnt`/`ubnt` login.
+
+The setup wizard's adopt step does the rest. Without the wizard, run the same
+step from inside the container:
 
 ```sh
-git clone https://github.com/grayslawson/osprey.git && cd osprey
-./osprey/manage.sh --camera 192.0.2.20 --user ubnt --host 192.0.2.10
+docker compose exec osprey osprey adopt --camera 192.0.2.20
 ```
 
-The script asks for the camera's management password. On a factory fresh
-camera the login is `ubnt`/`ubnt`, so type `ubnt`. To skip the prompt, set
-`OSPREY_CAMERA_PASSWORD` or pass `--password-file`; a `--password` flag still
-works but shows up in `ps` and your shell history. `--host` is Osprey's address
-(`OSPREY_HOST`, or `advertised_host` in Home Assistant), and `--control-port`
-matches `ports.control` if you changed it. The camera dials Osprey on port
-7442 and Osprey adopts it; the
-console's Health tab shows the adoption. To move a camera from a running
-Protect controller without a reset, the maintainer script `osprey/handoff.sh`
-can do it; see
-[the controller README](../osprey/README.md#testing-with-the-real-camera).
-Afterwards, keep Protect from re-adopting it with
+It asks for the camera's management password; on a reset camera, type `ubnt`.
+`--user` defaults to `ubnt`, and Osprey's address and control port come from
+its configuration (`--host` and `--control-port` override them). To skip the
+prompt, set `OSPREY_CAMERA_PASSWORD` or pass `--password-file`; a `--password`
+flag still works but shows up in `ps` and your shell history. The same command
+is `osprey adopt` with the Python wheel and `./scripts/osprey adopt` (or
+`./osprey/manage.sh`) in a source checkout.
+
+The camera dials Osprey on port 7442 and Osprey adopts it; the console's
+Health tab shows the adoption. To move a camera from a running Protect
+controller without a reset, the maintainer script `osprey/handoff.sh` can do
+it; see [the controller README](../osprey/README.md#testing-with-the-real-camera).
+Afterwards, keep Protect from adopting it again with
 [`osprey protect-guard`](protect-guard.md).
+
+## Add the camera to Frigate
+
+The wizard's Frigate step shows the camera block, and **Add to Frigate** puts
+it in Frigate's config for you, through Frigate's own config API:
+
+1. Osprey reads the config with `GET /api/config/raw`.
+2. It adds the block as the first camera under `cameras:`, keeping the rest of
+   the file, comments included, as it was. It never replaces a camera of the
+   same name; choose another name instead.
+3. It shows the change as a diff. Nothing is written yet.
+4. When you confirm, it saves a copy of the current config to the state volume
+   (`frigate-config-backup-<date>-<time>.yaml`, mode `0600`), then saves the new
+   config with `POST /api/config/save`. Frigate checks the file and refuses an
+   invalid one. Leave **Restart Frigate** ticked so it loads the camera.
+
+If Frigate's config changed between the preview and the save, Osprey refuses
+and asks you to preview again. A `cameras:` section written as `{}` or pulled
+in with `!include` is left alone; add the block by hand there.
+
+Frigate's unauthenticated port 5000 needs nothing else. On its authenticated
+port 8971 the wizard asks for a Frigate admin user and password, and offers to
+trust Frigate's own self-signed certificate. Osprey does not store them.
 
 ## Home Assistant
 
@@ -192,7 +285,10 @@ and ingress. Frigate can be another app or a separate host.
 1. Open **Settings → Apps → Install app**, then the top-right menu →
    **Repositories**.
 2. Add `https://github.com/grayslawson/osprey-ha-apps`.
-3. Install **Osprey**, set `advertised_host`, and start it.
+3. Install **Osprey** and start it.
+4. Open **Osprey** in the sidebar. The setup wizard opens there, with no link
+   or token: Home Assistant has already signed you in. It detects the host's
+   address, so `advertised_host` can stay empty; if you set it, it wins.
 
 Options and Frigate settings are in the
 [app documentation](../homeassistant/addon/osprey/DOCS.md). Osprey needs no
@@ -224,10 +320,9 @@ It is a dry run until you add `--apply`, which must run as root. Other options: 
 file. The image must use the `v` tag form (`v0.9.0b3`) or a digest; the
 script rejects `0.9.0b3`. It can install the runtime with `apt-get`, writes
 `compose.yaml` under the state directory and starts only Osprey. It never
-creates or changes a Proxmox VM or LXC. The setup wizard is off in that file:
-add `OSPREY_SETUP: "1"` to its `environment`, run
-`podman compose -f /var/lib/osprey/compose.yaml up -d` again, and continue as
-in [first run](#first-run).
+creates or changes a Proxmox VM or LXC. On first start the setup wizard opens;
+the link is in `podman compose -f /var/lib/osprey/compose.yaml logs osprey`.
+Continue as in [first run](#first-run).
 
 A native LXC in the community-scripts style is in
 [`packaging/proxmox`](../packaging/proxmox/README.md). It has not yet been run
@@ -246,14 +341,14 @@ attached to the GitHub release:
 ```sh
 python3.13 -m venv ~/.local/osprey && . ~/.local/osprey/bin/activate
 pip install "osprey-ptz[mqtt] @ https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/osprey_ptz-0.9.0b3-py3-none-any.whl"
-osprey --setup --host 192.0.2.10 --config ~/.config/osprey/osprey.json \
-  --cert ~/.config/osprey/osprey.pem
+osprey --config ~/.config/osprey/osprey.json --cert ~/.config/osprey/osprey.pem
 ```
 
-Drop `[mqtt]` if you do not use [MQTT](mqtt.md). `--setup` opens the wizard
-and logs its token, as in [first run](#first-run), and the wizard writes its
-files next to `--config`. Without `--setup`, a `--config` file that does not
-exist is an error.
+Drop `[mqtt]` if you do not use [MQTT](mqtt.md). On first start Osprey opens
+the wizard and logs its link, as in [first run](#first-run), and the wizard
+writes its files next to `--config`. With 0.9.0b3, add `--setup --host` and
+this host's address. Once Osprey has started with a host, a `--config` file
+that does not exist is an error.
 
 `osprey doctor`, `osprey probe` and `osprey protect-guard` ship in the same
 command. Run the controller as an unprivileged user under systemd or launchd;

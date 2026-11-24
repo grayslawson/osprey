@@ -49,7 +49,8 @@ flowchart LR
 - ONVIF PTZ, presets and events, including what Frigate autotracking needs.
 - A browser console with live view, presets, patrol, settings, logs and health,
   behind a password.
-- A first-run setup wizard.
+- A setup wizard that finds and adopts the camera and writes the Frigate camera
+  block for you.
 - [Sentry patrol](docs/sentry.md): an idle tour of presets that steps aside for
   autotracking and for a person.
 - A [media-only ONVIF device](docs/protect-dual-adoption.md) on its own port,
@@ -80,9 +81,9 @@ so check Frigate's [autotracking requirements](https://docs.frigate.video/config
 
 ## Requirements
 
-- A Linux host with a fixed LAN address that the camera and Frigate can both
-  reach. The container uses host networking, so Docker Desktop on macOS and
-  Windows won't work.
+- A Linux host with Docker Compose and a fixed LAN address that the camera and
+  Frigate can both reach. The container uses host networking, so Docker Desktop
+  on macOS and Windows won't work.
 - These ports open between the camera, Osprey and your clients:
 
   | Port | Protocol | Used by |
@@ -91,75 +92,39 @@ so check Frigate's [autotracking requirements](https://docs.frigate.video/config
   | 8000 | TCP | ONVIF, the console, `/healthz`, `/metrics` |
   | 8554 | TCP | RTSP |
   | 3702 | UDP | WS-Discovery |
+  | 10001 | UDP | The setup wizard's camera scan |
 
-- A camera that is factory fresh. Its login is `ubnt`/`ubnt` until a
-  controller adopts it, so it has to be removed from Protect and reset first.
-- A machine with `git` and Python 3 that can reach the camera over HTTPS, to run
-  `osprey/manage.sh` once.
+- A camera that UniFi Protect no longer manages. If Protect still has it, the
+  setup wizard says so and shows how to remove and reset it.
 
 ## Quick start
 
-1. Start Osprey. Pin a release tag, never `latest`:
+This needs Osprey 0.9.0b4 or later. For 0.9.0b3, follow the
+[manual setup](docs/installation.md#manual-setup).
+
+1. On the Linux host, start Osprey and print its log:
 
    ```sh
-   curl -fsSLO https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/compose.release.yaml
-
-   export OSPREY_HOST=192.0.2.10   # this host's LAN address, as the camera sees it
-   export OSPREY_IMAGE=ghcr.io/grayslawson/osprey:0.9.0b3
-   export OSPREY_SETUP=1           # open the setup wizard
-
-   docker compose -f compose.release.yaml up -d
-   docker compose -f compose.release.yaml logs osprey | grep 'setup token'
+   mkdir osprey && cd osprey
+   curl -fsSLo compose.yaml https://github.com/grayslawson/osprey/releases/download/v0.9.0b3/compose.release.yaml
+   docker compose up -d --wait && docker compose logs osprey
    ```
 
-2. Open `http://192.0.2.10:8000/setup`, enter the token from the log, and fill
-   in the camera's MAC, name and IP address, the Frigate URL and an admin
-   password. Reserve the camera's IP in your router: Osprey then accepts video
-   only from that address. The wizard shows the generated RTSP and ONVIF
-   passwords once, so save them. Then restart:
+2. Open the setup link from the log. It looks like
+   `http://192.0.2.10:8000/setup?token=...`. The link expires after an hour;
+   after that, `docker compose logs osprey` shows a new one.
 
-   ```sh
-   docker compose -f compose.release.yaml restart osprey
-   ```
-
-3. Remove the camera from Protect and factory-reset it, so it is back on the
-   default `ubnt`/`ubnt` login.
-
-4. Point the camera at Osprey. The script asks for the camera's password; on a
-   reset camera, type `ubnt`:
-
-   ```sh
-   git clone https://github.com/grayslawson/osprey.git && cd osprey
-   ./osprey/manage.sh --camera 192.0.2.20 --user ubnt --host 192.0.2.10
-   ```
-
-   The console's Health tab shows the adoption.
-
-5. Add the camera to your Frigate, with the RTSP password the wizard showed:
-
-   ```yaml
-   cameras:
-     g5_ptz:
-       ffmpeg:
-         inputs:
-           - path: rtsp://osprey:RTSP_PASSWORD@192.0.2.10:8554/video2
-             roles: [detect, record]
-       onvif:
-         host: 192.0.2.10
-         port: 8000
-         user: frigate
-         password: ONVIF_PASSWORD
-   ```
-
-   The generated ONVIF user is `osprey`, but autotracking needs `frigate`.
-   The [installation guide](docs/installation.md#onvif-authentication) shows
-   how to rename it. The [Frigate guide](docs/frigate-integration.md) covers
-   autotracking, calibration and presets.
-
-6. Check the setup with `osprey doctor`; see
-   [verify a deployment](docs/installation.md#verify-a-deployment).
+3. Follow the wizard. It confirms the host's address, finds the camera on your
+   network and adopts it. Then it gives you a Frigate camera block with the
+   address and passwords filled in, and can add it to Frigate for you. It ends
+   with a check of the camera, the video, ONVIF and Frigate. Each failed check
+   links to its fix.
 
 If something doesn't work, start with [troubleshooting](docs/troubleshooting.md).
+The [installation guide](docs/installation.md) covers bridge networking, the
+manual setup and the other install paths, and the
+[Frigate guide](docs/frigate-integration.md) covers autotracking, calibration
+and presets.
 
 ## Other ways to install
 

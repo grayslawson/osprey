@@ -91,15 +91,17 @@ To switch, plan a short window and have the Frigate configuration open.
    `ip` in a `cameras` entry, `--expected-camera-ip`, or `camera_ip` in the
    app. Reserve that address in your router.
 3. Restart Osprey and read the log. For each service without credentials,
-   Osprey generates a password, logs it once and keeps it in
-   `onvif-password` or `rtsp-password` in the state directory. If you already
-   configured credentials, it keeps yours. The generated user is `osprey`.
+   Osprey generates a password and keeps it in `onvif-password` or
+   `rtsp-password` in the state directory; the log names the file. If you
+   already configured credentials, it keeps yours. The generated users are
+   `frigate` for ONVIF and `osprey` for RTSP (before 0.9.0b4, `osprey` for
+   both, and the password was in the log).
 4. Give every client its login. In Frigate, use
    `rtsp://osprey:RTSP_PASSWORD@host:8554/...` for the inputs and set
    `onvif.user` and `onvif.password`. Home Assistant's ONVIF integration needs
    the ONVIF login too.
-5. Make the ONVIF user `frigate`, or add the name to `ptz.autotrack_users`.
-   Otherwise Frigate's moves count as a person's. See
+5. If the ONVIF user is not `frigate`, rename it or add the name to
+   `ptz.autotrack_users`. Otherwise Frigate's moves count as a person's. See
    [installation](installation.md#onvif-authentication).
 6. Check that Frigate still detects, records and tracks.
 

@@ -57,7 +57,7 @@ Frigate can be another app or run elsewhere. Configure the camera with:
   from `tracks`.
 
 A new install requires ONVIF and RTSP logins. The setup wizard generates
-them and shows a ready-to-copy Frigate camera block with them filled in, and can
+them, shows a Frigate camera block with them filled in, ready to copy, and can
 add it to Frigate for you. The ONVIF user is `frigate`, which autotracking
 needs. Without the wizard, an empty password is generated on the first start
 and kept in `/data/osprey` (ONVIF user `frigate`, RTSP user `osprey`; an install

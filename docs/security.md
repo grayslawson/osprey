@@ -18,10 +18,13 @@ an upgrade does not change what a running install does.
 
 In secure mode, Osprey generates a password for each service that has none
 configured and writes it to `<state>/onvif-password` and
-`<state>/rtsp-password`, mode `0600`. Both belong to the user `osprey`. The
-passwords are also logged once, on the first start, so save them from the log
-then. The setup wizard writes the same two files and shows the passwords when
-it finishes.
+`<state>/rtsp-password`, mode `0600`. The ONVIF user is `frigate`, the name
+autotracking needs, and the RTSP user is `osprey`. The log names the files but
+never holds the passwords, because the console's log view and the log files
+keep what is logged. The setup wizard writes the same two files, shows the
+passwords once after its save, and puts them in the Frigate camera block it
+shows to the admin once signed in. Credentials generated before 0.9.0b4 use the
+ONVIF user `osprey`.
 
 A legacy install warns at every start that ONVIF or RTSP is anonymous, and
 logs once, when the mode is first recorded, how to tighten it. To switch an existing install, see [upgrading](upgrading.md#move-a-legacy-install-to-secure-mode).
@@ -79,7 +82,7 @@ only, never a MAC, address, preset name or credential.
 
 ## ONVIF authentication
 
-In secure mode ONVIF authentication is on, with the generated user `osprey`. In
+In secure mode ONVIF authentication is on, with the generated user `frigate`. In
 legacy mode it is opt-in. To choose your own user, set `OSPREY_ONVIF_USERNAME`
 with `OSPREY_ONVIF_PASSWORD_FILE` (or `OSPREY_ONVIF_PASSWORD`). Osprey then
 requires a `PasswordDigest` UsernameToken on every SOAP call, with no
@@ -94,8 +97,8 @@ Osprey's clock are rejected. Change the window with
 Frigate has to use the user name `frigate`, or a name listed in
 `ptz.autotrack_users`. Any other ONVIF user counts as a person, so every move
 Frigate makes would hold Frigate off for `ptz.manual_hold_sec`. The generated
-user is `osprey`, so either rename it (see
-[installation](installation.md#onvif-authentication)) or add `osprey` to
+user is `frigate`. Credentials generated before 0.9.0b4 use `osprey`: rename it
+(see [installation](installation.md#onvif-authentication)) or add `osprey` to
 `ptz.autotrack_users`.
 
 In Frigate, set the camera's `onvif.user` and `onvif.password`, and leave
@@ -152,3 +155,20 @@ patrol and MQTT inputs are validated and bounded.
   issue, and never attach a raw `--dump` file.
 
 To report a vulnerability, follow [`SECURITY.md`](../SECURITY.md).
+
+## The setup wizard
+
+The wizard opens only while no host is configured: on a new state directory,
+or when nothing names a host. Before its save it needs the token from the log
+link. The token is random, lives only in memory, is consumed by the
+save and expires after an hour, when a new link is logged. The page moves it
+out of the address bar, and `Referrer-Policy: no-referrer` keeps it out of
+other sites' logs. Home Assistant ingress needs no token, because the
+Supervisor has already signed the user in.
+
+Before the save, the token allows only the camera scan, a probe of one typed
+address, and the save itself. The steps after it (adopting the camera, the
+Frigate block with its passwords, Add to Frigate and the checks) need the admin
+session and its CSRF token, like the rest of the console. Add to Frigate sends
+the Frigate login you type straight to Frigate and does not store it. It keeps
+a `0600` copy of Frigate's previous config in the state directory.
