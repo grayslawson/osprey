@@ -38,6 +38,10 @@ def main() -> int:
         from protect_guard import main as guard_main  # osprey/protect_guard.py
 
         return guard_main(sys.argv[2:])
+    if sys.argv[1:2] == ["assist"]:
+        from assist.cli import main as assist_main  # osprey/assist/cli.py, needs the assist extra
+
+        return assist_main(sys.argv[2:])
     from main import main as controller_main  # osprey/main.py
 
     return controller_main()

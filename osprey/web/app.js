@@ -9,10 +9,11 @@ import { LivePage } from "./components/live.js";
 import { HealthPage } from "./components/health.js";
 import { LogsPage } from "./components/logs.js";
 import { SentryPage } from "./components/sentry.js";
+import { AssistTab } from "./components/assist.js";
 import { SettingsPage } from "./components/settings.js";
 import { boot, selectCamera, signOut } from "./actions.js";
 import {
-  applyStoredTheme, bootError, cam, cameras, connection, cycleTheme, route, session, theme,
+  applyStoredTheme, bootError, cam, cameras, connection, cycleTheme, route, session, snapshot, theme,
 } from "./store.js";
 
 const VIEWS = [
@@ -21,6 +22,7 @@ const VIEWS = [
   ["logs", "Logs"],
   ["settings", "Settings"],
   ["patrol", "Patrol"],
+  ["assist", "Assist"],
 ];
 
 function ThemeButton() {
@@ -70,10 +72,11 @@ function Header() {
 
 function Nav() {
   const active = route.value.view;
+  const assistOn = !!(snapshot.value && snapshot.value.assist && snapshot.value.assist.enabled);
   const suffix = cam.value ? `?cam=${encodeURIComponent(cam.value)}` : "";
   return html`
     <nav class="tabs" aria-label="Sections">
-      ${VIEWS.map(([key, label]) => html`
+      ${VIEWS.filter(([key]) => key !== "assist" || assistOn).map(([key, label]) => html`
         <a href=${`#/${key}${suffix}`} key=${key} aria-current=${active === key ? "page" : null}>${label}</a>`)}
     </nav>`;
 }
@@ -86,6 +89,8 @@ function View() {
       return html`<${LogsPage} />`;
     case "patrol":
       return html`<${SentryPage} />`;
+    case "assist":
+      return html`<${AssistTab} />`;
     case "settings":
       return html`<${SettingsPage} />`;
     default:

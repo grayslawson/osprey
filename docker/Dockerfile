@@ -49,9 +49,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # paho-mqtt is optional at runtime but installed so MQTT can be enabled
-# without rebuilding the image. Hash-pinned.
+# without rebuilding the image. Pillow is for the optional Assist helper
+# (`osprey assist`); the controller itself never imports it. Hash-pinned.
 RUN printf '%s\n' \
       'paho-mqtt==2.1.0 --hash=sha256:6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee' \
+      'pillow==13.0.0 --hash=sha256:5f56499c1a74d2b862beb0c33b8016f99d095858455df9d21583bbbc1c15b582 --hash=sha256:19b66ca0a4d25cc0200b381ce824c7ea090db61427315e73cfb05dbf1b35c369' \
       > /tmp/requirements-runtime.txt \
     && python -m pip install --require-hashes -r /tmp/requirements-runtime.txt \
     && rm /tmp/requirements-runtime.txt
@@ -59,7 +61,8 @@ RUN printf '%s\n' \
 RUN groupadd --gid "${OSPREY_GID}" osprey \
     && useradd --uid "${OSPREY_UID}" --gid "${OSPREY_GID}" --no-create-home \
         --home-dir /var/lib/osprey --shell /usr/sbin/nologin osprey \
-    && install -d -o "${OSPREY_UID}" -g "${OSPREY_GID}" -m 0750 /var/lib/osprey
+    && install -d -o "${OSPREY_UID}" -g "${OSPREY_GID}" -m 0750 /var/lib/osprey \
+    && install -d -o "${OSPREY_UID}" -g "${OSPREY_GID}" -m 0700 /var/lib/osprey-assist
 
 # Application code is owned by root and read-only to the runtime user.
 COPY VERSION /opt/osprey/VERSION

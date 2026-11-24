@@ -56,8 +56,28 @@ services:
     # The image already runs tini as PID 1.
     init: false
     stop_grace_period: 10s
+  # Optional: Osprey Assist, the image-quality helper (docs/assist.md). Set
+  # "assist": {"enabled": true} in osprey.json first, so Osprey makes the token,
+  # then remove the leading "#" from this block and from `assist-state` below.
+  # assist:
+  #   image: ${OSPREY_IMAGE:-ghcr.io/grayslawson/osprey:v0.9.0b4}
+  #   command: ["assist", "run"]
+  #   network_mode: host
+  #   environment:
+  #     OSPREY_ASSIST_CONFIG: /var/lib/osprey-assist/osprey-assist.json
+  #   volumes:
+  #     - osprey-state:/var/lib/osprey:ro
+  #     - assist-state:/var/lib/osprey-assist
+  #   user: "1000:1000"
+  #   restart: unless-stopped
+  #   read_only: true
+  #   tmpfs: [/tmp:mode=1777]
+  #   cap_drop: [ALL]
+  #   security_opt: [no-new-privileges:true]
+  #   depends_on: [osprey]
 volumes:
   osprey-state:
+  # assist-state:
 # secrets:
 #   osprey_admin_password:
 #     file: ./osprey-admin-password.txt   # openssl rand -base64 24 > osprey-admin-password.txt

@@ -17,7 +17,7 @@ loads from a CDN.
 | `/api/v1/events?camera={id}` | Server-sent events: `state`, `ptz`, `streams`, `health`, `preset`, `adoption`, `log`, `session`. |
 
 The app has five tabs: **Live**, **Health**, **Logs**, **Settings** and
-**Patrol**. It works at phone width, follows the system light or dark theme
+**Patrol**, plus **Assist** when Assist is enabled. It works at phone width, follows the system light or dark theme
 (the header button overrides it), and does not rely on colour alone to show
 status.
 
@@ -47,6 +47,25 @@ refreshes every five seconds.
 
 Configure and watch the [sentry patrol](sentry.md#operator-console) for the
 selected camera.
+
+## Assist tab
+
+The Assist tab appears only when Assist is enabled for this install. It talks to
+the Assist process through Osprey, so it needs no separate sign-in. If Assist
+does not answer, the tab says so and offers a retry.
+
+The header has the master switch and a Check now button. Waiting for you lists
+each suggested change with the before and after frames, what will change, what
+to expect and any warning. You can apply it, reject it with a reason, or snooze
+it for 24 hours. The glare toggle draws a 12 by 8 grid over the before frame.
+
+Capabilities has one row per capability with Off, Observe, Suggest, Act and
+Auto. Auto asks you to confirm first. A capability that is not built yet is
+disabled and says so. The budgets show what Assist has used this hour. The
+Decisions table can be filtered by status, expands to show frames, metrics and
+the revert reason, and offers Undo on applied and kept changes. Forget
+everything deletes all saved frames and learning after you confirm. The tab
+refreshes every 10 seconds while it is visible.
 
 ## Health, Logs and Settings
 
