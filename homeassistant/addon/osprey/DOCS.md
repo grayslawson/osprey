@@ -56,11 +56,14 @@ Frigate can be another app or run elsewhere. Configure the camera with:
 - **RTSP**: `rtsp://<advertised_host>:<rtsp_port>/video1`, or another track
   from `tracks`.
 
-A new install requires ONVIF and RTSP logins. If you left the passwords
-empty, the app generated them, with the user name `osprey`, and logged them
-once on its first start; they are kept in `/data/osprey`. For autotracking, set
-`onvif_username` to `frigate` together with an `onvif_password`, or Frigate's
-moves count as a person's. An
+A new install requires ONVIF and RTSP logins. The setup wizard generates
+them and shows a ready-to-copy Frigate camera block with them filled in, and can
+add it to Frigate for you. The ONVIF user is `frigate`, which autotracking
+needs. Without the wizard, an empty password is generated on the first start
+and kept in `/data/osprey` (ONVIF user `frigate`, RTSP user `osprey`; an install
+that generated them before 0.9.0b4 keeps `osprey` for ONVIF). If you set
+`onvif_password` yourself, set `onvif_username` to `frigate` with it, or
+Frigate's moves count as a person's. An
 install that predates this stays anonymous until you set the passwords or set
 `security` to `secure`, so firewall those ports to Frigate and the camera until
 then. Set `camera_ip` as well, so the media ports accept only the camera. See the

@@ -403,7 +403,7 @@ class WebApp:
             self._send_json(h, HTTPStatus.OK, self.sentry_overview())
             return
         if path.startswith("/setup/"):
-            self._setup_route(h, method, path)
+            self._setup_route(h, method, path, request.query)
             return
         match = re.fullmatch(r"/cameras/([^/]+)(/.*)?", path)
         if not match:
@@ -506,7 +506,7 @@ class WebApp:
 
     # ------------------------------------------------------------------ setup
 
-    def _setup_route(self, h: "_Handler", method: str, path: str) -> None:
+    def _setup_route(self, h: "_Handler", method: str, path: str, query: dict[str, list[str]]) -> None:
         onboarding = self.onboarding
         if onboarding is None:
             raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "setup steps are not available here")
@@ -515,10 +515,17 @@ class WebApp:
                 result = onboarding.status(self.server.services.frigate_url)
             elif path == "/setup/adopt" and method == "POST":
                 result = onboarding.adopt(self._read_json(h))
+            elif path == "/setup/frigate" and method == "GET":
+                named: dict[str, object] = {"name": query["name"][0]} if query.get("name") else {}
+                result = {**onboarding.frigate_block(named), "frigate_url": self.server.services.frigate_url or ""}
+            elif path == "/setup/frigate/preview" and method == "POST":
+                result = onboarding.frigate_preview(self._read_json(h), self.server.services.frigate_url)
+            elif path == "/setup/frigate/apply" and method == "POST":
+                result = onboarding.frigate_apply(self._read_json(h), self.server.services.frigate_url)
             else:
                 raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "no such setup step")
         except OnboardingError as exc:
-            raise ApiError(HTTPStatus(exc.status), "setup", str(exc)) from None
+            raise ApiError(HTTPStatus(exc.status), exc.code, str(exc)) from None
         self._send_json(h, HTTPStatus.OK, result)
 
     # ----------------------------------------------------------------- sentry

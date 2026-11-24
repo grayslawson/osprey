@@ -220,24 +220,18 @@
     }
   });
 
-  cameraForm.addEventListener("submit", (event) => {
+  // ------------------------------------------------------------ save + restart
+
+  cameraForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     collect(event.target);
     delete state.values.pick;
-    next("camera");
-  });
-
-  // ------------------------------------------------------------ save + restart
-
-  $("#frigate-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    collect(event.target);
     const button = event.target.querySelector("button[type=submit]");
     button.disabled = true;
     try {
       await save();
     } catch (failure) {
-      show("frigate");
+      show("camera");
       error(failure.message);
     } finally {
       button.disabled = false;
@@ -292,7 +286,6 @@
       const status = await call("GET", "api/v1/setup/status");
       const camera = (status.cameras || [])[0] || {};
       state.values.ip = camera.ip || "";
-      state.values.frigate_url = state.values.frigate_url || status.frigate_url || "";
     }
     $("#adopt-ip").textContent = state.values.ip || "(no address saved)";
     show("adopt");
@@ -367,7 +360,92 @@
     }
   }
 
-  $("#adopt-next").addEventListener("click", () => next("adopt"));
+  $("#adopt-next").addEventListener("click", () => enterFrigate().catch((f) => error(f.message)));
+
+  // ---------------------------------------------------------------- Frigate
+
+  const frigateForm = $("#frigate-form");
+
+  async function loadBlock(name) {
+    const query = name ? `?name=${encodeURIComponent(name)}` : "";
+    const block = await call("GET", `api/v1/setup/frigate${query}`);
+    $("#frigate-yaml").textContent = block.yaml;
+    frigateForm.elements.name.value = block.name;
+    if (!frigateForm.elements.url.value) frigateForm.elements.url.value = block.frigate_url || "";
+  }
+
+  async function enterFrigate() {
+    await loadBlock("");
+    show("frigate");
+  }
+
+  frigateForm.elements.name.addEventListener("change", () => {
+    $("#frigate-preview").hidden = true;
+    loadBlock(frigateForm.elements.name.value).catch((f) => error(f.message));
+  });
+
+  $("#copy-yaml").addEventListener("click", async () => {
+    const text = $("#frigate-yaml").textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      $("#copy-status").textContent = "Copied.";
+    } catch {
+      // The clipboard API needs HTTPS; over plain HTTP select the text instead.
+      getSelection().selectAllChildren($("#frigate-yaml"));
+      $("#copy-status").textContent = "Selected. Press Ctrl+C (or \u2318C) to copy.";
+    }
+  });
+
+  function frigateRequest() {
+    const data = Object.fromEntries(new FormData(frigateForm));
+    data.insecure_tls = frigateForm.elements.insecure_tls.checked;
+    return data;
+  }
+
+  function frigateFailure(failure) {
+    const code = failure.data && failure.data.error && failure.data.error.code;
+    if (code === "frigate_auth") $("#frigate-login").hidden = false;
+    if (code === "frigate_tls") $("#frigate-tls").hidden = false;
+    $("#frigate-result").textContent = failure.message;
+  }
+
+  frigateForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    $("#frigate-preview").hidden = true;
+    $("#frigate-result").textContent = "Reading Frigate's config\u2026";
+    try {
+      const preview = await call("POST", "api/v1/setup/frigate/preview", frigateRequest());
+      state.frigateBase = preview.base;
+      $("#frigate-diff").textContent = preview.diff;
+      $("#frigate-preview").hidden = false;
+      $("#frigate-result").textContent = "";
+    } catch (failure) {
+      frigateFailure(failure);
+    }
+  });
+
+  $("#frigate-apply").addEventListener("click", async () => {
+    const button = $("#frigate-apply");
+    button.disabled = true;
+    $("#frigate-result").textContent = "Saving Frigate's config\u2026";
+    try {
+      const request = { ...frigateRequest(), base: state.frigateBase, restart: $("#frigate-restart").checked };
+      const result = await call("POST", "api/v1/setup/frigate/apply", request);
+      $("#frigate-preview").hidden = true;
+      $("#frigate-result").textContent = `${result.message} The previous config is saved in ${result.backup}.`;
+    } catch (failure) {
+      frigateFailure(failure);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $("#frigate-next").addEventListener("click", async () => {
+    const url = frigateForm.elements.url.value.trim();
+    // Keep a typed URL for the console and the health check even without Add to Frigate.
+    if (url) await call("PUT", "api/v1/cameras/default/frigate", { base_url: url }).catch(() => {});
+    next("frigate");
+  });
 
   // ------------------------------------------------------------------ start
 

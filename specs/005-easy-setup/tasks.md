@@ -4,7 +4,7 @@
       LAN address detection, automatic first-run wizard, link banner, token
       expiry, restart after save, Home Assistant without `advertised_host`.
 - [x] Camera discovery and adoption in the wizard; `osprey adopt` in the image.
-- [ ] ONVIF user `frigate` for new installs; Frigate block; Add to Frigate.
+- [x] ONVIF user `frigate` for new installs; Frigate block; Add to Frigate.
 - [ ] Health-check step.
 - [ ] README quick start and installation guide.
 

@@ -60,14 +60,6 @@
     <div class="actions"><button type="button" id="lookup" class="secondary">Look up</button></div>
     <label>Camera MAC address <input name="mac" required autocomplete="off" spellcheck="false" placeholder="AA:BB:CC:DD:EE:FF"></label>
     <label>Camera name <input name="name" required maxlength="64" value="G5 PTZ"></label>
-    <div class="actions"><button type="button" data-back class="secondary">Back</button><button type="submit">Next</button></div>
-  </form>
-</section>
-
-<section data-step="frigate" data-title="Frigate" hidden>
-  <form id="frigate-form">
-    <label>Frigate URL (optional) <input name="frigate_url" type="url" autocomplete="off" placeholder="http://frigate.lan:5000"></label>
-    <p class="hint">Leave it empty if you add the camera to Frigate yourself.</p>
     <div class="actions"><button type="button" data-back class="secondary">Back</button><button type="submit">Save and restart Osprey</button></div>
   </form>
 </section>
@@ -99,6 +91,32 @@
   </form>
   <ul id="adopt-progress" class="list" aria-live="polite"></ul>
   <div class="actions"><button type="button" id="adopt-next" disabled>Next</button></div>
+</section>
+
+<section data-step="frigate" data-title="Frigate" hidden>
+  <p>Add the camera to Frigate. Copy this block into Frigate's config, or let Osprey add it for you.</p>
+  <pre id="frigate-yaml" class="code"></pre>
+  <div class="actions"><button type="button" id="copy-yaml" class="secondary">Copy</button></div>
+  <p id="copy-status" class="hint" role="status"></p>
+  <form id="frigate-form">
+    <label>Frigate URL <input name="url" type="url" autocomplete="off" placeholder="http://frigate.lan:5000"></label>
+    <label>Camera name in Frigate <input name="name" autocomplete="off"></label>
+    <div id="frigate-login" hidden>
+      <p class="hint">This Frigate asks for a login. Use a Frigate admin account.</p>
+      <label>Frigate user <input name="username" autocomplete="off"></label>
+      <label>Frigate password <input name="password" type="password" autocomplete="off"></label>
+    </div>
+    <label id="frigate-tls" hidden><input type="checkbox" name="insecure_tls"> Trust Frigate's own self-signed certificate</label>
+    <div class="actions"><button type="submit" class="secondary">Preview the change</button></div>
+  </form>
+  <div id="frigate-preview" hidden>
+    <p>Osprey adds these lines to Frigate's config. It keeps a copy of the current config first.</p>
+    <pre id="frigate-diff" class="code diff"></pre>
+    <label><input type="checkbox" id="frigate-restart" checked> Restart Frigate so it loads the camera</label>
+    <div class="actions"><button type="button" id="frigate-apply">Add to Frigate</button></div>
+  </div>
+  <p id="frigate-result" role="status"></p>
+  <div class="actions"><button type="button" id="frigate-next">Next</button></div>
 </section>
 
 <section data-step="done" data-title="Done" hidden>
