@@ -50,7 +50,7 @@ container:
 ```sh
 docker run --rm --network host --user "$(id -u)" \
   -v ~/.config/osprey:/run/osprey \
-  ghcr.io/grayslawson/osprey:0.9.0b5 protect-guard \
+  ghcr.io/grayslawson/osprey:0.9.0b6 protect-guard \
   --console https://192.0.2.1 --camera-ip 192.0.2.20 \
   --api-key-file /run/osprey/unifi-api-key \
   --pin-file /run/osprey/unifi-console.pin

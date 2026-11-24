@@ -4,7 +4,30 @@ Every release of Osprey, newest first. Each section is generated from the
 Conventional Commit titles merged for that release, and it is also the body
 of the GitHub release. See cliff.toml and CONTRIBUTING.md. The sections for
 0.9.0b1 to 0.9.0b3 were written by hand, before the notes came from git-cliff,
-and the 0.9.0b4 and 0.9.0b5 sections were rewritten by hand from the git-cliff output.
+and the 0.9.0b4 to 0.9.0b6 sections were rewritten by hand from the git-cliff output.
+
+## [0.9.0b6] - 2026-11-24
+
+### Assist
+- Survey, a new Assist task, sweeps the camera across its whole pan and tilt
+  range, stitches a day or night panorama, labels the regions it sees and
+  scores how interesting each one is (using Frigate event counts when Frigate
+  is connected). From that it proposes presets, a patrol route, night views and
+  Frigate zones. Applying them follows the autonomy level and can be undone.
+  See `docs/survey.md`, which also defines the shared scene-layer interfaces.
+- Three new tasks, `quality.glare`, `quality.blur` and `quality.action`, each
+  ask one decision model one question, with its own threshold and a fallback
+  chain. The defaults come from a bake-off on real camera frames. Glare and
+  blur answers overrule the local rules; exposure and noise stay with the
+  rules. The judge scores before and after pictures with the same model.
+  Pictures are still sent only when both the provider and the task allow it.
+- Providers take an `extra_body` key, sent with every request, for example to
+  ask a gateway not to keep data.
+
+### Controller
+- The state document carries `ptz.fov`, the camera's field of view.
+- The Assist token has a new `patrol` scope, on by default, for editing patrol
+  points and deleting presets.
 
 ## [0.9.0b5] - 2026-11-24
 
