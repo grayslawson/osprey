@@ -20,6 +20,7 @@ const STATE_TONE = {
   tracking: "warn",
   camera_busy: "warn",
   busy: "warn",
+  assist: "warn",
   error: "bad",
 };
 
@@ -30,6 +31,7 @@ const STATE_LABEL = {
   tracking: "Standing down (autotracking)",
   camera_busy: "Camera busy",
   busy: "Camera in use",
+  assist: "Paused by Assist",
   error: "Error",
 };
 
@@ -63,7 +65,7 @@ function draftFrom(config) {
     points: (source.points || []).map((point) => ({
       name: point.name,
       dwell_sec: point.dwell_sec === null || point.dwell_sec === undefined ? "" : String(point.dwell_sec),
-      night_preset: point.night_preset || "", // kept through edits; set it via the API or config
+      night_preset: point.night_preset || "",
     })),
   };
 }
@@ -348,6 +350,19 @@ export function SentryPage() {
                                     editPoints((list) => list.map((item, i) => (i === index ? { ...item, dwell_sec: value } : item)));
                                   }} />
                               </label>
+                              <label class="point-night">Night view
+                                <select aria-label=${`Night view for patrol position ${index + 1}`}
+                                  value=${point.night_preset}
+                                  onChange=${(event) => {
+                                    const value = event.currentTarget.value;
+                                    editPoints((list) => list.map((item, i) => (i === index ? { ...item, night_preset: value } : item)));
+                                  }}>
+                                  <option value="">Same as day</option>
+                                  ${point.night_preset && !names.includes(point.night_preset)
+                                    ? html`<option value=${point.night_preset}>${point.night_preset}</option>` : null}
+                                  ${names.map((name) => html`<option value=${name} key=${name}>${name}</option>`)}
+                                </select>
+                              </label>
                               <button type="button" class="icon" aria-label=${`Move patrol position ${index + 1} up`}
                                 disabled=${index === 0} onClick=${() => movePoint(index, -1)}>↑</button>
                               <button type="button" class="icon" aria-label=${`Move patrol position ${index + 1} down`}
@@ -360,7 +375,8 @@ export function SentryPage() {
                         })}
                       </ol>`}
                   <p class="muted">A position names a saved preset. Leave the dwell empty to use the interval instead.
-                    A preset that does not exist yet is reported as an error when the patrol reaches it.</p>
+                    A preset that does not exist yet is reported as an error when the patrol reaches it.
+                    A night view is the preset the patrol visits instead while the camera reports night.</p>
                 </section>
 
                 ${error ? html`<p class="field-error" role="alert">${error}</p>` : null}

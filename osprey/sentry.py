@@ -27,6 +27,10 @@ import arbitration
 log = logging.getLogger("osprey.sentry")
 
 MIN_INTERVAL_SEC: Final = 1.0
+# The patrol hold and dwell overrides are bounded so a sidecar cannot starve the patrol.
+MAX_HOLD_SEC: Final = 300.0
+MAX_DWELL_FACTOR: Final = 10.0
+MAX_DWELL_TTL_SEC: Final = 86400.0
 # A day/night change must persist this long before the patrol switches views, so
 # a flickering scene state cannot thrash the head.
 NIGHT_HOLD_SEC: Final = 120.0
@@ -52,6 +56,9 @@ class SentrySnapshot:
     next_move_at: float | None
     last_error: str | None
     moves: int
+    hold_remaining_sec: float = 0.0
+    hold_reason: str = ""
+    dwell_override: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -62,6 +69,9 @@ class SentrySnapshot:
             "next_move_at": self.next_move_at,
             "last_error": self.last_error,
             "moves": self.moves,
+            "hold_remaining_sec": round(self.hold_remaining_sec, 1),
+            "hold_reason": self.hold_reason,
+            "dwell_override": dict(self.dwell_override),
         }
 
 
@@ -91,6 +101,10 @@ class SentryPatrol:
     _point: str | None = field(default=None, init=False)
     _last_error: str | None = field(default=None, init=False)
     _moves: int = field(default=0, init=False)
+    _hold_until: float = field(default=0.0, init=False)
+    _hold_reason: str = field(default="", init=False)
+    _dwell_override: dict[str, float] = field(default_factory=dict, init=False)
+    _dwell_until: float = field(default=0.0, init=False)
     _night: bool = field(default=False, init=False)
     _night_changed_at: float | None = field(default=None, init=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False)
@@ -142,12 +156,63 @@ class SentryPatrol:
             self._state = "disabled"
             self._publish()
 
+    # Runtime-only overrides for Osprey Assist. Both expire on their own, so a
+    # crashed sidecar can never freeze or reshape the patrol, and neither is
+    # persisted: the configured tour stays the source of truth.
+
+    def hold(self, seconds: float, reason: str = "", *, now: float | None = None) -> float:
+        """Stand down for ``seconds``; returns the expiry on the patrol clock."""
+        clock = time.monotonic() if now is None else now
+        with self._lock:
+            self._hold_until = clock + seconds
+            self._hold_reason = reason[:64]
+            self._publish()
+            return self._hold_until
+
+    def release(self) -> None:
+        with self._lock:
+            self._hold_until = 0.0
+            self._hold_reason = ""
+            self._publish()
+
+    def hold_remaining(self, *, now: float | None = None) -> float:
+        clock = time.monotonic() if now is None else now
+        with self._lock:
+            return max(0.0, self._hold_until - clock)
+
+    def set_dwell(self, dwell: dict[str, float], ttl_sec: float, *, now: float | None = None) -> dict[str, float]:
+        """Override per-point dwell for ``ttl_sec``. Unknown points are ignored.
+
+        Each value is clamped to ``MIN_INTERVAL_SEC`` .. ``interval_sec * MAX_DWELL_FACTOR``.
+        Returns what was applied, keyed by the configured point name.
+        """
+        clock = time.monotonic() if now is None else now
+        with self._lock:
+            known = {point.name.casefold(): point.name for point in self._points}
+            high = self.interval_sec * MAX_DWELL_FACTOR
+            applied = {
+                known[key.strip().casefold()]: min(high, max(MIN_INTERVAL_SEC, float(value)))
+                for key, value in dwell.items() if key.strip().casefold() in known
+            }
+            self._dwell_override = {name.casefold(): value for name, value in applied.items()}
+            self._dwell_until = clock + ttl_sec if applied else 0.0
+            return applied
+
+    def dwell_override(self, *, now: float | None = None) -> dict[str, float]:
+        clock = time.monotonic() if now is None else now
+        with self._lock:
+            if clock >= self._dwell_until:
+                self._dwell_override = {}
+            return {name: value for name, value in self._dwell_override.items()}
+
     def snapshot(self) -> SentrySnapshot:
         with self._lock:
             return SentrySnapshot(
                 self._enabled, self._state, self._point,
                 tuple(point.name for point in self._points), self._next_move_at,
                 self._last_error, self._moves,
+                max(0.0, self._hold_until - time.monotonic()), self._hold_reason,
+                dict(self._dwell_override) if time.monotonic() < self._dwell_until else {},
             )
 
     def _night_now(self, clock: float) -> bool:
@@ -167,6 +232,16 @@ class SentryPatrol:
         """Run one due patrol decision; return True only when a move was sent."""
         clock = time.monotonic() if now is None else now
         with self._lock:
+            if self._enabled and clock < self._hold_until:
+                # Assist is running a trial. The schedule is left alone, so the
+                # patrol resumes the moment the hold ends.
+                if self._state != "assist":
+                    self._state = "assist"
+                    self._publish()
+                return False
+            if self._state == "assist":
+                self._state = "waiting"
+                self._publish()
             if not self._enabled or not self._points or self._next_move_at is None or clock < self._next_move_at:
                 return False
             if self.tracking_active():
@@ -221,6 +296,8 @@ class SentryPatrol:
             self._moves += 1
             self._index = (self._index + 1) % len(self._points)
             dwell = point.dwell_sec if point.dwell_sec is not None else self.interval_sec
+            if clock < self._dwell_until:
+                dwell = self._dwell_override.get(point.name.casefold(), dwell)
             self._state, self._next_move_at = "moving", clock + dwell
             log.info("sentry patrol moved to %s", point.name)
             self._publish()

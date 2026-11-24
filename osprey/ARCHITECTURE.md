@@ -54,9 +54,11 @@ its own URL; the camera dials back on the same path negotiating subprotocol
 `ptz1`. There is no absolute-move verb: a move is *configure a preset, then go to
 it* (`Preset` with `action:config` then `action:go`), and presets carry focus, so
 the model is four axes. Position is both polled (`GetCurrentPosition`) and pushed
-(`EventMotorState`). Every PTZ producer (ONVIF, the console, MQTT, the sentry
-patrol) takes a per-camera movement lease, and `arbitration.py` tags each move
-`auto`, `manual` or `patrol` so a manual hold can hold off autotracking.
+(`EventMotorState`). The sentry patrol, MQTT commands and Osprey Assist take a
+per-camera movement lease. ONVIF (Frigate) and console moves do not; they are
+arbitrated instead. `arbitration.py` tags each move `auto`, `manual`, `patrol`
+or `assist` so a manual hold can hold off autotracking and an autotracker can
+take the camera from a patrol or Assist move that is still travelling.
 
 **Media** is pushed, not pulled. Arming a track with a `destinations` address makes
 the camera dial it and write `extendedFlv`, FLV with 20 bytes between tags instead

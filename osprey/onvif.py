@@ -590,6 +590,9 @@ class Backend:
     # one. It owns one tour per camera and shares the movement gate with every
     # other PTZ producer, so the operator API can configure and report on it.
     sentry: Callable[[], "SentryManager | None"] = lambda: None
+    # Live facts Assist needs to stay out of the way: {"auto_active_age_sec",
+    # "manual_hold_remaining_sec"}. Empty when the backend cannot tell.
+    signals: Callable[[], dict[str, object]] = dict
 
 
 # ------------------------------------------------------------------------ events

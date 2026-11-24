@@ -194,6 +194,39 @@ def validate_runtime(value: dict[str, Any]) -> None:
     validate_discovery(value.get("discovery", {}))
     validate_onvif(value.get("onvif", {}))
     validate_sentry(value.get("sentry"))
+    validate_assist(value.get("assist"))
+
+
+ASSIST_KEYS: Final[frozenset[str]] = frozenset({"enabled", "url", "token_file", "scopes"})
+
+
+def validate_assist(value: Any) -> dict[str, Any]:
+    """``assist``: the optional Osprey Assist sidecar. Off unless ``enabled`` is true.
+
+    ``url`` is where the console proxy reaches it, ``token_file`` holds the bearer
+    token it uses (made on first start when missing), ``scopes`` narrows what it may do.
+    """
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError('"assist" must be an object')
+    unknown = set(value) - ASSIST_KEYS
+    if unknown:
+        raise ValueError(f'unknown assist setting(s): {", ".join(sorted(unknown))}')
+    out = {**DEFAULTS["assist"], **value}
+    if not isinstance(out["enabled"], bool):
+        raise ValueError('"assist.enabled" must be a boolean')
+    if not isinstance(out["url"], str) or re.fullmatch(r"https?://[^\s/?#]+(/[^\s?#]*)?", out["url"]) is None:
+        raise ValueError('"assist.url" must be an http or https URL')
+    token_file = out["token_file"]
+    if token_file is not None and (not isinstance(token_file, str) or not token_file.strip()):
+        raise ValueError('"assist.token_file" must be a path or null')
+    scopes = out["scopes"]
+    if (not isinstance(scopes, list) or not scopes
+            or any(item not in ("quality", "presets") for item in scopes)):
+        raise ValueError('"assist.scopes" must be a list of "quality" and "presets"')
+    return out
+
 
 def validate_discovery(value: Any) -> None:
     """``discovery``: which LAN interface WS-Discovery uses, Hello cadence, scopes."""
@@ -453,6 +486,14 @@ DEFAULTS: Final[dict[str, Any]] = {
         "speed": ptz.DEFAULT_SPEED,
         "tracking_hold_sec": 15,
         "cameras": {},
+    },
+    # Osprey Assist, the optional image-quality sidecar (docs/assist.md). The core
+    # only opens a token-authenticated door for it and proxies the console tab.
+    "assist": {
+        "enabled": False,
+        "url": "http://127.0.0.1:8090",
+        "token_file": None,
+        "scopes": ["quality", "presets"],
     },
     # WS-Discovery: pin multicast to one LAN interface/address, repeat Hello
     # every hello_interval seconds (0 = only at startup), add scopes.

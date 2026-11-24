@@ -168,6 +168,7 @@ dialog::backdrop { background: rgb(0 0 0 / 0.5); }
 /* ---- patrol panel ---- */
 .point-name { flex: 1 1 8rem; min-width: 0; }
 .point-dwell { flex: 0 0 7rem; }
+.point-night { flex: 0 0 9rem; }
 
 @media (min-width: 900px) {
   .tabs {

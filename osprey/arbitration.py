@@ -18,6 +18,11 @@ Every PTZ command is tagged with the kind of client that sent it, through the
     priority runs the other way too: an autotracker takes the camera from a
     patrol that is still travelling to its next point, because a tracked
     object outranks idle-time work.
+``ASSIST``
+    Osprey Assist, the optional image-quality sidecar. It ranks exactly like
+    the patrol: a manual hold stops it, an autotracker takes the camera from
+    it, it never starts a hold and it does not count as autotracking. It has
+    its own kind so logs and counters can tell its moves apart.
 ``None`` (untagged)
     Osprey itself (auto-home, recovery). It is never held back and never starts
     a hold.
@@ -37,6 +42,7 @@ from typing import Callable, Final
 MANUAL: Final = "manual"
 AUTO: Final = "auto"
 PATROL: Final = "patrol"
+ASSIST: Final = "assist"
 
 source: contextvars.ContextVar[str | None] = contextvars.ContextVar("ptz_source", default=None)
 
@@ -63,8 +69,8 @@ class Arbiter:
 
         * a person may replace a move an autotracker, a patrol or Osprey
           itself started;
-        * an autotracker may replace a move the sentry patrol started.  The
-          patrol is idle-time work and a tracked object outranks it.  Without
+        * an autotracker may replace a move the sentry patrol or Assist
+          started.  Both are idle-time work and a tracked object outranks them.  Without
           this the autotracker's first move is refused as "the camera is
           already moving" for as long as the head is travelling to the next
           patrol point, and the tracking never starts.
@@ -84,7 +90,7 @@ class Arbiter:
             if self.hold_sec > 0 and now < self._until.get(mac, 0.0):
                 self.dropped += 1
                 return False, False
-            supersede = kind == AUTO and self._last.get(mac) == PATROL
+            supersede = kind == AUTO and self._last.get(mac) in (PATROL, ASSIST)
             self._last[mac] = kind
             return True, supersede
 

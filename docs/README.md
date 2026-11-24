@@ -27,6 +27,7 @@
   ONVIF device.
 - [Protect guard](protect-guard.md): keep Protect from adopting the camera.
 - [MQTT](mqtt.md): commands and state topics.
+- [Assist](assist.md): the optional image-quality helper and the doors it uses.
 
 ## Operate
 
