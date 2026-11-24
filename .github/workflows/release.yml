@@ -8,9 +8,13 @@ name: Release
 # which is why homeassistant.yml is called from here instead of listening for
 # `release: published`.
 #
-# Publishing requires the GitHub environment `pypi`, a PyPI trusted
-# publisher for `osprey-ptz` and an npm trusted publisher for
-# `@osprey-ptz/cli`, both naming this workflow file. A failed publish fails the run.
+# PyPI and npm publishing are off until the repository variables
+# PUBLISH_PYPI and PUBLISH_NPM are set to `true` (see CONTRIBUTING.md,
+# "Releasing"). While a variable is unset its job is skipped, and the GitHub
+# Release, image and add-on are still published. Once switched on, publishing
+# requires the GitHub environment `pypi`, a PyPI trusted publisher for
+# `osprey-ptz` and an npm trusted publisher for `@osprey-ptz/cli`, both naming
+# this workflow file, and a failed publish fails the run.
 
 on:
   push:
@@ -179,6 +183,7 @@ jobs:
   pypi:
     name: Publish to PyPI
     needs: [distributions]
+    if: vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -196,6 +201,7 @@ jobs:
   npm:
     name: Publish to npm
     needs: [verify, test]
+    if: vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -232,7 +238,8 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    if: github.event_name == 'push'
+    # Runs when pypi and npm succeeded or were skipped (variables unset), never after a failure.
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' }}
     needs: [verify, pypi, npm, image]
     runs-on: ubuntu-latest
     permissions:
