@@ -87,6 +87,11 @@ curl -s --cookie cookies.txt -H "X-CSRF-Token: $TOKEN" \
 | GET | `/api/v1/cameras/{cam}/sentry` | One patrol: config, live state and available presets. |
 | POST | `/api/v1/cameras/{cam}/sentry` | Configure or enable the patrol. |
 | DELETE | `/api/v1/cameras/{cam}/sentry` | Disable the patrol and drop its points. |
+| POST | `/api/v1/cameras/{cam}/sentry/hold` | `{"seconds": 1-300, "reason"?}` stands the patrol down. It resumes on its own when the time is up. |
+| DELETE | `/api/v1/cameras/{cam}/sentry/hold` | End the hold now. |
+| POST | `/api/v1/cameras/{cam}/sentry/dwell` | `{"dwell_sec": {"gate": 60}, "ttl_sec": 1-86400}` overrides per point dwell for a while. |
+| DELETE | `/api/v1/cameras/{cam}/sentry/dwell` | Drop the override. |
+| GET, POST, DELETE | `/api/v1/assist/...` | The console's door to [Osprey Assist](#osprey-assist-routes). `404 no_assist` unless Assist is switched on. |
 
 ### `ptz/move`
 
@@ -121,11 +126,52 @@ describes. Errors on this route: `400 invalid` for a wrong type, an unknown
 field or a duplicate point name, `404 no_sentry` for a camera with no patrol,
 and `409 ptz_unavailable` for a camera without a PTZ channel.
 
+The hold and the dwell override live in memory. They never touch
+`sentry.json`, they expire by themselves, and a dwell is clamped to 1 second up
+to ten times the interval. Unknown point names are ignored. Both return
+`200` with `held: false` or an empty `applied` when the camera has no running
+patrol.
+
+`GET .../state` also carries two things for Assist. `ptz.scene` is `DAY` or
+`NIGHT` as the camera last reported it, and `null` until it does.
+`assist_signals` has the scene, `auto_active_age_sec` (seconds since Frigate
+last moved the camera, `null` if never), `manual_hold_remaining_sec`,
+`patrol_hold_remaining_sec` and `lease_owner`.
+
+### Osprey Assist routes
+
+Osprey Assist is a separate process, see [Assist](assist.md). It authenticates
+with `Authorization: Bearer <token>`, the token in `OSPREY_ASSIST_TOKEN_FILE`.
+A bearer request needs no cookie and no CSRF header, and each move it makes is
+tagged `ASSIST`: it yields to a person and to Frigate, never starts a manual
+hold and never counts as autotracking. It takes the same movement lease as the
+patrol, so the answer to a move can be `409 ptz_busy`. A move dropped because a
+person holds the camera is refused with `409` rather than reported as done.
+
+The token may call only these routes. Anything else is `403 assist_scope`.
+
+| Scope | Routes |
+|---|---|
+| `quality` | `GET` cameras, events, `state`, `snapshot.jpg`, `presets`, `sentry`. `POST` `ptz/move`, `ptz/center`, `presets/{token}/goto`, `isp`, `sentry/hold`, `sentry/dwell`. `DELETE` `sentry/hold`, `sentry/dwell`. |
+| `presets` | `POST presets`, `PUT presets/{token}`, and `POST sentry` with the same points and a changed `night_preset`. |
+
+`isp` from the token accepts only `hdr`, `gain`, `shutter`, `aeTargetPercent`,
+`brightness`, `contrast`, `sharpness`, `denoise`, `icrSensitivity`,
+`touchFocusX` and `touchFocusY`, as numbers inside fixed bounds. The keys the
+camera ignores (`focusPosition`, `irLedLevel`, `irLedMode`, `wdr`) are refused.
+The console's own `isp` route is unchanged.
+
+The console reaches Assist through `/api/v1/assist/...`. Osprey checks the
+console session and CSRF token first, then forwards a short list of paths
+(`status`, `settings`, `decisions`, `frames`, `check` and `data`) to
+`assist.url` with the token and an `X-Osprey-Principal: console` header.
+`502 assist_unreachable` means Assist did not answer.
+
 ### Server sent events
 
 `GET /api/v1/events` sends a `state` event first, then:
 
-- `ptz` when the status, position or error changes (checked every 100 ms).
+- `ptz` when the status, position, scene or error changes (checked every 100 ms).
 - `log` for each new record at or above `log_level`. The event `id` is the log
   sequence, and `Last-Event-ID` resumes.
 - `preset` with the full list, after a change.

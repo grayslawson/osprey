@@ -45,8 +45,8 @@ Commands are JSON on QoS 1, under `<base_topic>/<device>/command/`:
 | `osprey/driveway/command/home` | `{}` |
 | `osprey/driveway/command/sentry` | `{"camera":"AABBCCDDEEFF","enabled":true,"points":[{"name":"gate"}]}` |
 
-Movement commands go through the same per-camera movement lease as the
-console, the patrol and Frigate, and start a manual hold. If the camera is
+Movement commands take the same movement lease as the patrol, and start a
+manual hold like the console does. If the camera is
 busy, the command fails with an error rather than forcing the move. Retained
 commands are ignored, so a reconnect never replays a move.
 
@@ -67,8 +67,11 @@ A `state/ptz` message looks like this (see [PTZ health](ptz-health.md)):
 
 ```json
 {"camera":"g5-ptz-aabbccddeeff","state":"UNKNOWN","pan_tilt":"UNKNOWN",
- "zoom":"UNKNOWN","error":"motor state timeout","position":{},"at":0}
+ "zoom":"UNKNOWN","error":"motor state timeout","scene":"NIGHT","position":{},"at":0}
 ```
+
+`scene` is `DAY` or `NIGHT`, as the camera last reported it, and `null` until
+it does. A change of scene publishes a new message right away.
 
 Payloads are validated: `step` is 1 to 20, `percent` is 0 to 100, and a
 preset name is at most 64 characters. Movement commands carry no camera field,

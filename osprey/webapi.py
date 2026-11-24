@@ -25,6 +25,8 @@ import re
 import secrets
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from collections.abc import Set as AbstractSet
@@ -36,11 +38,13 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qs, quote, unquote
 
 import arbitration
+import assist_scope
 from firmware import firmware_status
 from onboarding import Onboarding, OnboardingError
 import ptz
 import websecurity
 from model import Camera, Position
+from sentry import MAX_DWELL_TTL_SEC, MAX_HOLD_SEC
 from sentry_runtime import SentryConfig
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only for annotations
@@ -154,6 +158,8 @@ def ptz_state(camera: Camera | None, *, enabled: bool = True) -> dict[str, objec
         "raw": {"pan": position.pan, "tilt": position.tilt, "zoom": position.zoom, "focus": position.focus},
         "updated_at": round(camera.motion.updated_at, 3),
         "fov_calibrated": camera.field_of_view is not None,
+        # DAY or NIGHT as the camera last reported it; null until it does.
+        "scene": camera.scene,
     }
 
 
@@ -359,6 +365,8 @@ class WebApp:
         self.recover_hook: Callable[["Services"], tuple[bool, str]] | None = None
         # The wizard's post-save steps (``/api/v1/setup/...``); set by the daemon.
         self.onboarding: Onboarding | None = None
+        # The Osprey Assist sidecar: its bearer token, scopes and URL. None means off.
+        self.assist: assist_scope.AssistLink | None = None
 
     def close(self) -> None:
         self._stopping.set()
@@ -424,6 +432,9 @@ class WebApp:
             else:
                 raise ApiError(HTTPStatus.METHOD_NOT_ALLOWED, "method", "unsupported method")
             return
+        if self._bearer(h) is not None:
+            self._assist_request(request, path)
+            return
         mutating = method in ("POST", "PUT", "PATCH", "DELETE")
         self._authorize(h, csrf=mutating)
         if path == "/events" and method == "GET":
@@ -437,6 +448,9 @@ class WebApp:
             return
         if path == "/sentry" and method == "GET":
             self._send_json(h, HTTPStatus.OK, self.sentry_overview())
+            return
+        if path == "/assist" or path.startswith("/assist/"):
+            self._assist_proxy(request, path[len("/assist"):] or "/")
             return
         if path.startswith("/setup/"):
             self._setup_route(h, method, path, request.query)
@@ -452,8 +466,101 @@ class WebApp:
         finally:
             arbitration.source.reset(token)
 
+    # ------------------------------------------------------------ Osprey Assist
+
+    @staticmethod
+    def _bearer(h: "_Handler") -> str | None:
+        value = h.headers.get("Authorization", "")
+        return value[7:].strip() if value[:7].lower() == "bearer " else None
+
+    def _assist_request(self, request: _Request, path: str) -> None:
+        """A request from the Assist process: bearer token, fixed routes, ASSIST priority."""
+        h = request.handler
+        method = request.method
+        link = self.assist
+        supplied = self._bearer(h) or ""
+        if link is None or not hmac.compare_digest(supplied.encode(), link.token.encode()):
+            self._drain(h)
+            raise ApiError(HTTPStatus.UNAUTHORIZED, "bad_token", "the Assist token is missing or wrong")
+        scope = assist_scope.route_scope(method, path)
+        if scope is None or scope not in link.scopes:
+            self._drain(h)
+            raise ApiError(HTTPStatus.FORBIDDEN, "assist_scope", "the Assist token may not call this route",
+                           "Presets and night views need the presets scope." if scope else "")
+        if path == "/events":
+            self._events(request)
+            return
+        if path == "/cameras":
+            self._send_json(h, HTTPStatus.OK, {"cameras": [self._camera_summary(i, s) for i, s in self._cameras()]})
+            return
+        match = re.fullmatch(r"/cameras/([^/]+)(/.*)", path)
+        assert match is not None  # route_scope only passes camera paths of this shape
+        camera_id = unquote(match.group(1))
+        services = self._resolve(camera_id)
+        token = arbitration.source.set(arbitration.ASSIST)
+        try:
+            with self._assist_lease(services, method, path):
+                self._camera_route(h, method, camera_id, services, match.group(2), assist=True)
+        finally:
+            arbitration.source.reset(token)
+
+    @contextmanager
+    def _assist_lease(self, services: "Services", method: str, path: str) -> Iterator[None]:
+        """Moves from Assist take the patrol's movement lease, so the two never overlap."""
+        manager = services.backend.sentry()
+        camera = services.backend.camera()
+        if manager is None or camera is None or not assist_scope.takes_lease(method, path):
+            yield
+            return
+        try:
+            with manager.gate.lease("assist", camera.mac):
+                yield
+        except BlockingIOError:
+            raise ApiError(HTTPStatus.CONFLICT, "ptz_busy", "another producer is moving the camera") from None
+
+    def _assist_proxy(self, request: _Request, rest: str) -> None:
+        """Forward a console request to Assist, which trusts only this process."""
+        h = request.handler
+        link = self.assist
+        if link is None:
+            self._drain(h)
+            raise ApiError(HTTPStatus.NOT_FOUND, "no_assist", "Osprey Assist is not set up")
+        if not assist_scope.proxy_allowed(request.method, rest):
+            self._drain(h)
+            raise ApiError(HTTPStatus.NOT_FOUND, "not_found", "no such Assist resource")
+        data = b""
+        if request.method in ("POST", "PUT"):
+            parsed = self._read_json(h)
+            data = json.dumps(parsed, separators=(",", ":")).encode()
+        query = "&".join(
+            f"{quote(key)}={quote(value[0])}" for key, value in sorted(request.query.items())
+            if key in assist_scope.PROXY_QUERY and value
+        )
+        upstream = urllib.request.Request(
+            link.url.rstrip("/") + rest + (f"?{query}" if query else ""),
+            data=data if request.method in ("POST", "PUT") else None, method=request.method,
+            headers={"Authorization": f"Bearer {link.token}", "X-Osprey-Principal": "console",
+                     "Content-Type": "application/json", "Accept": "application/json, image/jpeg"},
+        )
+        try:
+            with urllib.request.urlopen(upstream, timeout=assist_scope.PROXY_TIMEOUT_SEC) as reply:  # noqa: S310
+                status, kind, payload = reply.status, reply.headers.get("Content-Type", ""), reply.read(assist_scope.PROXY_MAX_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            status, kind, payload = exc.code, exc.headers.get("Content-Type", ""), exc.read(assist_scope.PROXY_MAX_BYTES + 1)
+        except (urllib.error.URLError, OSError, ValueError):
+            raise ApiError(HTTPStatus.BAD_GATEWAY, "assist_unreachable", "Osprey Assist did not answer",
+                           "Check that it is running and that assist.url is right.") from None
+        if len(payload) > assist_scope.PROXY_MAX_BYTES:
+            raise ApiError(HTTPStatus.BAD_GATEWAY, "assist_too_large", "Osprey Assist sent too much data")
+        media = "image/jpeg" if kind.startswith("image/jpeg") else "application/json"
+        try:
+            code = HTTPStatus(status)
+        except ValueError:
+            code = HTTPStatus.BAD_GATEWAY
+        h._send(code, payload, media, headers=(("Cache-Control", "no-store"),))
+
     def _camera_route(self, h: "_Handler", method: str, camera_id: str,
-                      services: "Services", rest: str) -> None:
+                      services: "Services", rest: str, *, assist: bool = False) -> None:
         def body() -> object:
             return self._read_json(h)
 
@@ -472,7 +579,7 @@ class WebApp:
         elif rest == "/ptz/move" and method == "POST":
             status, result = self.ptz_move(services, body())
         elif rest == "/isp" and method == "POST":
-            status, result = self.isp_apply(services, body())
+            status, result = self.isp_apply(services, body(), assist=assist)
         elif rest == "/ptz/center" and method == "POST":
             status, result = self.ptz_center(services, body())
         elif rest == "/ptz/stop" and method == "POST":
@@ -504,7 +611,17 @@ class WebApp:
         elif rest == "/sentry" and method == "GET":
             status, result = self.sentry_get(services)
         elif rest == "/sentry" and method == "POST":
-            status, result = self.sentry_post(services, body())
+            status, result = self.sentry_post(services, body(), night_only=assist)
+        elif rest == "/sentry/hold" and method == "POST":
+            status, result = self.sentry_hold(services, body())
+        elif rest == "/sentry/hold" and method == "DELETE":
+            self._drain(h)
+            status, result = self.sentry_release(services)
+        elif rest == "/sentry/dwell" and method == "POST":
+            status, result = self.sentry_dwell(services, body())
+        elif rest == "/sentry/dwell" and method == "DELETE":
+            self._drain(h)
+            status, result = self.sentry_dwell_clear(services)
         elif rest == "/sentry" and method == "DELETE":
             self._drain(h)
             status, result = self.sentry_delete(services)
@@ -596,15 +713,23 @@ class WebApp:
                            "this camera has no idle patrol configured")
         return HTTPStatus.OK, manager.snapshot(mac)
 
-    def sentry_post(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
+    def sentry_post(self, services: "Services", data: object, *,
+                    night_only: bool = False) -> tuple[HTTPStatus, dict[str, object]]:
         manager = self._sentry_manager(services)
         mac = self._sentry_mac(services)
         self._ptz_camera(services)
         fields = self._fields(
             data,
-            {"enabled", "interval_sec", "speed", "tracking_hold_sec", "points"},
+            {"points"} if night_only else {"enabled", "interval_sec", "speed", "tracking_hold_sec", "points"},
         )
         current = manager.config(mac)
+        if night_only:
+            # Assist may set a point's night view and nothing else about the tour.
+            points = self._sentry_points(fields.get("points"))
+            if current is None or [(p["name"], p["dwell_sec"]) for p in points] != [
+                    (p.name, p.dwell_sec) for p in current.points]:
+                raise ApiError(HTTPStatus.FORBIDDEN, "assist_scope",
+                               "Assist may change a night view only, not the tour itself")
         base: dict[str, object] = current.as_dict() if current is not None else {
             "enabled": False,
             "interval_sec": 45.0,
@@ -623,6 +748,46 @@ class WebApp:
         except ValueError as exc:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", str(exc)) from None
         return HTTPStatus.OK, manager.snapshot(mac)
+
+    def sentry_hold(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        """Stand the patrol down for a few minutes at most; it resumes by itself."""
+        manager = self._sentry_manager(services)
+        mac = self._sentry_mac(services)
+        fields = self._fields(data, {"seconds", "reason"}, {"seconds"})
+        seconds = self._float(fields, "seconds", 1.0, MAX_HOLD_SEC)
+        reason = fields.get("reason", "")
+        if not isinstance(reason, str) or len(reason) > 64:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "reason must be text of at most 64 characters")
+        held = manager.hold(mac, float(seconds or 1.0), reason)
+        return HTTPStatus.OK, {"ok": True, "held": held, "remaining_sec": round(manager.hold_remaining(mac), 1)}
+
+    def sentry_release(self, services: "Services") -> tuple[HTTPStatus, dict[str, object]]:
+        manager = self._sentry_manager(services)
+        manager.release(self._sentry_mac(services))
+        return HTTPStatus.OK, {"ok": True}
+
+    def sentry_dwell(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
+        """Override per-point dwell for a while. Never saved: the configured tour is untouched."""
+        manager = self._sentry_manager(services)
+        mac = self._sentry_mac(services)
+        fields = self._fields(data, {"dwell_sec", "ttl_sec"}, {"dwell_sec", "ttl_sec"})
+        raw = fields["dwell_sec"]
+        if not isinstance(raw, dict) or not 1 <= len(raw) <= 32:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "dwell_sec must map 1 to 32 point names to seconds")
+        dwell: dict[str, float] = {}
+        for name, value in raw.items():
+            if (not isinstance(name, str) or len(name) > _PRESET_NAME_MAX or isinstance(value, bool)
+                    or not isinstance(value, (int, float)) or not math.isfinite(value)):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "dwell_sec values must be numbers")
+            dwell[name] = float(value)
+        ttl = self._float(fields, "ttl_sec", 1.0, MAX_DWELL_TTL_SEC) or 1.0
+        applied = manager.set_dwell(mac, dwell, ttl)
+        return HTTPStatus.OK, {"ok": True, "applied": applied or {}, "ttl_sec": ttl}
+
+    def sentry_dwell_clear(self, services: "Services") -> tuple[HTTPStatus, dict[str, object]]:
+        manager = self._sentry_manager(services)
+        manager.clear_dwell(self._sentry_mac(services))
+        return HTTPStatus.OK, {"ok": True}
 
     def sentry_delete(self, services: "Services") -> tuple[HTTPStatus, dict[str, object]]:
         manager = self._sentry_manager(services)
@@ -729,6 +894,8 @@ class WebApp:
                 "tracks": tracks,
             },
             "ptz": ptz_state(camera, enabled=services.ptz_enabled),
+            "assist_signals": self.assist_signals(services),
+            "assist": {"enabled": self.assist is not None},
             "streams": streams,
             "presets": self._presets(services),
             "health": {"checks": health_checks(services)},
@@ -748,6 +915,31 @@ class WebApp:
                 "auth": auth.mode,
                 "time": round(time.time(), 3),
             },
+        }
+
+    def assist_signals(self, services: "Services") -> dict[str, object]:
+        """Read-only facts a sidecar needs before it moves the camera or writes ISP."""
+        camera = services.backend.camera()
+        live = services.backend.signals()
+        manager = services.backend.sentry()
+        owner: object = None
+        hold: object = 0.0
+        if manager is not None and camera is not None:
+            movement = manager.gate.snapshot().get("cameras")
+            if isinstance(movement, dict):
+                # The patrol and Assist lease under the camera's MAC; MQTT leases under "".
+                for key in (camera.mac, ""):
+                    entry = movement.get(key)
+                    if isinstance(entry, dict) and entry.get("owner"):
+                        owner = entry["owner"]
+                        break
+            hold = manager.hold_remaining(camera.mac)
+        return {
+            "scene": camera.scene if camera is not None else None,
+            "auto_active_age_sec": live.get("auto_active_age_sec"),
+            "manual_hold_remaining_sec": live.get("manual_hold_remaining_sec", 0.0),
+            "patrol_hold_remaining_sec": hold,
+            "lease_owner": owner,
         }
 
     # --------------------------------------------------------------- PTZ
@@ -794,7 +986,7 @@ class WebApp:
                   speed: int | None = None) -> tuple[HTTPStatus, dict[str, object]]:
         if not services.backend.move_absolute(target, services.backend.max_speed if speed is None else speed):
             refusal = services.backend.move_refusal()
-            code = "ptz_busy" if "moving" in refusal else "ptz_unavailable"
+            code = "ptz_busy" if _is_busy(refusal) else "ptz_unavailable"
             raise ApiError(HTTPStatus.CONFLICT, code, refusal,
                            "Wait for the current move to finish." if code == "ptz_busy"
                            else "Use Recover PTZ, or check the camera connection.")
@@ -884,9 +1076,16 @@ class WebApp:
             raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", "mode must be relative, absolute or continuous")
         return self._dispatch(services, target, speed)
 
-    def isp_apply(self, services: "Services", data: object) -> tuple[HTTPStatus, dict[str, object]]:
+    def isp_apply(self, services: "Services", data: object, *,
+                  assist: bool = False) -> tuple[HTTPStatus, dict[str, object]]:
         """Send ChangeIspSettings fields to the camera (focus mode, IR, exposure...)."""
-        settings = self._isp_settings(data)
+        if assist:
+            try:
+                settings = assist_scope.check_isp(data)
+            except ValueError as exc:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid", str(exc)) from None
+        else:
+            settings = self._isp_settings(data)
         self._ptz_camera(services)
         return HTTPStatus.OK, {"acked": services.backend.change_isp(settings)}
 
@@ -1040,7 +1239,7 @@ class WebApp:
         self._named(services, token)
         if not services.backend.goto_preset(token, services.backend.max_speed):
             refusal = services.backend.move_refusal()
-            raise ApiError(HTTPStatus.CONFLICT, "ptz_busy" if "moving" in refusal else "ptz_unavailable", refusal)
+            raise ApiError(HTTPStatus.CONFLICT, "ptz_busy" if _is_busy(refusal) else "ptz_unavailable", refusal)
         self._wake()
         return HTTPStatus.ACCEPTED, {"ok": True, "token": token}
 
@@ -1305,6 +1504,7 @@ class WebApp:
         cookie = h.headers.get("Cookie", "")
         peer = self._peer(h)
         ingress = bool(websecurity.ingress_prefix(h.headers))
+        token_auth = self._bearer(h) is not None  # the Assist token has no session to expire
         while not self._stopping.wait(self.poll_interval):
             now = time.monotonic()
             frames: list[bytes] = []
@@ -1331,7 +1531,7 @@ class WebApp:
                 if health != last_health:
                     frames.append(sse_frame("health", health))
                     last_health = health
-            if now - last_auth >= min(self.heartbeat_interval, 5.0):
+            if not token_auth and now - last_auth >= min(self.heartbeat_interval, 5.0):
                 last_auth = now
                 if services.auth.principal(cookie, peer=peer, ingress=ingress) is None:
                     write(sse_frame("session", {"authenticated": False}))
@@ -1341,6 +1541,10 @@ class WebApp:
             if frames:
                 write(b"".join(frames))
                 last_write = now
+
+
+def _is_busy(refusal: str) -> bool:
+    return "moving" in refusal or "controlling" in refusal
 
 
 def _changed(new: dict[str, object], old: object, ignore: tuple[str, ...] = ()) -> bool:

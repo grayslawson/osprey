@@ -644,6 +644,8 @@ class Controller:
             if camera is not None and isinstance(scene, str):
                 camera.scene = scene.upper()
                 log.info("camera scene: %s mac=%s", camera.scene, camera.mac)
+                if self.on_motion is not None:  # publishes the new scene to MQTT
+                    self.on_motion(camera)
 
         if name == TIME_SYNC:
             # Answer EVERY timeSync, reply or not. The camera and controller
@@ -1100,6 +1102,12 @@ class Controller:
             return False
         return (time.monotonic() - last) < within_sec
 
+    def auto_age(self, mac: str) -> float | None:
+        """Seconds since an autotracking command reached this camera; None if never."""
+        with self._auto_activity_lock:
+            last = self._auto_activity.get(mac)
+        return None if last is None else max(0.0, time.monotonic() - last)
+
     def move(self, mac: str, position: Any, speed: int = ptz.DEFAULT_SPEED) -> bool:
         """Point the head somewhere. Returns False if no PTZ channel is up."""
         session = self._ptz_session(mac)
@@ -1107,8 +1115,9 @@ class Controller:
             return False
         allowed, supersede = self._admit(mac)
         if not allowed:
-            # Report success: a fault would make an autotracker log errors or back off.
-            return True
+            # Report success: a fault would make an autotracker log errors or back
+            # off. Assist is told the truth, so it does not record a move that never went out.
+            return arbitration.source.get() != arbitration.ASSIST
         with session.move_lock:
             self._continuous_moves.pop(mac, None)
             if not session.camera.motion.begin(position, supersede=supersede):
@@ -1258,7 +1267,7 @@ class Controller:
         target = preset.position if preset is not None else None
         allowed, supersede = self._admit(mac)
         if not allowed:
-            return not strict
+            return not strict and arbitration.source.get() != arbitration.ASSIST
         with session.move_lock:
             self._continuous_moves.pop(mac, None)
             if not session.camera.motion.begin(target, supersede=supersede):

@@ -29,6 +29,7 @@ from types import FrameType
 from typing import Any, Final
 
 import arbitration
+import assist_scope
 import config
 import ptz
 from unifiwire import certs
@@ -95,6 +96,7 @@ class Options:
     frigate_url: str | None = None
     ptz: dict[str, Any] = field(default_factory=lambda: config.validate_ptz(None))
     sentry: dict[str, Any] = field(default_factory=lambda: config.validate_sentry(None))
+    assist: dict[str, Any] = field(default_factory=lambda: config.validate_assist(None))
     onvif_identity: identity.IdentityConfig = field(default_factory=identity.IdentityConfig)
     onvif_log_calls: bool = False
     discovery_interface: str | None = None
@@ -103,6 +105,22 @@ class Options:
     discovery_scopes: tuple[str, ...] = ()
     # "legacy" keeps the old open defaults; resolve_options sets "secure" for a new install.
     security: str = "legacy"
+
+
+def assist_link(options: Options) -> assist_scope.AssistLink | None:
+    """The Assist token door, opened only when ``assist.enabled`` or a token file is named."""
+    named = os.environ.get("OSPREY_ASSIST_TOKEN_FILE", "").strip() or options.assist["token_file"]
+    if not (options.assist["enabled"] or named):
+        return None
+    path = Path(named) if named else options.cert.parent / "assist-token"
+    try:
+        token = assist_scope.load_token(path)
+        scopes = assist_scope.parse_scopes(os.environ.get("OSPREY_ASSIST_SCOPES")) \
+            if os.environ.get("OSPREY_ASSIST_SCOPES") else frozenset(options.assist["scopes"])
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"Osprey Assist is enabled but its token is unusable: {exc}") from exc
+    log.info("Osprey Assist enabled: token %s, scopes %s", path, ",".join(sorted(scopes)))
+    return assist_scope.AssistLink(token, scopes, str(options.assist["url"]))
 
 
 @dataclass
@@ -278,6 +296,10 @@ def resolve_options(args: argparse.Namespace) -> Options:
         sentry_settings = config.validate_sentry(effective.get("sentry"))
     except ValueError as exc:
         raise SystemExit(f"invalid runtime configuration: {exc}") from exc
+    try:
+        assist_settings = config.validate_assist(effective.get("assist"))
+    except ValueError as exc:
+        raise SystemExit(f"invalid runtime configuration: {exc}") from exc
     frigate_url: str | None = None
     frigate_config = effective.get("frigate")
     if isinstance(frigate_config, dict) and frigate_config.get("url") is not None:
@@ -324,6 +346,7 @@ def resolve_options(args: argparse.Namespace) -> Options:
         frigate_url=frigate_url,
         ptz=ptz_settings,
         sentry=sentry_settings,
+        assist=assist_settings,
         onvif_identity=identity.IdentityConfig.from_mapping(onvif_settings.get("identity")),
         onvif_log_calls=bool(onvif_settings.get("log_calls", False)),
         discovery_interface=discovery_settings.get("interface"),
@@ -670,6 +693,8 @@ def build(options: Options) -> Stack:
                 reason = "no camera"
             elif not camera.motion.available:
                 reason = "PTZ channel unavailable"
+            elif control.arbiter.remaining(camera.mac) > 0:
+                reason = "a person is controlling the camera"
             elif camera.motion.activity != 0:
                 reason = "the camera is already moving"
             elif camera.motion.error is not None:
@@ -687,6 +712,16 @@ def build(options: Options) -> Stack:
             mac = selected_mac()
             return control.ptz_health(mac) if mac else {
                 "ptz": False, "healthy": False, "state": "UNKNOWN", "error": "no camera",
+            }
+
+        def selected_signals() -> dict[str, object]:
+            mac = selected_mac()
+            if mac is None:
+                return {}
+            age = control.auto_age(mac)
+            return {
+                "auto_active_age_sec": None if age is None else round(age, 1),
+                "manual_hold_remaining_sec": round(control.arbiter.remaining(mac), 1),
             }
 
         return onvif.Backend(
@@ -715,6 +750,7 @@ def build(options: Options) -> Stack:
             telemetry=lambda: rtsp.telemetry(hub, stream),
             max_speed=options.ptz_max_speed,
             sentry=lambda: sentry_manager,
+            signals=selected_signals,
         )
 
     backend = backend_for(None)
@@ -766,6 +802,7 @@ def build(options: Options) -> Stack:
         if onvif_auth.username and onvif_auth.password else None,
         state_dir=options.config_path.parent,
     )
+    north.web.assist = assist_link(options)
     # The service addresses it advertises must match where it is really listening.
     services.port = north.port
     if setup is not None:
@@ -959,7 +996,7 @@ def build(options: Options) -> Stack:
         position, pan_tilt, zoom_state, error = camera.motion.snapshot()
         now = time.monotonic()
         previous = last_motion.get(camera.mac)
-        state = f"{pan_tilt}/{zoom_state}/{error}"
+        state = f"{pan_tilt}/{zoom_state}/{error}/{camera.scene}"
         if previous is not None and previous[1] == state and now - previous[0] < 1.0:
             return
         last_motion[camera.mac] = (now, state)
@@ -970,6 +1007,7 @@ def build(options: Options) -> Stack:
                 "pan_tilt": pan_tilt,
                 "zoom": zoom_state,
                 "error": error,
+                "scene": camera.scene,
                 "position": position.as_dict(),
                 "at": time.time(),
             })

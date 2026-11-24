@@ -30,6 +30,7 @@ Every key is optional except `host`:
 | `onvif.identity.*` | derived | Northbound device identity overrides. |
 | `discovery.*` | see below | WS-Discovery interface, cadence and scopes. |
 | `sentry.*` | off | Idle patrol. See [sentry](#sentry). |
+| `assist.*` | off | The optional [Assist](assist.md) sidecar: `enabled`, `url` (default `http://127.0.0.1:8090`), `token_file` (default `assist-token` in the state directory) and `scopes`. |
 | `mqtt.*` | off | MQTT bridge. See [MQTT](#mqtt). |
 
 ### Ports
@@ -163,6 +164,8 @@ ASCII characters each), `mac` (unicast, and different from every camera MAC),
 | `OSPREY_EXTRA_ARGS` | Extra controller flags, split on whitespace (container). |
 | `OSPREY_PTZ_MAX_SPEED` | Overrides `ptz.max_speed`. |
 | `OSPREY_PRESETS_FILE` | Overrides `ptz.presets_file`. |
+| `OSPREY_ASSIST_TOKEN_FILE` | Turns on the Osprey Assist door and names its token file. Osprey creates the file (0600) on first start. See [Assist](assist.md). |
+| `OSPREY_ASSIST_SCOPES` | `quality`, `presets` or both, comma separated. Overrides `assist.scopes`. |
 | `OSPREY_FRIGATE_CONFIG_FILE` | Where the Frigate URL set in the console is kept. Without it the setting is lost on restart. |
 
 ### Authentication

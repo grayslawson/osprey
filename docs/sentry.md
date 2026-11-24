@@ -30,8 +30,10 @@ Before each move the patrol checks three things, and waits if any is true:
 3. The camera is still moving from another command.
 
 The same checks run again inside the per-camera movement lease, just before
-the command goes out, so Frigate cannot slip in between the check and the
-move.
+the command goes out. The lease keeps the patrol and MQTT commands from
+overlapping. Frigate and the console do not take it. They are arbitrated
+instead: Frigate's moves count as autotracking and a patrol move that is still
+travelling gives way to them, and the console starts a manual hold.
 
 A patrol move leaves the head travelling for a few seconds. If an
 autotracking command arrives in that window, it replaces the patrol move and
@@ -115,8 +117,17 @@ to the camera that the camera's own IR lights up:
   the G5 PTZ (the camera accepts `irLedLevel` but the image does not change), which is
   why a different view is the lever.
 - Points without a `night_preset` behave as before, and the field is accepted by the
-  config file, the REST API and MQTT. The console keeps it when you edit a patrol but
-  does not yet show it.
+  config file, the REST API, MQTT and the console, where each position has a **Night
+  view** menu.
+
+## Pausing and reshaping the patrol at runtime
+
+[Osprey Assist](assist.md) uses two runtime controls, and any client of the
+[API](api.md#osprey-assist-routes) may too. A hold stands the patrol down for
+up to 5 minutes, and the state shows `assist` while it lasts. A dwell override
+changes how long the patrol stays at named points, for up to a day. Both expire
+on their own, so a crashed client never leaves the patrol frozen, and neither is
+saved: `sentry.json` and your config stay as you set them.
 
 ## Frigate zones and autotracking
 

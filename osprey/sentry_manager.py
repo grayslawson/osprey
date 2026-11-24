@@ -266,6 +266,42 @@ class SentryManager:
         if runtime is not None:
             runtime.stop()
 
+    # ------------------------------------------------- runtime overrides (Assist)
+
+    def hold(self, camera: str, seconds: float, reason: str = "") -> bool:
+        """Stand the patrol down for ``seconds``. False when no patrol is running."""
+        with self._lock:
+            runtime = self._runtimes.get(camera)
+        if runtime is None:
+            return False
+        runtime.patrol.hold(seconds, reason)
+        return True
+
+    def release(self, camera: str) -> None:
+        with self._lock:
+            runtime = self._runtimes.get(camera)
+        if runtime is not None:
+            runtime.patrol.release()
+
+    def hold_remaining(self, camera: str) -> float:
+        with self._lock:
+            runtime = self._runtimes.get(camera)
+        return runtime.patrol.hold_remaining() if runtime is not None else 0.0
+
+    def set_dwell(self, camera: str, dwell: dict[str, float], ttl_sec: float) -> dict[str, float] | None:
+        """Override per-point dwell for a while. None when no patrol is running."""
+        with self._lock:
+            runtime = self._runtimes.get(camera)
+        if runtime is None:
+            return None
+        return runtime.patrol.set_dwell(dwell, ttl_sec)
+
+    def clear_dwell(self, camera: str) -> None:
+        with self._lock:
+            runtime = self._runtimes.get(camera)
+        if runtime is not None:
+            runtime.patrol.set_dwell({}, 0.0)
+
     # ------------------------------------------------------------------- status
 
     def snapshot(self, camera: str | None = None) -> dict[str, object]:
