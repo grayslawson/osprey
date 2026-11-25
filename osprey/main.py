@@ -145,6 +145,8 @@ class Stack:
         self.ingest.start()
         self.uploads.start()
         self.stream.start()
+        # The RTSP listener is up before the ONVIF one, so /readyz can report it.
+        self.services.listeners.rtsp = True
         self.north.start()
         if self.read_only_north is not None:
             self.read_only_north.start()
@@ -775,7 +777,11 @@ def build(options: Options) -> Stack:
     interface_hw = (
         identity.interface_mac(options.discovery_interface) if options.discovery_interface else None
     )
+    # One shared holder, so a camera-scoped /readyz reports the same listeners
+    # as the primary one.
+    listeners = onvif.Listeners()
     northbound = {
+        "listeners": listeners,
         "identity": options.onvif_identity,
         "name": options.name,
         "interface_mac": interface_hw,
@@ -791,6 +797,7 @@ def build(options: Options) -> Stack:
         identity=options.onvif_identity, name=options.name,
         interface_mac=interface_hw, extra_scopes=options.discovery_scopes,
         autotrack_users=frozenset(options.ptz["autotrack_users"]),
+        listeners=listeners,
         log_calls=bool(options.onvif_log_calls),
     )
     north = onvif.OnvifServer(services, port=options.onvif_port, registry=registry, bind_host=options.bind_host)

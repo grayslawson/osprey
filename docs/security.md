@@ -69,7 +69,7 @@ a restart learns them again.
 |---|---|---|
 | 8000, console and `/api` | Locked (`503`) until an admin password is set | Password sign-in, CSRF on every change |
 | 8000, ONVIF | Anonymous in legacy mode: any reachable host can read streams and events and move the camera | WS-Security UsernameToken, per-user roles. Required in secure mode. |
-| 8000, `/healthz` and `/metrics` | Always open, read-only | Same |
+| 8000, `/healthz`, `/readyz` and `/metrics` | Always open, read-only | Same |
 | 8001 (optional), media persona | Media and events, no PTZ | Same as ONVIF |
 | 8554, RTSP | Anonymous in legacy mode | Digest; video is still unencrypted. Required in secure mode. |
 | 7442 | The camera, over TLS. Any host can open it, so restrict it to the camera's address | Same |
@@ -77,8 +77,8 @@ a restart learns them again.
 
 ONVIF access never grants the console session, MQTT credentials or the
 camera's control channel, but it can move the camera, so treat ONVIF network
-access as control access. `/healthz` and `/metrics` return state and counters
-only, never a MAC, address, preset name or credential.
+access as control access. `/healthz`, `/readyz` and `/metrics` return state and
+counters only, never a MAC, address, preset name or credential.
 
 ## ONVIF authentication
 
