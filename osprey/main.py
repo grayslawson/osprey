@@ -28,6 +28,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Final
 
+import adoption
 import arbitration
 import assist_scope
 import config
@@ -195,16 +196,7 @@ def spec_to_tracks(spec: str) -> dict[str, str]:
 
 def tracks_to_model(tracks: dict[str, str]) -> tuple[tuple[str, ...], dict[str, Codec]]:
     """Turn a `{channel: codec}` map into the arm order and typed codecs."""
-    names: list[str] = []
-    codecs: dict[str, Codec] = {}
-    for name, codec in tracks.items():
-        names.append(name)
-        try:
-            codecs[name] = Codec(codec)
-        except ValueError:
-            log.warning("unknown codec %r for track %s; using h264", codec, name)
-            codecs[name] = Codec.H264
-    return tuple(names), codecs
+    return tuple(tracks), adoption.codec_map(tracks)
 
 
 def resolve_options(args: argparse.Namespace) -> Options:

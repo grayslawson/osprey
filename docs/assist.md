@@ -300,6 +300,8 @@ Every key in `osprey-assist.json`; unknown keys are an error.
 | `capabilities.quality.levers` | see below | Which levers it may use. |
 | `capabilities.quality.limits` | `{}` | `{"lever": {"lo", "hi", "step", "default"}}` overrides. |
 | `capabilities.quality.periodic_min` | `10` | Minutes between checks while parked. |
+| `capabilities.quality.settle_sec`, `isp_settle_sec` | `3`, `4` | Wait after a change, and after an ISP change, before the camera is measured. |
+| `capabilities.quality.fire_thresholds` | `{}` | `{"problem": value}` thresholds that override the built-in ones. |
 | `capabilities.quality.verify_after_sec` | `[60, 600]` | When to re-check an applied change. |
 | `capabilities.quality.min_gain`, `max_regress` | `0.10`, `0.10` | Better by this much to keep, worse by this much to revert. |
 | `capabilities.survey.mode` | `suggest` | The autonomy level for [Survey](survey.md). |

@@ -494,7 +494,7 @@ class Controller:
         camera.firmware = upgrade.camera_firmware or camera.firmware
         if not camera.tracks:
             camera.tracks = adoption.track_defaults()
-        adoption.set_track_codecs(camera, self.track_codecs)
+        adoption.set_track_codecs(camera, self._codecs_for(mac))
 
         session = Session(sock=sock, upgrade=upgrade, camera=camera, traffic=self.on_traffic)
         log.info(
@@ -514,6 +514,22 @@ class Controller:
             except (OSError, ssl.SSLError) as exc:
                 log.warning("PTZ channel write failed on open: %s", exc)
         self._ready.put(session)
+
+    def _codecs_for(self, mac: str) -> dict[str, Codec]:
+        """The codec map for one camera.
+
+        The top-level ``tracks`` map applies to every camera. A camera may
+        override it with its own ``tracks`` object; the override is merged
+        over the top-level map, per track, so a camera only has to name the
+        tracks that differ.
+        """
+        registration = self.configured_cameras.get(mac)
+        if registration is None:
+            return self.track_codecs
+        override = registration.get("tracks")
+        if not isinstance(override, dict) or not override:
+            return self.track_codecs
+        return {**self.track_codecs, **adoption.codec_map(override)}
 
     def _camera_for(self, mac: str) -> Camera:
         """The model for a connecting camera, restoring persisted presets once."""

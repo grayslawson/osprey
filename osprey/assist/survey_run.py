@@ -123,7 +123,8 @@ class SurveyService:
                 scene = _scene(state)
                 pan, tilt, zoom = _pos(state)
             cells = sp.plan(geo, self.cfg.overlap, self.cfg.wide_zoom, (pan, tilt))
-            timing = sp.Timing(settle_sec=self.cfg.settle_sec, zoom_settle_sec=self.cfg.zoom_settle_sec)
+            timing = sp.Timing(settle_sec=self.cfg.settle_sec, zoom_settle_sec=self.cfg.zoom_settle_sec,
+                               deg_per_sec=sp.BASE_DEG_PER_SEC * self.cfg.speed)
             body = {"scene": scene, "geometry": geo.as_dict(), "start": {"pan": pan, "tilt": tilt, "zoom": zoom},
                     "plan": [c.as_dict() for c in cells], "zoom_plan": None, "moves": 0,
                     "estimate": sp.estimate_sec(geo, cells, self.cfg.max_zoom_ins, timing, (cells[0].az, cells[0].el)),
@@ -207,7 +208,7 @@ class SurveyService:
                 start = run["start"]
                 with cs.lock:
                     cs.camera.hold(HOLD_SEC, "assist-survey-return")
-                    cs.camera.move_absolute(start["pan"], start["tilt"], start["zoom"])
+                    cs.camera.move_absolute(start["pan"], start["tilt"], start["zoom"], self.cfg.speed)
         except OspreyError:
             pass
         try:
@@ -277,7 +278,7 @@ class SurveyService:
         cam.hold(HOLD_SEC, "assist-survey")
         status, after = "ok", state
         for _attempt in (0, 1):
-            cam.move_absolute(step["pan"], step["tilt"], step["zoom"])
+            cam.move_absolute(step["pan"], step["tilt"], step["zoom"], self.cfg.speed)
             self.e.sleep(0.2)
             after = self._wait_idle(cs)
             self.e.sleep(self.cfg.zoom_settle_sec if zoom_change else self.cfg.settle_sec)

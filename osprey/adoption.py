@@ -9,12 +9,15 @@ acknowledged. Sent as a burst, the camera stops acking and resets the channel.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Final
 
 import ptz
 from unifiwire.envelope import CONTROLLER, Envelope, Ids, reply_to, request
 from model import Camera, Codec, VideoTrack
+
+log = logging.getLogger("osprey.adopt")
 
 PROTOCOL_VERSION: Final = 67
 CONTROLLER_VERSION: Final = "1.21.4"
@@ -238,6 +241,22 @@ def track_defaults() -> list[VideoTrack]:
         VideoTrack("video2", 2, 1, 1280, 720, 15, Codec.H264, 500_000),
         VideoTrack("video3", 4, 2, 640, 360, 15, Codec.H264, 300_000),
     ]
+
+
+def codec_map(tracks: dict[str, str]) -> dict[str, Codec]:
+    """Turn a `{track: codec}` map into typed codecs, falling back to H.264.
+
+    An unknown codec name is not fatal: the camera is asked for H.264 instead,
+    which every client understands.
+    """
+    codecs: dict[str, Codec] = {}
+    for name, codec in tracks.items():
+        try:
+            codecs[name] = Codec(codec)
+        except ValueError:
+            log.warning("unknown codec %r for track %s; using h264", codec, name)
+            codecs[name] = Codec.H264
+    return codecs
 
 
 def set_track_codecs(camera: Camera, codecs: dict[str, Codec]) -> None:

@@ -60,6 +60,7 @@ class World:
         self.isp: dict[str, float] = {"aeTargetPercent": 50}
         self.isp_log: list[dict[str, Any]] = []
         self.moves: list[tuple[float, float, float]] = []
+        self.move_speeds: list[int] = []
         self.base: dict[int, Position] = {}
         self.camera.scene = "NIGHT" if night else "DAY"
         self.signals: dict[str, object] = {}
@@ -102,6 +103,7 @@ class World:
             self.defocus = False  # a zoom nudge re-triggers autofocus
         self.camera.motion.update(position, activity=0)
         self.moves.append((position.pan, position.tilt, position.zoom))
+        self.move_speeds.append(speed)
         return True
 
     def _goto(self, index: int, speed: int) -> bool:
