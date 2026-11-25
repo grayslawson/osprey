@@ -28,6 +28,14 @@ pip install --user onvif-zeep          # needs the ONVIF WSDLs on its wsdl path
 python3 harness/ha_walk.py <host> <onvif-port> [--camera]
 ```
 
+Both walks are anonymous unless the environment says otherwise. Against an Osprey
+that requires a WS-Security UsernameToken, set the same names Osprey reads:
+
+```sh
+OSPREY_ONVIF_USERNAME=frigate OSPREY_ONVIF_PASSWORD="$(cat /run/osprey/onvif-frigate-password)" \
+  python3 harness/ha_walk.py <host> <onvif-port>
+```
+
 `--camera` adds the checks that need a live stream and a movable head (playing the
 advertised RTSP URI, and asserting AbsoluteMove changes the reported position).
 
@@ -45,6 +53,8 @@ what "saved viewpoints" are in ONVIF terms.
 ```sh
 python3 harness/ptz_walk.py <host> <onvif-port>
 ```
+
+Credentials come from the environment here too, the same way as `ha_walk.py`.
 
 11/11 against the synthetic camera fixture and the **real G5 PTZ**: GotoPreset recalled the
 saved position to within rounding on the physical camera.

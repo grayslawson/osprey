@@ -13,6 +13,8 @@ import time
 
 from onvif import ONVIFCamera
 
+from creds import onvif_credentials
+
 HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 18000
 
@@ -26,7 +28,8 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  — {detail}" if detail else ""))
 
 
-cam = ONVIFCamera(HOST, PORT, "", "")
+USER, PASSWORD = onvif_credentials()
+cam = ONVIFCamera(HOST, PORT, USER, PASSWORD)
 media = cam.create_media_service()
 ptz = cam.create_ptz_service()
 token = media.GetProfiles()[0].token

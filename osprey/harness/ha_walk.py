@@ -15,6 +15,8 @@ import sys
 
 from onvif import ONVIFCamera
 
+from creds import onvif_credentials
+
 HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 18000
 HAVE_CAMERA = "--camera" in sys.argv
@@ -30,7 +32,8 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 # The constructor itself performs GetCapabilities under the hood — a real exchange.
-cam = ONVIFCamera(HOST, PORT, "", "")
+USER, PASSWORD = onvif_credentials()
+cam = ONVIFCamera(HOST, PORT, USER, PASSWORD)
 
 # 2. clock
 dt = cam.devicemgmt.GetSystemDateAndTime()
