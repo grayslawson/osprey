@@ -1330,6 +1330,65 @@ def test_the_largest_speed_component_sets_the_single_camera_speed() -> None:
     assert recorder.speeds[-1] == 1 + round(0.9 * 999)
 
 
+def test_a_zoom_velocity_in_the_speed_element_does_not_move_the_zoom() -> None:
+    """A speed is a velocity, not a target: it must not answer for the zoom."""
+    service, recorder = services()
+    body = (
+        '<Position><PanTilt x="0" y="0"/></Position>'
+        '<Speed><PanTilt x="0.5" y="0.5"/><Zoom x="0.3"/></Speed>'
+    )
+    ask(service, "AbsoluteMove", body)
+    assert recorder.absolute[0].zoom == 365, "the zoom target comes from the position only"
+
+
+def test_a_zoom_velocity_in_the_speed_element_does_not_move_the_zoom_relatively() -> None:
+    service, recorder = services()
+    body = (
+        '<Translation><PanTilt x="0.1" y="0"/></Translation>'
+        '<Speed><PanTilt x="0.5" y="0.5"/><Zoom x="0.3"/></Speed>'
+    )
+    ask(service, "RelativeMove", body)
+    moved = recorder.absolute[0]
+    assert moved.zoom == 365, "a relative move with no zoom target holds the zoom"
+    span = PAN_RANGE.maximum - PAN_RANGE.minimum
+    assert moved.pan == round(18000 + 0.1 * span / 2)
+
+
+def test_a_pan_velocity_does_not_pan_when_the_translation_omits_pan_tilt() -> None:
+    service, recorder = services()
+    body = (
+        '<Translation><Zoom x="0.2"/></Translation>'
+        '<Speed><PanTilt x="0.9" y="0.9"/></Speed>'
+    )
+    ask(service, "RelativeMove", body)
+    moved = recorder.absolute[0]
+    assert moved.pan == 18000, "the pan comes from the translation only"
+    assert moved.zoom == 365 + round(0.2 * (ZOOM_RANGE.maximum - ZOOM_RANGE.minimum))
+
+
+def test_the_translation_space_comes_from_the_translation_not_the_speed() -> None:
+    """A FOV space in the speed element must not turn a plain move into a FOV move."""
+    service, recorder = services()
+    body = (
+        '<Translation><Zoom x="0.2"/></Translation>'
+        f'<Speed><PanTilt x="0.5" y="0.5" space="{onvif.FOV_TRANSLATION_SPACE}"/></Speed>'
+    )
+    body_out = ask(service, "RelativeMove", body)
+    assert "RelativeMoveResponse" in body_out
+    moved = recorder.absolute[0]
+    assert moved.pan == 18000
+    assert moved.zoom == 365 + round(0.2 * (ZOOM_RANGE.maximum - ZOOM_RANGE.minimum))
+
+
+def test_a_continuous_move_reads_its_target_from_the_velocity() -> None:
+    service, recorder = services()
+    body = '<Velocity><Zoom x="0.2"/></Velocity>'
+    assert "ContinuousMoveResponse" in ask(service, "ContinuousMove", body)
+    moved = recorder.absolute[0]
+    assert moved.pan == 18000, "a velocity with no pan tilt holds the pan"
+    assert moved.zoom > 365
+
+
 def test_out_of_range_speed_is_clamped_to_the_scale() -> None:
     service, recorder = services()
     service.backend.move_absolute = recorder._move

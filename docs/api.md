@@ -214,3 +214,12 @@ is adopted and connected, `503` otherwise. Use it for a readiness probe; see
 
 The media persona serves the same paths on its own port, without PTZ.
 MQTT commands and state are documented in [MQTT](mqtt.md).
+
+### Move semantics
+
+A PTZ request carries a target and a speed, and ONVIF uses the same element
+names for both. Osprey reads the target from `Translation` (RelativeMove),
+`Position` (AbsoluteMove) and `Velocity` (ContinuousMove) only. The `Speed`
+element is read as a velocity, never as a target, so a move that names one
+axis leaves the other axes where they are even when the client sends a pan or
+zoom velocity alongside.
