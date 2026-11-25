@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
 import assist.config as acfg
 from assist.decide import Decider
@@ -62,6 +64,65 @@ def rig(tmp_path: Path) -> Iterator[Rig]:
 
 def goto(rig: Any, name: str) -> None:
     rig.world._goto_name(name)
+
+
+def quiet_window() -> str:
+    """A quiet window that covers the whole day, whatever time zone the machine is in."""
+    return "00:00-23:59"
+
+
+def test_a_setting_change_goes_on_during_quiet_hours(tmp_path: Path) -> None:
+    # quiet_hours stops moves; a plain setting change carries on
+    rig = Rig(tmp_path, mode="act", world={"night": False, "glare": None},
+              guardrails={"quiet_hours": [quiet_window()], "quiet_isp": False})
+    try:
+        goto(rig, "Gate")
+        rig.warm()
+        rig.world.exposure = 1.5
+        decision = next((i for i in [rig.engine.check("default", "arrival") for _ in range(3)] if i), None)
+        assert decision is not None
+        assert rig.world.isp["aeTargetPercent"] == 45
+    finally:
+        rig.close()
+
+
+def test_quiet_isp_stops_a_setting_change_during_quiet_hours(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, mode="act", world={"night": False, "glare": None},
+              guardrails={"quiet_hours": [quiet_window()], "quiet_isp": True})
+    try:
+        goto(rig, "Gate")
+        rig.warm()
+        rig.world.exposure = 1.5
+        [rig.engine.check("default", "arrival") for _ in range(3)]
+        assert rig.world.isp["aeTargetPercent"] == 50  # the camera was left alone
+        rows = rig.store.decisions(camera="default", limit=5)
+        assert rows and all(row["status"] == "failed" for row in rows)
+    finally:
+        rig.close()
+
+
+def test_stored_frames_are_no_wider_than_frame_store_px(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, mode="act", world={"night": False, "glare": None},
+              storage={"dir": str(tmp_path / "state"), "frame_store_px": 320})
+    try:
+        goto(rig, "Gate")
+        rig.warm()
+        rig.world.exposure = 1.5
+        decision = next((i for i in [rig.engine.check("default", "arrival") for _ in range(3)] if i), None)
+        assert decision is not None
+        row = rig.store.decision(decision)
+        assert row is not None
+        names = [row.get("before_frame"), row.get("after_frame")]
+        assert any(names)
+        for name in names:
+            if not name:
+                continue
+            data = rig.store.frame(name)
+            assert data is not None
+            with Image.open(io.BytesIO(data)) as img:
+                assert img.width <= 320
+    finally:
+        rig.close()
 
 
 def test_night_glare_becomes_a_night_view_suggestion(rig: Rig) -> None:

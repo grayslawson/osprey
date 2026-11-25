@@ -104,7 +104,7 @@ from the Presets tab if you do not want it.
 - It never edits `sentry.json`. A night view goes through the same API call the
   console uses.
 - `quiet_hours` (for example `["22:00-06:00"]`) stops moves. Setting changes
-  continue unless you set `quiet_isp`.
+  carry on; set `quiet_isp` to stop those too.
 - The kill switch (the console toggle, the Home Assistant switch or `enabled:
   false`) stops Assist, releases the patrol and writes back the settings it
   changed. To cut Assist off from outside, turn off `assist.enabled` in
@@ -263,9 +263,12 @@ mode 0700 with files 0600. Osprey never reads it.
 | Metrics samples | 90 days |
 | Decisions, outcomes and feedback | 365 days |
 | Baselines, lever statistics and profiles | until you purge |
-
 `storage.max_frames_mb` (default 2048) removes the oldest frames first. Change any
 of these under `storage`.
+
+`storage.frame_store_px` (default 1280) is how wide a stored frame may be. A frame
+from a 4K camera is scaled down to that width before it goes on disk; the picture
+Assist measures is the full-size one, so this only affects the stored copies.
 
 `osprey assist purge --yes` or **Forget everything** in the console deletes the
 frames, the log and what it learned. Your settings stay.
@@ -305,8 +308,8 @@ Every key in `osprey-assist.json`; unknown keys are an error.
 | `guardrails.*` | see above | `moves_per_hour`, `isp_writes_per_hour`, `trials_per_hour`, `probe_sessions_per_night`, `max_probe_offsets`, `max_offset_frac`, `preset_changes_per_day`, `structural_in_auto`, `tracking_hold_sec`, `pending_expire_hours`, `quiet_hours`, `quiet_isp`. |
 | `providers`, `tasks` | none, rules | See Models. |
 | `notify.*` | MQTT on | `mqtt`, `mqtt_frames`, `ha_discovery`, `discovery_prefix`, `base_topic`, `device`, `broker`, `allow_auto_from_mqtt`, `ntfy`. |
-| `storage.*` | see Data | |
-| `privacy.*` | off | `redact_names`, `debug_prompts`. |
+| `storage.*` | see Data | `dir`, `frame_store_px`, `frames_days`, `followup_frames_days`, `samples_days`, `decisions_days`, `max_frames_mb`. |
+| `privacy.*` | off | `redact_names`, `debug_prompts` (accepted, not implemented yet: the prompts live in the shared `raptor-vision` library). |
 
 Default levers: `aeTargetPercent`, `brightness`, `contrast`, `sharpness`,
 `denoise`, `hdr`, `zoom_nudge` and `night_view`.

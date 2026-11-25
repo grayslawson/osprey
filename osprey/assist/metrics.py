@@ -51,6 +51,21 @@ def _largest_cluster(hot: list[bool]) -> list[int]:
     return best
 
 
+def fit_width(jpeg: bytes, max_px: int) -> bytes:
+    """A frame no wider than ``max_px`` (storage.frame_store_px). The bytes come back unchanged if they already fit."""
+    try:
+        with Image.open(io.BytesIO(jpeg)) as im:
+            if im.width <= max_px:
+                return jpeg
+            height = max(1, round(im.height * max_px / im.width))
+            out = im.convert("RGB").resize((max_px, height))
+            buf = io.BytesIO()
+            out.save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+    except (OSError, ValueError):
+        return jpeg  # a frame we cannot read is still worth keeping
+
+
 def compute(jpeg: bytes) -> Metrics:
     try:
         img = Image.open(io.BytesIO(jpeg)).convert("L")
