@@ -7,7 +7,7 @@ Osprey serves it.
 | Surface | Port | Auth |
 |---|---|---|
 | Operator API, `/api/v1` | 8000 | Console session and CSRF token |
-| `/healthz`, `/metrics` | 8000 | None |
+| `/healthz`, `/readyz`, `/metrics` | 8000 | None |
 | ONVIF services | 8000 (8001 for the media persona) | WS-Security, if enabled |
 | RTSP | 8554 | Digest, if enabled |
 
@@ -195,6 +195,11 @@ A heartbeat comment arrives every 15 seconds.
 `GET /healthz` and `GET /metrics` need no login. Use `/cameras/{camera-id}/healthz`
 on a multi camera setup. The fields, the Prometheus metric names and the log
 lines worth alerting on are in [PTZ health](ptz-health.md#health-endpoint).
+
+`GET /readyz` also needs no login. It answers "can this take work" rather than
+"is this usable right now": `200` once the listeners are bound and the camera
+is adopted and connected, `503` otherwise. Use it for a readiness probe; see
+[readiness](ptz-health.md#readiness-endpoint).
 
 ## ONVIF and RTSP
 

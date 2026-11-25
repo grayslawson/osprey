@@ -163,6 +163,52 @@ def test_healthz_is_ok_when_ptz_is_healthy_and_waiting_before_adoption() -> None
     assert status == HTTPStatus.SERVICE_UNAVAILABLE and body["status"] == "waiting"
 
 
+def test_readyz_is_ready_once_the_camera_is_adopted_and_reachable() -> None:
+    service = onvif.Services(HealthRecorder().backend(), host="10.0.0.1", port=8000,
+                             listeners=onvif.Listeners(rtsp=True))
+    status, body = service.ready()
+    assert status == HTTPStatus.OK and body["status"] == "ready"
+    assert body["adopted"] is True and body["camera_connected"] is True
+    assert body["rtsp"] is True
+
+    empty = Recorder(None)
+    service = onvif.Services(empty.backend(), host="10.0.0.1", port=8000)
+    status, body = service.ready()
+    assert status == HTTPStatus.SERVICE_UNAVAILABLE and body["status"] == "waiting"
+
+
+def test_readyz_is_not_ready_until_the_rtsp_listener_is_bound() -> None:
+    service = onvif.Services(HealthRecorder().backend(), host="10.0.0.1", port=8000)
+    status, body = service.ready()
+    assert status == HTTPStatus.SERVICE_UNAVAILABLE
+    assert body["status"] == "not ready" and body["rtsp"] is False
+
+    # The same holder is shared by every camera service, so binding RTSP once
+    # makes every scope ready.
+    service.listeners.rtsp = True
+    status, body = service.ready()
+    assert status == HTTPStatus.OK and body["status"] == "ready"
+
+
+def test_readyz_is_public_and_needs_no_session() -> None:
+    auth = onvif.AdminAuth(onvif.AdminAuth.hash_password("correct horse"))
+    service = onvif.Services(HealthRecorder().backend(), host="127.0.0.1", port=8000, auth=auth,
+                             listeners=onvif.Listeners(rtsp=True))
+    server = onvif.OnvifServer(service, port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        connection.request("GET", onvif.READY_PATH)
+        response = connection.getresponse()
+        body = json.loads(response.read())
+        assert response.status == HTTPStatus.OK
+        assert body["status"] == "ready"
+        assert "AABBCCDDEEFF" not in json.dumps(body).upper(), "no MAC on a public endpoint"
+        connection.close()
+    finally:
+        server.stop()
+
+
 def test_home_position_is_supported_through_the_home_preset() -> None:
     recorder = HealthRecorder()
     assert recorder.camera is not None

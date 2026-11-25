@@ -17,7 +17,9 @@ onvif-auth-profile-s, rtsp-hardening and web-ui branches merge, because they edi
 - [ ] T007 Add `healthcheck`, `version`, `config validate`, `setup`, `manage`, `custody`, `cert`
 - [ ] T008 Implement configuration precedence and `OSPREY_STATE_DIR` / `$STATE_DIRECTORY` resolution
 - [ ] T009 Implement `*_FILE` secret lookup and `$CREDENTIALS_DIRECTORY`
-- [ ] T010 Add unauthenticated `/healthz` and `/readyz`; tests for both
+- [x] T010 Add unauthenticated `/healthz` and `/readyz`; tests for both
+      (landed ahead of the package move, in `osprey/onvif.py`: `/readyz` is `200`
+      once the RTSP listener is bound and the camera is adopted and connected)
 
 ## Phase 3: Versioning and distribution
 

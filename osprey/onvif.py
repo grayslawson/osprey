@@ -77,6 +77,7 @@ CONTROL_RECOVER_PATH: Final = "/control/ptz/recover"
 # Unauthenticated, read-only liveness for monitoring. It carries PTZ state and
 # counters only: no MAC, address, preset name, or credential.
 HEALTH_PATH: Final = "/healthz"
+READY_PATH: Final = "/readyz"
 _SNAPSHOT_KEY: Final = secrets.token_bytes(32)
 METRICS_PATH: Final = "/metrics"
 # An adopted camera with no video frame on any track for this long is degraded.
@@ -1027,6 +1028,19 @@ SNAPSHOT_TOKEN_PARAM: Final = "auth"
 # ---------------------------------------------------------------------- services
 
 
+@dataclass
+class Listeners:
+    """Which of the process listeners are bound.
+
+    Shared by every camera service so a camera-scoped ``/readyz`` reports the
+    same listener state as the primary one. The RTSP server is started before
+    the ONVIF server, so an ONVIF listener that can answer is itself proof
+    that the RTSP listener is bound.
+    """
+
+    rtsp: bool = False
+
+
 class Services:
     """Turns parsed calls into SOAP responses, using only the device model."""
 
@@ -1042,10 +1056,12 @@ class Services:
         snapshot_interval: float = 1.0,
         autotrack_users: frozenset[str] = frozenset({"frigate"}),
         persona: str = "",
+        listeners: Listeners | None = None,
         log_calls: bool = False) -> None:
         self.backend = backend
         self.host = host
         self.port = port
+        self.listeners = listeners if listeners is not None else Listeners()
         self.subscriptions = Subscriptions()
         self.started_at = time.time()
         self.auth = auth or AdminAuth()
@@ -1299,6 +1315,30 @@ class Services:
             degraded = True
         if degraded:
             body["status"] = "degraded"
+            return HTTPStatus.SERVICE_UNAVAILABLE, body
+        return HTTPStatus.OK, body
+
+    def ready(self) -> tuple[HTTPStatus, dict[str, object]]:
+        """Readiness for a probe or a load balancer: 200 once this can take work.
+
+        ``/healthz`` answers "is this usable right now"; this answers "can this
+        take work". Ready means the listeners are bound, the camera has been
+        adopted, and the camera is connected. The body names no camera, no
+        address, and no secret.
+        """
+        camera = self.backend.camera()
+        if camera is None:
+            return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "waiting", "camera": False}
+        connected = self.backend.camera_connected()
+        body: dict[str, object] = {
+            "status": "ready",
+            "camera": True,
+            "camera_connected": connected,
+            "adopted": camera.adopted,
+            "rtsp": self.listeners.rtsp,
+        }
+        if not (camera.adopted and connected and self.listeners.rtsp):
+            body["status"] = "not ready"
             return HTTPStatus.SERVICE_UNAVAILABLE, body
         return HTTPStatus.OK, body
 
@@ -3086,6 +3126,10 @@ class _Handler(BaseHTTPRequestHandler):
         if root == HEALTH_PATH:
             status, health = self.services.health()
             self._send(status, json.dumps(health, separators=(",", ":")).encode(), "application/json")
+            return
+        if root == READY_PATH:
+            status, ready = self.services.ready()
+            self._send(status, json.dumps(ready, separators=(",", ":")).encode(), "application/json")
             return
         if root == METRICS_PATH:
             self._send(HTTPStatus.OK, self.services.metrics().encode(), "text/plain; version=0.0.4; charset=utf-8")

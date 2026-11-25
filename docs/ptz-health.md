@@ -1,7 +1,7 @@
 # PTZ health, recovery and the home preset
 
-How Osprey detects and recovers a stuck PTZ channel, what `/healthz` and
-`/metrics` report, and how the `home` preset is created and kept.
+How Osprey detects and recovers a stuck PTZ channel, what `/healthz`,
+`/readyz` and `/metrics` report, and how the `home` preset is created and kept.
 
 ## What can go wrong
 
@@ -126,6 +126,27 @@ unhealthy.
 For multiple cameras, use `/cameras/{camera-id}/healthz`. When MQTT is enabled,
 the same state is also published to `osprey/<device>/state/ptz` (see
 [MQTT](mqtt.md)).
+
+## Readiness endpoint
+
+`GET /readyz` on the ONVIF port needs no login and answers a different
+question from `/healthz`. `/healthz` asks "is this usable right now"; `/readyz`
+asks "can this take work". It returns `200` once the RTSP listener is bound,
+the camera has been adopted, and the camera's management socket is up; `503`
+otherwise. The body holds state only, like `/healthz`.
+
+```json
+{"status":"ready","camera":true,"camera_connected":true,"adopted":true,"rtsp":true}
+```
+
+`status` is `waiting` before a camera is adopted, and `not ready` once a camera
+is known but the listeners or the camera connection are not up yet. Use
+`/readyz` for a container readiness probe or a load-balancer check, and
+`/healthz` for a liveness probe and for alerting: a degraded PTZ channel makes
+`/healthz` fail but leaves `/readyz` alone, because Osprey can still serve
+video and ONVIF calls.
+
+For multiple cameras, use `/cameras/{camera-id}/readyz`.
 
 ## Home preset and persistence
 
