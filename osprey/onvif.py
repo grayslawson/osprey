@@ -876,15 +876,42 @@ class Call:
             return default
         return element.attrib.get(attribute, default)
 
-    def vector(self, element_name: str) -> tuple[float, float] | None:
-        """PanTilt and Zoom arrive as x/y attributes on their own element."""
-        element = self.find(element_name)
+    def find_in(self, container: str, name: str) -> ElementTree.Element | None:
+        """The named element inside one container element.
+
+        A PTZ request carries a target and a speed, and both use the same
+        element names: a move may hold ``Translation/PanTilt`` and
+        ``Speed/PanTilt``.  Searching the whole body would let the speed
+        answer for the target, so every target lookup is scoped to the
+        container that holds it.
+        """
+        for element in self.body.iter():
+            if local_name(element.tag) != container:
+                continue
+            for child in element.iter():
+                if local_name(child.tag) == name:
+                    return child
+            return None
+        return None
+
+    def vector_in(self, container: str, name: str) -> tuple[float, float] | None:
+        """The x/y pair of an element inside one container element."""
+        element = self.find_in(container, name)
         if element is None:
             return None
         try:
             return float(element.attrib.get("x", "0")), float(element.attrib.get("y", "0"))
         except ValueError:
             return None
+
+    def attribute_in(
+        self, container: str, name: str, attribute: str, default: str = ""
+    ) -> str:
+        """An attribute of an element inside one container element."""
+        element = self.find_in(container, name)
+        if element is None:
+            return default
+        return element.attrib.get(attribute, default)
 
 
 def parse_call(payload: bytes) -> Call | None:
@@ -2514,8 +2541,13 @@ class Services:
 
     def _target_from(self, call: Call, camera: Camera, relative: bool) -> Position:
         current = camera.motion.position
-        pan_tilt = call.vector("PanTilt")
-        zoom = call.vector("Zoom")
+        # The target lives in Translation (RelativeMove) or Position
+        # (AbsoluteMove).  The Speed element carries the same PanTilt and Zoom
+        # names, so reading the whole body would let a velocity answer for the
+        # target and move an axis the client never asked to move.
+        container = "Translation" if relative else "Position"
+        pan_tilt = call.vector_in(container, "PanTilt")
+        zoom = call.vector_in(container, "Zoom")
         if pan_tilt is not None:
             # ONVIF's tilt axis is +Y = up; this camera's tilt value grows as the
             # head drops, so a raw mapping sends "up" down. Invert Y once here so
@@ -2527,7 +2559,7 @@ class Services:
             if relative:
                 span_pan = camera.pan_range.maximum - camera.pan_range.minimum
                 span_tilt = camera.tilt_range.maximum - camera.tilt_range.minimum
-                space = call.attribute("PanTilt", "space")
+                space = call.attribute_in(container, "PanTilt", "space")
                 if space == FOV_TRANSLATION_SPACE:
                     geometry = camera.field_of_view
                     if geometry is None:
@@ -2592,8 +2624,10 @@ class Services:
 
     def _continuous_step_from(self, call: Call, camera: Camera) -> tuple[Position, Position]:
         current = camera.motion.step_origin()
-        pan_tilt = call.vector("PanTilt")
-        zoom = call.vector("Zoom")
+        # A continuous move carries its target in Velocity; nothing else in the
+        # request may answer for it.
+        pan_tilt = call.vector_in("Velocity", "PanTilt")
+        zoom = call.vector_in("Velocity", "Zoom")
         if pan_tilt is not None:
             pan_tilt = (pan_tilt[0], -pan_tilt[1])
         pan_delta = 0
