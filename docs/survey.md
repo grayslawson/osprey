@@ -335,6 +335,7 @@ Every key in the `survey` block of `osprey-assist.json`. Unknown keys are an err
 | `tiles` | `[4, 3]` | Label tiles per cell, across and down, for a decisions model and for the rules floor. A chat model draws the whole picture. |
 | `max_zoom_ins`, `zoom_in_max` | `8`, `0.7` | How many closer looks, and how far in. |
 | `settle_sec`, `zoom_settle_sec` | `2`, `4` | Wait after a move, and after a zoom change. |
+| `speed` | `1` | How fast the sweep moves, as a fraction of the camera's ceiling. `1` is full speed; `0.5` is half. 0.05 to 1. The time estimate follows it. |
 | `max_moves`, `max_minutes` | `120`, `25` | Budgets for one survey. |
 | `resume_wait_sec` | `600` | How long to wait for the camera to be free. |
 | `max_runs_per_day` | `3` | Surveys per camera per day. |
@@ -346,6 +347,7 @@ Every key in the `survey` block of `osprey-assist.json`. Unknown keys are an err
 | `keep_maps`, `frames_days` | `4`, `7` | Retention. |
 | `verify_min_ncc` | `0.35` | How well a saved preset must match the panorama. |
 | `projection` | `rectilinear` | `linear` if the lens is already flat. |
+| `panorama_ppd` | `8` | Pixels per degree in the stitched panorama. 2 to 16. |
 | `fov` | none | `{pan_degrees, tilt_degrees, wide: [h, v], tele: [h, v]}` for an uncalibrated camera. |
 | `schedule` | weekly | `{"day": "11:00", "night": "02:00", "every_days": 7}`, or `null` for none. |
 | `frigate` | none | `{url, camera, api_key_file, lookback_days, refresh_min, half_life_days, writer}`. `writer` is `off`, `osprey` or `kestrel`. |

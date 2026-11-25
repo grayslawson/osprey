@@ -33,7 +33,8 @@ class Camera(Protocol):
     def presets(self) -> list[dict[str, Any]]: ...
     def goto(self, token: int) -> None: ...
     def move_relative(self, pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0) -> None: ...
-    def move_absolute(self, pan: float | None = None, tilt: float | None = None, zoom: float | None = None) -> None: ...
+    def move_absolute(self, pan: float | None = None, tilt: float | None = None,
+                      zoom: float | None = None, speed: float | None = None) -> None: ...
     def isp(self, settings: dict[str, float]) -> bool | None: ...
     def delete_preset(self, token: int) -> None: ...
     def set_tour(self, points: list[dict[str, Any]], enabled: bool | None = None) -> None: ...
@@ -106,11 +107,16 @@ class OspreyClient:
     def move_relative(self, pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0) -> None:
         self._call("POST", self._cam("/ptz/move"), {"mode": "relative", "pan": pan, "tilt": tilt, "zoom": zoom})
 
-    def move_absolute(self, pan: float | None = None, tilt: float | None = None, zoom: float | None = None) -> None:
+    def move_absolute(self, pan: float | None = None, tilt: float | None = None,
+                      zoom: float | None = None, speed: float | None = None) -> None:
         body: dict[str, Any] = {"mode": "absolute"}
         for key, value in (("pan", pan), ("tilt", tilt), ("zoom", zoom)):
             if value is not None:
                 body[key] = round(float(value), 5)
+        if speed is not None:
+            # A fraction of the configured ceiling. One is the ceiling itself,
+            # so leaving it out and sending one mean the same move.
+            body["speed"] = round(float(speed), 5)
         self._call("POST", self._cam("/ptz/move"), body)
 
     def delete_preset(self, token: int) -> None:

@@ -202,6 +202,14 @@ def test_camera_registry_normalises_mac_and_preserves_settings() -> None:
     cameras = config.validate_cameras([{"mac": "aa:bb:cc:dd:ee:ff", "name": "Driveway", "ip": "192.0.2.10"}])
     assert cameras == [{"mac": "AABBCCDDEEFF", "name": "Driveway", "ip": "192.0.2.10"}]
 
+
+def test_camera_registry_keeps_the_per_camera_track_map() -> None:
+    """The override has to survive parsing to reach the controller."""
+    cameras = config.validate_cameras(
+        [{"mac": "aa:bb:cc:dd:ee:ff", "name": "Driveway", "tracks": {"video2": "h265"}}]
+    )
+    assert cameras[0]["tracks"] == {"video2": "h265"}
+
 @pytest.mark.parametrize("value", ["not-a-list", [{"name": "missing mac"}], [{"mac": "AA:AA:AA:AA:AA:AA"}, {"mac": "aaaaaaaaaaaa"}]])
 def test_camera_registry_rejects_invalid_entries(value: object) -> None:
     with pytest.raises(ValueError):

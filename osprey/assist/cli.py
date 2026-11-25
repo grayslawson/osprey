@@ -194,7 +194,8 @@ def _survey(cfg: config_mod.AssistConfig, args: argparse.Namespace) -> int:
             cells = sp.plan(geo, cfg.survey.overlap, cfg.survey.wide_zoom)
             cols, rows = sp.grid_size(geo, cfg.survey.overlap, cfg.survey.wide_zoom)
             est = sp.estimate_sec(geo, cells, cfg.survey.max_zoom_ins,
-                                  sp.Timing(settle_sec=cfg.survey.settle_sec, zoom_settle_sec=cfg.survey.zoom_settle_sec))
+                                  sp.Timing(settle_sec=cfg.survey.settle_sec, zoom_settle_sec=cfg.survey.zoom_settle_sec,
+                                            deg_per_sec=sp.BASE_DEG_PER_SEC * cfg.survey.speed))
             print(f"{cols} columns by {rows} rows, {len(cells)} pictures, up to {cfg.survey.max_zoom_ins} closer looks.")
             print(f"About {est['total_sec'] / 60:.1f} minutes of camera time ({est['sweep_sec']:.0f} s sweep, "
                   f"{est['zoom_sec']:.0f} s zoom-ins). An estimate from the geometry, not a measurement.")

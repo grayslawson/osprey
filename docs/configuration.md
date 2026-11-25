@@ -60,7 +60,7 @@ object:
 | `mac` | none, required | 12 hexadecimal digits. Colons and dashes are accepted and stripped. Must be unique. |
 | `name` | the MAC | Display name, shown to ONVIF clients. |
 | `ip` | none | The camera's address. When set, Osprey accepts media and snapshot uploads only from it, and it is recommended. Without it, secure mode learns the address from the first camera to connect, and legacy mode accepts any host. It is never the camera's identity; the MAC is. |
-| `tracks` | none | An object that overrides `tracks` for this camera. |
+| `tracks` | none | An object that overrides the track codecs for this camera, merged over the top-level `tracks` per track, so a camera only has to name the tracks that differ. `{"video2": "h265"}` leaves every other track on the top-level codec. A codec name the camera does not know falls back to `h264`. |
 
 ### PTZ
 

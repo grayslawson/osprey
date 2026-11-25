@@ -163,9 +163,14 @@ def travel_deg(a: tuple[float, float], b: tuple[float, float]) -> float:
     return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
 
 
+# The planning constant for a full-speed sweep: degrees per second at the
+# camera's configured ceiling. The estimate scales it by the survey speed.
+BASE_DEG_PER_SEC: Final[float] = 30.0
+
+
 @dataclass(frozen=True)
 class Timing:
-    deg_per_sec: float = 30.0
+    deg_per_sec: float = BASE_DEG_PER_SEC
     settle_sec: float = 2.0
     zoom_settle_sec: float = 4.0
     snapshot_sec: float = 0.5
