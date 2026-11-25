@@ -44,6 +44,14 @@ class Refused(Exception):
     """The engine will not act now. The message says why in plain words."""
 
 
+def _plan_moves(steps: list[dict[str, Any]]) -> bool:
+    """Does this plan turn the camera? A night view or a zoom nudge does; a plain setting change does not.
+
+    Quiet hours stop moves. They stop setting changes too, but only when ``guardrails.quiet_isp`` is set.
+    """
+    return any(step.get("lever") in ("night_view", "zoom_nudge") for step in steps)
+
+
 @dataclass
 class _Cam:
     id: str
@@ -211,8 +219,13 @@ class Engine:
         return "(free)"
 
     # ---------------------------------------------------------------- gate
-    def _gate(self, cs: _Cam, state: dict[str, Any], *, moves: bool = False, quiet: bool = True) -> str | None:
-        """Why Assist must stand down right now, or None. Frigate and people always win."""
+    def _gate(self, cs: _Cam, state: dict[str, Any], *, moves: bool = False, write: bool = False,
+              quiet: bool = True) -> str | None:
+        """Why Assist must stand down right now, or None. Frigate and people always win.
+
+        ``moves`` is a call that turns the camera, ``write`` a call that only changes a setting.
+        Quiet hours stop moves; they stop setting changes too when ``guardrails.quiet_isp`` is set.
+        """
         sig = state.get("assist_signals") or {}
         age = sig.get("auto_active_age_sec")
         if age is not None and float(age) < self.cfg.guardrails.tracking_hold_sec:
@@ -222,10 +235,13 @@ class Engine:
         owner = sig.get("lease_owner")
         if owner not in (None, "assist"):
             return f"the camera is in use ({owner})"
-        if (state.get("ptz") or {}).get("status") not in ("IDLE", None) and moves:
+        if (state.get("ptz") or {}).get("status") not in ("IDLE", None) and (moves or write):
             return "the camera is moving"
-        if moves and quiet and self._quiet():
-            return "quiet hours"
+        if quiet and self._quiet():
+            if moves:
+                return "quiet hours"
+            if write and self.cfg.guardrails.quiet_isp:
+                return "quiet hours"
         return None
 
     def _quiet(self) -> bool:
@@ -261,6 +277,10 @@ class Engine:
     # --------------------------------------------------------------- shadow
     def _shadow(self, cs: _Cam) -> dict[str, float]:
         return {k: float(v) for k, v in self.store.get(f"shadow:{cs.id}", {}).items()}
+
+    def _fit(self, jpeg: bytes) -> bytes:
+        """A frame no wider than ``storage.frame_store_px`` before it goes on disk."""
+        return metrics_mod.fit_width(jpeg, self.cfg.storage.frame_store_px)
 
     def _write_isp(self, cs: _Cam, settings: dict[str, float]) -> bool | None:
         if not settings:
@@ -463,8 +483,8 @@ class Engine:
     def _record(self, cs: _Cam, diag: Diagnosis, preset: str, scene: str, trigger: str, metrics: Metrics,
                 frame: bytes | None, after: tuple[bytes, Metrics] | None, status: str, *, structural: bool = False,
                 reason: str = "", plan: dict[str, Any] | None = None) -> int:
-        before_name = self.store.save_frame(frame) if frame else None
-        after_name = self.store.save_frame(after[0]) if after else None
+        before_name = self.store.save_frame(self._fit(frame)) if frame else None
+        after_name = self.store.save_frame(self._fit(after[0])) if after else None
         plan = plan or self._plan(cs, diag, preset, scene)
         body: dict[str, Any] = {
             "summary": self._summary(diag, preset, scene), "change": plan["change"], "expect": plan["expect"],
@@ -528,11 +548,12 @@ class Engine:
         """Try the change to get an 'after' frame, put everything back, and file a suggestion."""
         if not self._budget(cs, "trial"):
             raise Refused("trial budget used up for this hour")
-        reason = self._gate(cs, state, moves=True)
-        if reason:
-            raise Refused(reason)
         plan = self._plan(cs, diag, preset, scene)
         steps = plan["steps"]
+        moving = _plan_moves(steps)
+        reason = self._gate(cs, state, moves=moving, write=not moving)
+        if reason:
+            raise Refused(reason)
         if not steps:
             raise Refused("nothing to change")
         self.store.spend(cs.id, "trial")
@@ -645,11 +666,12 @@ class Engine:
         if row is None:
             raise Refused("no such decision")
         state = state or cs.camera.state()
-        reason = self._gate(cs, state, moves=True)
-        if reason:
-            raise Refused(reason)
         plan = row["plan"]
         steps = plan["steps"]
+        moving = _plan_moves(steps)
+        reason = self._gate(cs, state, moves=moving, write=not moving)
+        if reason:
+            raise Refused(reason)
         problem = row["problem"]
         prior = self._shadow(cs)
         try:
@@ -663,7 +685,7 @@ class Engine:
             m = metrics_mod.compute(frame)
         finally:
             self._safe_release(cs)
-        after = self.store.save_frame(frame)
+        after = self.store.save_frame(self._fit(frame))
         due = [self.clock() + s for s in self.cfg.quality.verify_after_sec]
         self.store.update_decision(decision_id, status="applied", after_frame=after, expires_at=None,
                                    body={"applied": applied, "applied_by": principal, "verify_due": due,
